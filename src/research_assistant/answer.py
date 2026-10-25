@@ -15,6 +15,7 @@ NO_CONTEXT_MESSAGE = "no relevant context found"
 class AnswerResult:
     text: str
     citations: list[str]
+    context: str = ""
 
 
 def format_context(chunks: list[Document]) -> str:
@@ -25,11 +26,11 @@ def format_context(chunks: list[Document]) -> str:
     )
 
 
-def build_prompt(query: str, chunks: list[Document]) -> str:
+def build_prompt(query: str, context: str) -> str:
     return (
         "Answer the question using only the context below. "
         "Cite sources using their [n] marker.\n\n"
-        f"Context:\n{format_context(chunks)}\n\n"
+        f"Context:\n{context}\n\n"
         f"Question: {query}"
     )
 
@@ -41,7 +42,8 @@ def answer(query: str, settings: Settings, k: int = 5) -> AnswerResult:
     if not chunks:
         return AnswerResult(text=NO_CONTEXT_MESSAGE, citations=[])
 
+    context = format_context(chunks)
     client = get_llm_client(settings.generator)
-    text = client.generate(build_prompt(query, chunks))
+    text = client.generate(build_prompt(query, context))
     citations = [chunk.metadata["source"] for chunk in chunks]
-    return AnswerResult(text=text, citations=citations)
+    return AnswerResult(text=text, citations=citations, context=context)
