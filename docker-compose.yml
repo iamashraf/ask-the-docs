@@ -24,6 +24,7 @@ services:
     entrypoint: ["sh", "-c", "ollama pull llama3.1:8b && ollama pull nomic-embed-text"]
 
   app:
+    image: localhost/research-assistant-app
     build: .
     depends_on:
       ollama-init:
