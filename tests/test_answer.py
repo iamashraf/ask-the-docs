@@ -70,3 +70,20 @@ def test_answer_calls_generator_with_context_and_returns_citations(monkeypatch):
     assert "chunk one" in result.context
     assert "What is X?" in captured_prompts[0]
     assert "chunk one" in captured_prompts[0]
+
+
+def test_answer_dedupes_citations_preserving_order(monkeypatch):
+    chunks = [
+        Document(page_content="chunk one", metadata={"source": "a.pdf"}),
+        Document(page_content="chunk two", metadata={"source": "b.pdf"}),
+        Document(page_content="chunk three", metadata={"source": "a.pdf"}),
+    ]
+    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr(
+        "research_assistant.answer.get_llm_client",
+        lambda config: Mock(generate=Mock(return_value="the answer")),
+    )
+
+    result = answer("What is X?", make_settings())
+
+    assert result.citations == ["a.pdf", "b.pdf"]

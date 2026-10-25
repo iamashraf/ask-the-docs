@@ -45,5 +45,5 @@ def answer(query: str, settings: Settings, k: int = 5) -> AnswerResult:
     context = format_context(chunks)
     client = get_llm_client(settings.generator)
     text = client.generate(build_prompt(query, context))
-    citations = [chunk.metadata["source"] for chunk in chunks]
+    citations = list(dict.fromkeys(chunk.metadata["source"] for chunk in chunks))
     return AnswerResult(text=text, citations=citations, context=context)
