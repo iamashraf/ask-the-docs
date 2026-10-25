@@ -6,8 +6,17 @@ from langchain_core.documents import Document
 
 from research_assistant.answer import AnswerResult
 from research_assistant.api import app
+from research_assistant.config import ProviderConfig, Settings
+from research_assistant.evaluate import EvalResult, JudgeScore
 from research_assistant.ingest import PathSecurityError, UnsupportedFileTypeError, UrlSecurityError
 from research_assistant.llm import OllamaUnavailableError
+
+
+def make_settings() -> Settings:
+    return Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+    )
 
 
 def test_health_returns_ok():
@@ -122,3 +131,53 @@ def test_ask_returns_503_when_ollama_unavailable(monkeypatch):
     response = TestClient(app).post("/v1/ask", json={"query": "hi"})
 
     assert response.status_code == 503
+
+
+def test_evaluate_returns_results(monkeypatch):
+    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    results = [
+        EvalResult(
+            question="Q1",
+            score=JudgeScore(
+                accuracy=1.0,
+                answer_relevance=1.0,
+                context_relevance=1.0,
+                completeness=1.0,
+                justification="ok",
+            ),
+            error=None,
+        ),
+        EvalResult(question="Q2", score=None, error="boom"),
+    ]
+    monkeypatch.setattr("research_assistant.api.run_evaluation", lambda settings, path: results)
+
+    response = TestClient(app).post("/v1/evaluate", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["results"][0]["question"] == "Q1"
+    assert body["results"][0]["score"]["accuracy"] == 1.0
+    assert body["results"][0]["error"] is None
+    assert body["results"][1]["score"] is None
+    assert body["results"][1]["error"] == "boom"
+
+
+def test_evaluate_overrides_embeddings_backend(monkeypatch):
+    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    captured = {}
+
+    def fake_run_evaluation(settings, path):
+        captured["backend"] = settings.embeddings_backend
+        return []
+
+    monkeypatch.setattr("research_assistant.api.run_evaluation", fake_run_evaluation)
+
+    response = TestClient(app).post("/v1/evaluate", json={"embeddings": "huggingface"})
+
+    assert response.status_code == 200
+    assert captured["backend"] == "huggingface"
+
+
+def test_evaluate_rejects_invalid_embeddings_value():
+    response = TestClient(app).post("/v1/evaluate", json={"embeddings": "bogus"})
+    assert response.status_code == 422
