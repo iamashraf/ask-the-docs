@@ -35,6 +35,15 @@ them later is a fast no-op (`ollama pull` skips already-present models;
 intermediate layer leaves behind, at the cost of a slightly slower next
 build).
 
+**First server start seeds a reading list automatically.** The first time
+`podman compose up -d app` runs (CLI's `ingest`/`index` don't trigger
+this), it ingests every source in `seed_sources.yaml` — a curated set of
+foundational and recent LLM/RAG papers — so there's already real content
+to `ask` against without any manual ingestion. This takes noticeably
+longer than later starts (15 documents to fetch, chunk, and embed); a
+marker file in `data/index/` means it only happens once per fresh index,
+not on every restart. Edit `seed_sources.yaml` to change what gets seeded.
+
 ## Two interfaces, one pipeline
 
 Every operation below has two equivalent forms, both calling the exact
