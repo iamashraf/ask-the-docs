@@ -23,6 +23,16 @@ services:
       - OLLAMA_HOST=http://ollama:11434
     entrypoint: ["sh", "-c", "ollama pull llama3.1:8b && ollama pull nomic-embed-text"]
 
+  valkey:
+    image: valkey/valkey
+    volumes:
+      - valkey_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   app:
     image: localhost/research-assistant-app
     build: .
@@ -30,6 +40,8 @@ services:
     depends_on:
       ollama-init:
         condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
     volumes:
       - ./data:/app/data
       - ./evals:/app/evals
@@ -50,3 +62,4 @@ services:
 
 volumes:
   ollama_data:
+  valkey_data:
