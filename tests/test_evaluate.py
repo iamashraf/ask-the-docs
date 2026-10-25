@@ -2,7 +2,7 @@ import json
 from unittest.mock import Mock
 
 from research_assistant.answer import AnswerResult
-from research_assistant.config import ProviderConfig, Settings
+from research_assistant.config import REFUSAL_MESSAGE, ProviderConfig, Settings
 from research_assistant.evaluate import GoldenQuestion, JudgeScore, judge, load_golden_questions, run_evaluation
 
 
@@ -22,6 +22,18 @@ def test_load_golden_questions_parses_yaml(tmp_path):
     assert questions == [
         GoldenQuestion(question="What is X?", notes="note one"),
         GoldenQuestion(question="What is Y?", notes=None),
+    ]
+
+
+def test_load_golden_questions_parses_expected_refusal_flag(tmp_path):
+    path = tmp_path / "questions.yaml"
+    path.write_text('- question: "What is X?"\n  expected_refusal: true\n- question: "What is Y?"\n')
+
+    questions = load_golden_questions(path)
+
+    assert questions == [
+        GoldenQuestion(question="What is X?", expected_refusal=True),
+        GoldenQuestion(question="What is Y?", expected_refusal=False),
     ]
 
 
@@ -60,6 +72,41 @@ def test_judge_returns_none_for_json_missing_required_field():
     client.generate.return_value = json.dumps({"accuracy": 0.9})
 
     assert judge("q", "context", "answer", client) is None
+
+
+def test_run_evaluation_skips_judge_for_expected_refusal_question_that_correctly_refuses(tmp_path, monkeypatch):
+    questions_path = tmp_path / "questions.yaml"
+    questions_path.write_text('- question: "Q1"\n  expected_refusal: true\n')
+
+    monkeypatch.setattr(
+        "research_assistant.evaluate.answer",
+        lambda query, settings: AnswerResult(text=REFUSAL_MESSAGE, citations=[], context=""),
+    )
+    mock_get_llm_client = Mock()
+    monkeypatch.setattr("research_assistant.evaluate.get_llm_client", mock_get_llm_client)
+
+    results = run_evaluation(make_settings(), questions_path)
+
+    assert results[0].error is None
+    assert results[0].score is not None
+    mock_get_llm_client.assert_not_called()
+
+
+def test_run_evaluation_flags_error_when_expected_refusal_question_gets_an_answer(tmp_path, monkeypatch):
+    questions_path = tmp_path / "questions.yaml"
+    questions_path.write_text('- question: "Q1"\n  expected_refusal: true\n')
+
+    monkeypatch.setattr(
+        "research_assistant.evaluate.answer",
+        lambda query, settings: AnswerResult(
+            text="a confident but wrong answer", citations=["a.pdf"], context="ctx"
+        ),
+    )
+
+    results = run_evaluation(make_settings(), questions_path)
+
+    assert results[0].error is not None
+    assert results[0].score is None
 
 
 def test_run_evaluation_marks_error_and_continues(tmp_path, monkeypatch):

@@ -3,14 +3,20 @@
 - question: "How does chunking affect retrieval quality?"
   notes: "open-ended, no single source"
 - question: "What would happen if the Transformer architecture didn't use positional encodings?"
-  notes: "hypothetical/speculative -- not stated in the Transformer paper's actual content; expected behavior is the refusal message, not speculation"
+  notes: "hypothetical/speculative -- not stated in the Transformer paper's actual content"
+  expected_refusal: true
 - question: "What would happen if LoRA used full-rank adaptation instead of low-rank?"
-  notes: "hypothetical/speculative extension of the LoRA paper; expected behavior is the refusal message"
+  notes: "hypothetical/speculative extension of the LoRA paper"
+  expected_refusal: true
 - question: "How would Chain-of-Thought prompting perform on a model with only 1 million parameters?"
-  notes: "hypothetical extrapolation beyond what the Chain-of-Thought paper actually tested; expected behavior is the refusal message"
+  notes: "hypothetical extrapolation beyond what the Chain-of-Thought paper actually tested"
+  expected_refusal: true
 - question: "How does CRISPR-Cas9 gene editing work?"
-  notes: "unrelated to the seeded corpus (LLM/NLP/RAG papers); expected behavior is the refusal message, not a fabricated answer"
+  notes: "unrelated to the seeded corpus (LLM/NLP/RAG papers)"
+  expected_refusal: true
 - question: "What's the best recipe for sourdough bread?"
-  notes: "unrelated to the seeded corpus; expected behavior is the refusal message"
+  notes: "unrelated to the seeded corpus"
+  expected_refusal: true
 - question: "What caused the 2008 global financial crisis?"
-  notes: "unrelated to the seeded corpus; expected behavior is the refusal message, not a plausible-sounding but fabricated answer"
+  notes: "unrelated to the seeded corpus"
+  expected_refusal: true
