@@ -41,6 +41,11 @@ future spec, not built yet. Don't add them speculatively.
   builds a cited prompt, calls the generator; short-circuits to "no
   relevant context found" (no LLM call) when retrieval is empty.
   **`evaluate.py`** — LLM-as-judge scoring against `evals/golden_questions.yaml`.
+- **`seed.py`** — on API server startup only (FastAPI `lifespan` hook in
+  `api.py`; never on CLI commands), ingests every source in
+  `seed_sources.yaml` once. A marker file in `index_dir` prevents
+  re-ingesting (and duplicating chunks) on every container restart;
+  individual source failures are skipped, not fatal to the batch.
 - **Two interfaces, same business logic, both maintained**: `cli.py`
   (`ingest`/`index`/`ask`/`evaluate`/`serve` subcommands, one-shot per
   `podman compose run app <subcommand>`) and `api.py` (FastAPI, `/v1/...`
