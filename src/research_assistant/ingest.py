@@ -11,12 +11,14 @@ import socket
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import requests
 from langchain_core.documents import Document
 
 from research_assistant.config import get_settings
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 ALLOWED_URL_SCHEMES = {"http", "https"}
+MAX_REDIRECTS = 3
 
 
 class UnsupportedFileTypeError(ValueError):
@@ -132,3 +134,84 @@ def load_text(path: Path) -> list[Document]:
             metadata={"source": str(path), "source_doc_id": make_source_doc_id(str(path))},
         )
     ]
+
+
+def load_docx(path: Path) -> list[Document]:
+    """Loads a .docx file's paragraphs as a single Document."""
+    import docx
+
+    document = docx.Document(str(path))
+    text = "\n".join(p.text for p in document.paragraphs)
+    if not text.strip():
+        return []
+    return [
+        Document(
+            page_content=text,
+            metadata={"source": str(path), "source_doc_id": make_source_doc_id(str(path))},
+        )
+    ]
+
+
+def load_url(url: str, _redirects_followed: int = 0) -> list[Document]:
+    """Fetches a URL and extracts its visible text. Each redirect hop is
+    re-validated through validate_url (an attacker-controlled redirect
+    target is exactly as dangerous as the original URL)."""
+    from bs4 import BeautifulSoup
+
+    settings = get_settings()
+    validate_url(url)
+
+    response = requests.get(url, timeout=settings.url_fetch_timeout_seconds, allow_redirects=False, stream=True)
+
+    if response.is_redirect or response.is_permanent_redirect:
+        if _redirects_followed >= MAX_REDIRECTS:
+            raise UrlSecurityError(f"Too many redirects fetching {url}")
+        location = response.headers.get("Location")
+        if not location:
+            raise UrlSecurityError(f"Redirect from {url} had no Location header")
+        return load_url(location, _redirects_followed=_redirects_followed + 1)
+
+    max_bytes = settings.max_url_fetch_size_mb * 1024 * 1024
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=8192):
+        total += len(chunk)
+        if total > max_bytes:
+            raise UrlSecurityError(f"Response from {url} exceeded {settings.max_url_fetch_size_mb}MB limit")
+        chunks.append(chunk)
+
+    html = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+    soup = BeautifulSoup(html, "html.parser")
+    title = soup.title.string.strip() if soup.title and soup.title.string else url
+    text = soup.get_text(separator="\n", strip=True)
+
+    return [
+        Document(
+            page_content=text,
+            metadata={"source": url, "source_doc_id": make_source_doc_id(url), "title": title},
+        )
+    ]
+
+
+def load_path(path: Path) -> list[Document]:
+    """Routes an already-validated local path to the loader for its extension."""
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return load_pdf(path)
+    if suffix == ".docx":
+        return load_docx(path)
+    if suffix in {".txt", ".md"}:
+        return load_text(path)
+    raise UnsupportedFileTypeError(f"Unsupported file extension: {suffix}")
+
+
+def dispatch(source: str) -> list[Document]:
+    """Routes a user-supplied source string to the right loader, applying
+    the relevant security gate first."""
+    parts = urlsplit(source)
+    if parts.scheme in ALLOWED_URL_SCHEMES:
+        return load_url(source)
+
+    settings = get_settings()
+    resolved = validate_local_path(Path(source), settings.docs_dir)
+    return load_path(resolved)
