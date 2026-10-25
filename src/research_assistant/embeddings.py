@@ -2,6 +2,8 @@
 implementing LangChain's own Embeddings interface so they plug directly
 into any LangChain-compatible vector store, not just Chroma."""
 
+from functools import lru_cache
+
 import requests
 from langchain_core.embeddings import Embeddings
 from sentence_transformers import SentenceTransformer
@@ -45,10 +47,26 @@ class HuggingFaceEmbeddings(Embeddings):
         return [[float(x) for x in vector] for vector in self._model.encode(texts)]
 
 
+@lru_cache
+def _get_embeddings_cached(
+    backend: str, ollama_model: str, ollama_base_url: str, huggingface_model: str
+) -> Embeddings:
+    """Settings itself isn't hashable, so this is keyed on the specific
+    primitives that determine the backend -- loaded once per distinct
+    config, not once per call (HuggingFaceEmbeddings.__init__ does a real
+    model load, same reasoning as the Reranker's own lru_cache)."""
+    if backend == "ollama":
+        return OllamaEmbeddings(model=ollama_model, base_url=ollama_base_url)
+    if backend == "huggingface":
+        return HuggingFaceEmbeddings(model_name=huggingface_model)
+    raise ValueError(f"Unknown embeddings backend: {backend!r}")
+
+
 def get_embeddings(settings: Settings) -> Embeddings:
     """Factory: builds the backend matching settings.embeddings_backend."""
-    if settings.embeddings_backend == "ollama":
-        return OllamaEmbeddings(model=settings.ollama_embedding_model, base_url=settings.ollama_base_url)
-    if settings.embeddings_backend == "huggingface":
-        return HuggingFaceEmbeddings(model_name=settings.huggingface_embedding_model)
-    raise ValueError(f"Unknown embeddings backend: {settings.embeddings_backend!r}")
+    return _get_embeddings_cached(
+        settings.embeddings_backend,
+        settings.ollama_embedding_model,
+        settings.ollama_base_url,
+        settings.huggingface_embedding_model,
+    )
