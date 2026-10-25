@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     embeddings_backend: Literal["ollama", "huggingface"] = "ollama"
     ollama_embedding_model: str = "nomic-embed-text"
+    ollama_base_url: str = "http://localhost:11434"
     huggingface_embedding_model: str = "BAAI/bge-small-en-v1.5"
 
     index_dir: Path = Path("data/index")

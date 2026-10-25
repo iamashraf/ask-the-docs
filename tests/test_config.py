@@ -12,6 +12,7 @@ def test_settings_defaults():
         judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
     )
     assert settings.embeddings_backend == "ollama"
+    assert settings.ollama_base_url == "http://localhost:11434"
     assert settings.index_dir == Path("data/index")
     assert settings.docs_dir == Path("data/documents")
 
