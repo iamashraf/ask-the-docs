@@ -1,6 +1,7 @@
 .venv
 .git
 .env
+.env.local
 data
 evals
 tests
