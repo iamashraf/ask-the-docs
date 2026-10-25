@@ -7,7 +7,7 @@ import uvicorn
 
 from research_assistant.answer import answer
 from research_assistant.api import app as api_app
-from research_assistant.config import get_settings
+from research_assistant.config import Settings, get_settings
 from research_assistant.evaluate import run_evaluation
 from research_assistant.index import build_index
 from research_assistant.ingest import dispatch, discover_sources
@@ -57,7 +57,11 @@ def _evaluate(args: argparse.Namespace, settings) -> None:
     if args.query_rewrite is not None:
         overrides["query_rewrite_enabled"] = args.query_rewrite == "true"
     if overrides:
-        settings = settings.model_copy(update=overrides)
+        # model_copy(update=...) skips validation entirely -- model_validate
+        # re-runs it, so an out-of-range --hybrid-alpha is rejected here the
+        # same way the API already rejects it, instead of silently passing
+        # through to run_evaluation.
+        settings = Settings.model_validate({**settings.model_dump(), **overrides})
 
     for result in run_evaluation(settings, GOLDEN_QUESTIONS_PATH):
         if result.error:
