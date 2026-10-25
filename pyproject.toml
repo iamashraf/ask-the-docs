@@ -22,6 +22,7 @@ dependencies = [
     "python-dotenv>=1.2.4",
     "pyyaml>=6.0.3",
     "rank-bm25>=0.2.2",
+    "redis>=8.1.0",
     "requests>=2.34.2",
     "sentence-transformers>=6.2.0",
     "tiktoken>=0.14.0",
