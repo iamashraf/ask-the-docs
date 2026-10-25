@@ -184,6 +184,8 @@ def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
         settings.hybrid_alpha,
         settings.rerank_enabled,
         settings.query_rewrite_enabled,
+        settings.system_prompt_template,
+        settings.candidate_pool_size,
         1,
     )
     fake_cache.set(key, json.dumps(dataclasses.asdict(cached_result)).encode())
@@ -219,6 +221,8 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
         make_settings().hybrid_alpha,
         make_settings().rerank_enabled,
         make_settings().query_rewrite_enabled,
+        make_settings().system_prompt_template,
+        make_settings().candidate_pool_size,
         0,
     )
     fake_cache.set(key, b"not valid json")
@@ -227,6 +231,79 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
     result = answer("What is X?", make_settings(), k=5)
 
     assert result.text == "the answer [1]"
+
+
+def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: 1)
+    shared_cache = FakeCacheClient()
+    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: shared_cache)
+
+    calls = {"count": 0}
+
+    class FakeClient:
+        def generate(self, prompt, system=None):
+            calls["count"] += 1
+            return "the answer [1]"
+
+    monkeypatch.setattr("research_assistant.answer.get_llm_client", lambda config: FakeClient())
+    settings = make_settings()
+
+    answer("What is X?", settings, k=5)
+    answer("What is X?", settings, k=5)
+
+    assert calls["count"] == 1
+
+
+def test_answer_cache_key_changes_when_system_prompt_template_changes(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: 1)
+    shared_cache = FakeCacheClient()
+    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: shared_cache)
+
+    calls = {"count": 0}
+
+    class FakeClient:
+        def generate(self, prompt, system=None):
+            calls["count"] += 1
+            return "the answer [1]"
+
+    monkeypatch.setattr("research_assistant.answer.get_llm_client", lambda config: FakeClient())
+
+    settings_a = make_settings().model_copy(update={"system_prompt_template": "be terse"})
+    settings_b = make_settings().model_copy(update={"system_prompt_template": "be verbose"})
+
+    answer("What is X?", settings_a, k=5)
+    answer("What is X?", settings_b, k=5)
+
+    assert calls["count"] == 2
+
+
+def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: 1)
+    shared_cache = FakeCacheClient()
+    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: shared_cache)
+
+    calls = {"count": 0}
+
+    class FakeClient:
+        def generate(self, prompt, system=None):
+            calls["count"] += 1
+            return "the answer [1]"
+
+    monkeypatch.setattr("research_assistant.answer.get_llm_client", lambda config: FakeClient())
+
+    settings_a = make_settings().model_copy(update={"candidate_pool_size": 20})
+    settings_b = make_settings().model_copy(update={"candidate_pool_size": 50})
+
+    answer("What is X?", settings_a, k=5)
+    answer("What is X?", settings_b, k=5)
+
+    assert calls["count"] == 2
 
 
 def test_answer_cache_key_changes_when_chunk_count_changes(monkeypatch):

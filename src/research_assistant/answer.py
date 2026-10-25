@@ -93,6 +93,8 @@ def answer(query: str, settings: Settings, k: int = 5) -> AnswerResult:
         settings.hybrid_alpha,
         settings.rerank_enabled,
         settings.query_rewrite_enabled,
+        settings.system_prompt_template,
+        settings.candidate_pool_size,
         get_chunk_count(settings),
     )
 
