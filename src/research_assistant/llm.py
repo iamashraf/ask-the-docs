@@ -22,7 +22,7 @@ class OllamaUnavailableError(RuntimeError):
 class LLMClient(Protocol):
     """Interface every provider-specific client below implements."""
 
-    def generate(self, prompt: str) -> str: ...
+    def generate(self, prompt: str, system: str | None = None) -> str: ...
 
 
 class OllamaLLMClient:
@@ -32,13 +32,18 @@ class OllamaLLMClient:
         self.model = model
         self.base_url = base_url
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, system: str | None = None) -> str:
+        messages = []
+        if system is not None:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
         try:
             response = requests.post(
                 f"{self.base_url}/api/chat",
                 json={
                     "model": self.model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "stream": False,
                 },
                 timeout=OLLAMA_CHAT_TIMEOUT_SECONDS,
@@ -60,12 +65,11 @@ class AnthropicLLMClient:
         self.model = model
         self._client = Anthropic(api_key=api_key)
 
-    def generate(self, prompt: str) -> str:
-        response = self._client.messages.create(
-            model=self.model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-        )
+    def generate(self, prompt: str, system: str | None = None) -> str:
+        kwargs = {"model": self.model, "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]}
+        if system is not None:
+            kwargs["system"] = system
+        response = self._client.messages.create(**kwargs)
         return response.content[0].text
 
 
@@ -76,11 +80,13 @@ class OpenAILLMClient:
         self.model = model
         self._client = OpenAI(api_key=api_key)
 
-    def generate(self, prompt: str) -> str:
-        response = self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-        )
+    def generate(self, prompt: str, system: str | None = None) -> str:
+        messages = []
+        if system is not None:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        response = self._client.chat.completions.create(model=self.model, messages=messages)
         return response.choices[0].message.content
 
 
