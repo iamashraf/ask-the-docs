@@ -3,7 +3,10 @@
 import argparse
 from pathlib import Path
 
+import uvicorn
+
 from research_assistant.answer import answer
+from research_assistant.api import app as api_app
 from research_assistant.config import get_settings
 from research_assistant.evaluate import run_evaluation
 from research_assistant.index import build_index
@@ -58,6 +61,10 @@ def _evaluate(args: argparse.Namespace, settings) -> None:
             )
 
 
+def _serve(args: argparse.Namespace, settings) -> None:
+    uvicorn.run(api_app, host="0.0.0.0", port=8000)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="research-assistant")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -79,6 +86,9 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_parser = subparsers.add_parser("evaluate", help="Run the golden question set through the LLM judge")
     evaluate_parser.add_argument("--embeddings", choices=["ollama", "huggingface"], default=None)
     evaluate_parser.set_defaults(func=_evaluate)
+
+    serve_parser = subparsers.add_parser("serve", help="Run the long-running HTTP API server")
+    serve_parser.set_defaults(func=_serve)
 
     return parser
 
