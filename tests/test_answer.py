@@ -55,6 +55,13 @@ def test_citation_guardrail_passes_on_valid_citation():
     assert citation_guardrail_passes("per [2], ...", num_chunks=5) is True
 
 
+def test_citation_guardrail_fails_gracefully_on_absurdly_large_citation_number():
+    # Python's int() refuses strings over 4300 digits (its own DoS guard) --
+    # the guardrail must treat that as "invalid citation", not crash.
+    huge_citation = f"per [{'9' * 5000}], ..."
+    assert citation_guardrail_passes(huge_citation, num_chunks=5) is False
+
+
 def test_answer_returns_refusal_message_without_calling_llm(monkeypatch):
     monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: [])
     mock_get_llm_client = Mock()

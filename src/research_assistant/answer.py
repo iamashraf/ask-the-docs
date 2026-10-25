@@ -44,7 +44,13 @@ def citation_guardrail_passes(answer_text: str, num_chunks: int) -> bool:
     citations = CITATION_PATTERN.findall(answer_text)
     if not citations:
         return False
-    return all(1 <= int(n) <= num_chunks for n in citations)
+    try:
+        return all(1 <= int(n) <= num_chunks for n in citations)
+    except ValueError:
+        # int() refuses absurdly long digit strings (its own guard against
+        # quadratic-time conversion) -- treat that as an invalid citation,
+        # not a crash.
+        return False
 
 
 def answer(query: str, settings: Settings, k: int = 5) -> AnswerResult:
