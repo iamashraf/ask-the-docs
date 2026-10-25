@@ -69,6 +69,30 @@ def test_settings_rejects_hybrid_alpha_out_of_range():
         )
 
 
+def test_settings_accepts_hybrid_alpha_boundary_values():
+    low = Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+        hybrid_alpha=0.0,
+    )
+    high = Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+        hybrid_alpha=1.0,
+    )
+    assert low.hybrid_alpha == 0.0
+    assert high.hybrid_alpha == 1.0
+
+
+def test_settings_accepts_minimum_candidate_pool_size():
+    settings = Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+        candidate_pool_size=1,
+    )
+    assert settings.candidate_pool_size == 1
+
+
 def test_settings_rejects_non_positive_candidate_pool_size():
     with pytest.raises(ValidationError):
         Settings(
