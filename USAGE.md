@@ -26,11 +26,19 @@ defaults (`GENERATOR__*`, `OLLAMA_BASE_URL`, etc.) already point at the
 ```bash
 podman compose up -d ollama-init   # starts ollama, waits until healthy,
                                      # pulls llama3.1:8b + nomic-embed-text, exits
-podman compose build app
+podman compose build app && podman image prune -f
 ```
 
 `ollama-init` only downloads models once — the pulled weights persist in
 the `ollama_data` volume, so re-running this later is a fast no-op.
+
+The `&& podman image prune -f` matters: every multi-stage build leaves the
+intermediate `builder` stage behind as an untagged (`<none>:<none>`) image
+in the local store — it's never run, just build cache, but it does take up
+real disk space (often bigger than the final image itself, since it still
+has `pip`/`uv` in it and hasn't been flattened by the final `COPY`).
+Pruning after each build reclaims that; the tradeoff is the next build
+can't reuse that cached layer, so it'll be a little slower, not faster.
 
 ## 1. `ingest <source>` — load a document into the index
 
