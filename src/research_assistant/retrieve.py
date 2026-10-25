@@ -9,7 +9,7 @@ from research_assistant.bm25_index import score as bm25_score
 from research_assistant.config import Settings
 from research_assistant.index import load_index
 from research_assistant.query_analyzer import rewrite_query
-from research_assistant.reranker import DEFAULT_RERANKER_MODEL, Reranker
+from research_assistant.reranker import DEFAULT_RERANKER_MODEL, get_reranker
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +74,20 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
         (doc, -distance)
         for doc, distance in index.similarity_search_with_score(search_query, k=settings.candidate_pool_size)
     ]
-    bm25_hits = sorted(bm25_score(search_query, settings), key=lambda pair: pair[1], reverse=True)[
+    # A score of 0 means "no keyword overlap at all" (e.g. an out-of-vocabulary
+    # query) -- excluding it keeps that chunk from tying every other
+    # zero-score chunk at normalized score 1.0 ("all equal" rule) and
+    # crowding out real vector matches.
+    bm25_hits = [
+        hit
+        for hit in sorted(bm25_score(search_query, settings), key=lambda pair: pair[1], reverse=True)
+        if hit[1] > 0
+    ][: settings.candidate_pool_size]
+
+    candidates = [doc for doc, _ in hybrid_merge(vector_hits, bm25_hits, settings.hybrid_alpha)][
         : settings.candidate_pool_size
     ]
 
-    candidates = [doc for doc, _ in hybrid_merge(vector_hits, bm25_hits, settings.hybrid_alpha)]
-
     if settings.rerank_enabled:
-        return Reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
+        return get_reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
     return candidates[:k]

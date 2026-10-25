@@ -1,6 +1,6 @@
 from langchain_core.documents import Document
 
-from research_assistant.reranker import Reranker
+from research_assistant.reranker import Reranker, get_reranker
 
 DOC_A = Document(page_content="low relevance", metadata={"source": "a.pdf"})
 DOC_B = Document(page_content="high relevance", metadata={"source": "b.pdf"})
@@ -14,6 +14,26 @@ class FakeCrossEncoder:
     def predict(self, pairs):
         # doc order passed in is [A, B, C]; return scores so B > C > A
         return [0.1, 0.9, 0.5]
+
+
+def test_get_reranker_loads_the_model_only_once(monkeypatch):
+    load_count = {"count": 0}
+
+    class CountingCrossEncoder:
+        def __init__(self, model_name):
+            load_count["count"] += 1
+
+        def predict(self, pairs):
+            return [0.0 for _ in pairs]
+
+    monkeypatch.setattr("research_assistant.reranker.CrossEncoder", CountingCrossEncoder)
+    get_reranker.cache_clear()
+
+    a = get_reranker("fake-model")
+    b = get_reranker("fake-model")
+
+    assert a is b
+    assert load_count["count"] == 1
 
 
 def test_rerank_returns_top_k_sorted_descending_by_model_score(monkeypatch):
