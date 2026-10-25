@@ -197,6 +197,101 @@ def test_evaluate_rejects_invalid_embeddings_value():
     assert response.status_code == 422
 
 
+def test_evaluate_overrides_hybrid_alpha(monkeypatch):
+    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    captured = {}
+
+    def fake_run_evaluation(settings, path):
+        captured["alpha"] = settings.hybrid_alpha
+        return []
+
+    monkeypatch.setattr("research_assistant.api.run_evaluation", fake_run_evaluation)
+
+    response = TestClient(app).post("/v1/evaluate", json={"hybrid_alpha": 0.8})
+
+    assert response.status_code == 200
+    assert captured["alpha"] == 0.8
+
+
+def test_evaluate_overrides_rerank_enabled(monkeypatch):
+    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    captured = {}
+
+    def fake_run_evaluation(settings, path):
+        captured["rerank"] = settings.rerank_enabled
+        return []
+
+    monkeypatch.setattr("research_assistant.api.run_evaluation", fake_run_evaluation)
+
+    response = TestClient(app).post("/v1/evaluate", json={"rerank_enabled": False})
+
+    assert response.status_code == 200
+    assert captured["rerank"] is False
+
+
+def test_evaluate_overrides_query_rewrite_enabled(monkeypatch):
+    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    captured = {}
+
+    def fake_run_evaluation(settings, path):
+        captured["rewrite"] = settings.query_rewrite_enabled
+        return []
+
+    monkeypatch.setattr("research_assistant.api.run_evaluation", fake_run_evaluation)
+
+    response = TestClient(app).post("/v1/evaluate", json={"query_rewrite_enabled": False})
+
+    assert response.status_code == 200
+    assert captured["rewrite"] is False
+
+
+def test_evaluate_rejects_hybrid_alpha_out_of_range():
+    response = TestClient(app).post("/v1/evaluate", json={"hybrid_alpha": 1.5})
+    assert response.status_code == 422
+
+
+def test_evaluate_accepts_hybrid_alpha_boundary_values(monkeypatch):
+    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    captured = []
+    monkeypatch.setattr(
+        "research_assistant.api.run_evaluation",
+        lambda settings, path: captured.append(settings.hybrid_alpha) or [],
+    )
+
+    low = TestClient(app).post("/v1/evaluate", json={"hybrid_alpha": 0.0})
+    high = TestClient(app).post("/v1/evaluate", json={"hybrid_alpha": 1.0})
+
+    assert low.status_code == 200 and high.status_code == 200
+    assert captured == [0.0, 1.0]
+
+
+def test_evaluate_combines_multiple_overrides_in_one_call(monkeypatch):
+    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    captured = {}
+
+    def fake_run_evaluation(settings, path):
+        captured["backend"] = settings.embeddings_backend
+        captured["alpha"] = settings.hybrid_alpha
+        captured["rerank"] = settings.rerank_enabled
+        captured["rewrite"] = settings.query_rewrite_enabled
+        return []
+
+    monkeypatch.setattr("research_assistant.api.run_evaluation", fake_run_evaluation)
+
+    response = TestClient(app).post(
+        "/v1/evaluate",
+        json={
+            "embeddings": "huggingface",
+            "hybrid_alpha": 0.8,
+            "rerank_enabled": False,
+            "query_rewrite_enabled": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured == {"backend": "huggingface", "alpha": 0.8, "rerank": False, "rewrite": False}
+
+
 def test_package_logger_configured_for_info_with_a_handler():
     """Importing api.py must configure the research_assistant logger so
     INFO-level messages (e.g. seed.py's progress logs) actually reach

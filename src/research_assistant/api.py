@@ -121,6 +121,9 @@ def ask(request: AskRequest) -> AskResponse:
 
 class EvaluateRequest(BaseModel):
     embeddings: Literal["ollama", "huggingface"] | None = None
+    hybrid_alpha: float | None = Field(default=None, ge=0.0, le=1.0)
+    rerank_enabled: bool | None = None
+    query_rewrite_enabled: bool | None = None
 
 
 class JudgeScoreOut(BaseModel):
@@ -144,8 +147,17 @@ class EvaluateResponse(BaseModel):
 @app.post("/v1/evaluate")
 def evaluate(request: EvaluateRequest) -> EvaluateResponse:
     settings = get_settings()
+    overrides = {}
     if request.embeddings:
-        settings = settings.model_copy(update={"embeddings_backend": request.embeddings})
+        overrides["embeddings_backend"] = request.embeddings
+    if request.hybrid_alpha is not None:
+        overrides["hybrid_alpha"] = request.hybrid_alpha
+    if request.rerank_enabled is not None:
+        overrides["rerank_enabled"] = request.rerank_enabled
+    if request.query_rewrite_enabled is not None:
+        overrides["query_rewrite_enabled"] = request.query_rewrite_enabled
+    if overrides:
+        settings = settings.model_copy(update=overrides)
 
     results = run_evaluation(settings, GOLDEN_QUESTIONS_PATH)
     return EvaluateResponse(
