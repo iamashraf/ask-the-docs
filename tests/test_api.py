@@ -4,8 +4,10 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.documents import Document
 
+from research_assistant.answer import AnswerResult
 from research_assistant.api import app
 from research_assistant.ingest import PathSecurityError, UnsupportedFileTypeError, UrlSecurityError
+from research_assistant.llm import OllamaUnavailableError
 
 
 def test_health_returns_ok():
@@ -78,3 +80,45 @@ def test_index_discovers_docs_dir_and_builds_index(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"documents_ingested": 2, "files_found": 2}
     assert captured["docs"] == ["doc-for-a.pdf", "doc-for-b.pdf"]
+
+
+def test_ask_returns_answer_and_citations(monkeypatch):
+    monkeypatch.setattr("research_assistant.api.get_settings", lambda: object())
+    captured = {}
+
+    def fake_answer(query, settings, k):
+        captured["query"] = query
+        captured["k"] = k
+        return AnswerResult(text="42", citations=["a.pdf"], context="ctx")
+
+    monkeypatch.setattr("research_assistant.api.answer", fake_answer)
+
+    response = TestClient(app).post("/v1/ask", json={"query": "What is X?"})
+
+    assert response.status_code == 200
+    assert response.json() == {"answer": "42", "citations": ["a.pdf"]}
+    assert captured["query"] == "What is X?"
+    assert captured["k"] == 5
+
+
+def test_ask_rejects_empty_query():
+    response = TestClient(app).post("/v1/ask", json={"query": ""})
+    assert response.status_code == 422
+
+
+def test_ask_rejects_non_positive_k():
+    response = TestClient(app).post("/v1/ask", json={"query": "hi", "k": 0})
+    assert response.status_code == 422
+
+
+def test_ask_returns_503_when_ollama_unavailable(monkeypatch):
+    monkeypatch.setattr("research_assistant.api.get_settings", lambda: object())
+
+    def raise_error(query, settings, k):
+        raise OllamaUnavailableError("could not reach ollama")
+
+    monkeypatch.setattr("research_assistant.api.answer", raise_error)
+
+    response = TestClient(app).post("/v1/ask", json={"query": "hi"})
+
+    assert response.status_code == 503

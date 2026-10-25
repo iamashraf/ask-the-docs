@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from research_assistant.answer import answer
 from research_assistant.config import get_settings
 from research_assistant.index import build_index
 from research_assistant.ingest import (
@@ -13,6 +14,7 @@ from research_assistant.ingest import (
     discover_sources,
     dispatch,
 )
+from research_assistant.llm import OllamaUnavailableError
 
 app = FastAPI(title="research-assistant")
 
@@ -27,6 +29,11 @@ def _bad_request_handler(request: Request, exc: Exception) -> JSONResponse:
 @app.exception_handler(FileNotFoundError)
 def _not_found_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(OllamaUnavailableError)
+def _service_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 @app.get("/health")
@@ -69,3 +76,19 @@ def index() -> IndexResponse:
     if docs:
         build_index(docs, settings)
     return IndexResponse(documents_ingested=len(docs), files_found=len(paths))
+
+
+class AskRequest(BaseModel):
+    query: str = Field(min_length=1)
+    k: int = Field(default=5, ge=1)
+
+
+class AskResponse(BaseModel):
+    answer: str
+    citations: list[str]
+
+
+@app.post("/v1/ask")
+def ask(request: AskRequest) -> AskResponse:
+    result = answer(request.query, get_settings(), k=request.k)
+    return AskResponse(answer=result.text, citations=result.citations)
