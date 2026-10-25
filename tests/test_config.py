@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from research_assistant.config import ProviderConfig, Settings
+from research_assistant.config import REFUSAL_MESSAGE, ProviderConfig, Settings
 
 
 def test_settings_defaults():
@@ -45,6 +45,37 @@ def test_settings_allows_ollama_without_api_key():
 def test_provider_config_rejects_invalid_provider():
     with pytest.raises(ValidationError):
         ProviderConfig(provider="bogus", model="x")
+
+
+def test_settings_hybrid_defaults():
+    settings = Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+    )
+    assert settings.hybrid_alpha == 0.5
+    assert settings.rerank_enabled is True
+    assert settings.query_rewrite_enabled is True
+    assert settings.candidate_pool_size == 50
+    assert REFUSAL_MESSAGE in settings.system_prompt_template
+    assert settings.cache_url == "redis://localhost:6379/0"
+
+
+def test_settings_rejects_hybrid_alpha_out_of_range():
+    with pytest.raises(ValidationError):
+        Settings(
+            generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+            judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+            hybrid_alpha=1.5,
+        )
+
+
+def test_settings_rejects_non_positive_candidate_pool_size():
+    with pytest.raises(ValidationError):
+        Settings(
+            generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+            judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+            candidate_pool_size=0,
+        )
 
 
 def test_settings_loads_nested_fields_from_env_vars(monkeypatch):
