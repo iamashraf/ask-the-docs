@@ -29,9 +29,25 @@ cp .env.example .env.local    # .env.example is reference only (committed);
                                # .env.local is what's actually loaded, never committed
 podman compose up -d ollama-init   # starts ollama, waits for it to be healthy,
                                     # pulls llama3.1:8b + nomic-embed-text, then exits
+```
+
+Two ways to use it from here, both calling the exact same underlying code:
+
+**One-shot CLI** (a fresh container per command):
+
+```bash
 podman compose run app ingest data/documents/some-paper.pdf
 podman compose run app ask "What does this paper say?"
 podman compose run app evaluate
+```
+
+**Long-running HTTP API** (one container, many requests -- what a chatbot/UI would use):
+
+```bash
+podman compose up -d app
+curl -X POST localhost:8000/v1/ingest -H "Content-Type: application/json" -d '{"source": "data/documents/some-paper.pdf"}'
+curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" -d '{"query": "What does this paper say?"}'
+curl -X POST localhost:8000/v1/evaluate -H "Content-Type: application/json" -d '{}'
 ```
 
 The model pull only happens once (the models persist in the `ollama_data`
