@@ -3,6 +3,7 @@ so neither the CLI's one-shot processes nor the long-running API server
 rebuild it from scratch on every query."""
 
 import pickle
+import re
 
 from langchain_core.documents import Document
 from rank_bm25 import BM25Okapi
@@ -13,9 +14,14 @@ from research_assistant.index import get_all_chunks, get_chunk_count, get_collec
 
 BM25_CACHE_TTL_SECONDS = 86400
 
+_WORD_PATTERN = re.compile(r"\w+")
+
 
 def _tokenize(text: str) -> list[str]:
-    return text.lower().split()
+    # Plain str.split() keeps punctuation attached ("lora:" != "lora",
+    # "lora?" != "lora"), which defeats exact keyword/acronym matching --
+    # the whole reason BM25 is in the pipeline alongside vector search.
+    return _WORD_PATTERN.findall(text.lower())
 
 
 def get_bm25_index(settings: Settings) -> tuple[BM25Okapi, list[Document]]:

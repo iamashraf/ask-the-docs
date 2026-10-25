@@ -41,6 +41,33 @@ def make_settings(tmp_path) -> Settings:
     )
 
 
+def test_score_matches_keyword_despite_surrounding_punctuation(tmp_path, monkeypatch):
+    chunks = [
+        Document(
+            page_content="LoRA: Low-Rank Adaptation of Large Language Models.",
+            metadata={"source": "lora.pdf", "source_doc_id": "lora", "chunk_index": 0},
+        ),
+        Document(
+            page_content="recipe for baking sourdough bread at home",
+            metadata={"source": "c.pdf", "source_doc_id": "c", "chunk_index": 0},
+        ),
+        Document(
+            page_content="gardening tips for spring flowers and soil",
+            metadata={"source": "b.pdf", "source_doc_id": "b", "chunk_index": 0},
+        ),
+    ]
+    settings = make_settings(tmp_path)
+    monkeypatch.setattr("research_assistant.bm25_index.get_all_chunks", lambda s: chunks)
+    monkeypatch.setattr("research_assistant.bm25_index.get_chunk_count", lambda s: len(chunks))
+    monkeypatch.setattr("research_assistant.bm25_index.get_cache_client", lambda s: FakeCache())
+
+    scores = score("What is LoRA?", settings)
+
+    by_source = {doc.metadata["source"]: s for doc, s in scores}
+    assert by_source["lora.pdf"] > by_source["c.pdf"]
+    assert by_source["lora.pdf"] > by_source["b.pdf"]
+
+
 def test_score_ranks_keyword_matches_higher(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     monkeypatch.setattr("research_assistant.bm25_index.get_all_chunks", lambda s: FIXTURE_CHUNKS)
