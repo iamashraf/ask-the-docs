@@ -1,0 +1,4 @@
+- question: "What is the attention mechanism?"
+  notes: "should cite the Transformer paper"
+- question: "How does chunking affect retrieval quality?"
+  notes: "open-ended, no single source"
