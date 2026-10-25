@@ -1,6 +1,9 @@
+import dataclasses
+import json
 import logging
 from unittest.mock import Mock
 
+import pytest
 from langchain_core.documents import Document
 
 from research_assistant.answer import (
@@ -10,6 +13,7 @@ from research_assistant.answer import (
     citation_guardrail_passes,
     format_context,
 )
+from research_assistant.cache import make_cache_key
 from research_assistant.config import REFUSAL_MESSAGE, ProviderConfig, Settings
 
 
@@ -41,6 +45,28 @@ def test_build_prompt_includes_query_and_context():
 
     assert "What is X?" in prompt
     assert "chunk one" in prompt
+
+
+class FakeCacheClient:
+    def __init__(self):
+        self._store: dict[str, bytes] = {}
+
+    def get(self, key):
+        return self._store.get(key)
+
+    def set(self, key, value, ex=None):
+        self._store[key] = value
+
+
+@pytest.fixture(autouse=True)
+def _no_real_cache_or_index(monkeypatch):
+    """answer() always computes a cache key (needs get_chunk_count) and
+    checks a cache client before doing anything else -- without this,
+    every test in this file would hit a real Chroma dir and a real Valkey
+    connection. A fresh, empty FakeCacheClient per test means every call
+    here is a cache miss by default unless a test wires up its own."""
+    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: 0)
+    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: FakeCacheClient())
 
 
 def test_citation_guardrail_fails_on_zero_citations():
@@ -140,6 +166,63 @@ def test_answer_logs_prompt_at_debug_level(monkeypatch, caplog):
         answer("What is X?", make_settings())
 
     assert any("What is X?" in record.message for record in caplog.records)
+
+
+def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
+    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: 1)
+    fake_cache = FakeCacheClient()
+    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: fake_cache)
+    settings = make_settings()
+
+    cached_result = AnswerResult(text="cached answer [1]", citations=["a.pdf"], context="ctx")
+    key = make_cache_key(
+        "what is x?",
+        5,
+        settings.embeddings_backend,
+        settings.generator.provider,
+        settings.generator.model,
+        settings.hybrid_alpha,
+        settings.rerank_enabled,
+        settings.query_rewrite_enabled,
+        1,
+    )
+    fake_cache.set(key, json.dumps(dataclasses.asdict(cached_result)).encode())
+
+    mock_retrieve = Mock()
+    monkeypatch.setattr("research_assistant.answer.retrieve", mock_retrieve)
+    mock_get_llm_client = Mock()
+    monkeypatch.setattr("research_assistant.answer.get_llm_client", mock_get_llm_client)
+
+    result = answer("What is X?", settings, k=5)
+
+    assert result == cached_result
+    mock_retrieve.assert_not_called()
+    mock_get_llm_client.assert_not_called()
+
+
+def test_answer_cache_key_changes_when_chunk_count_changes(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+
+    counts = [2, 3]
+    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: counts.pop(0))
+    shared_cache = FakeCacheClient()
+    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: shared_cache)
+
+    calls = {"count": 0}
+
+    class FakeClient:
+        def generate(self, prompt, system=None):
+            calls["count"] += 1
+            return "the answer [1]"
+
+    monkeypatch.setattr("research_assistant.answer.get_llm_client", lambda config: FakeClient())
+    settings = make_settings()
+
+    answer("What is X?", settings, k=5)
+    answer("What is X?", settings, k=5)
+
+    assert calls["count"] == 2
 
 
 def test_answer_passes_system_prompt_to_generate(monkeypatch):
