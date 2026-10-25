@@ -13,5 +13,5 @@ wheels/
 .env
 data/index/*
 !data/index/.gitkeep
-data/papers/*
-!data/papers/.gitkeep
+data/documents/*
+!data/documents/.gitkeep
