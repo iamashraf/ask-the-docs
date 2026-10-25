@@ -91,6 +91,24 @@ def test_evaluate_overrides_embeddings_backend_and_prints_results(capsys, monkey
     assert "Q1" in capsys.readouterr().out
 
 
+def test_serve_starts_uvicorn(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "research_assistant.cli.uvicorn.run",
+        lambda app, host, port: captured.update(app=app, host=host, port=port),
+    )
+
+    parser = build_parser()
+    args = parser.parse_args(["serve"])
+    args.func(args, make_settings())
+
+    from research_assistant.api import app as api_app
+
+    assert captured["app"] is api_app
+    assert captured["host"] == "0.0.0.0"
+    assert captured["port"] == 8000
+
+
 def test_evaluate_reports_errors(capsys, monkeypatch):
     monkeypatch.setattr(
         "research_assistant.cli.run_evaluation",
