@@ -1,8 +1,9 @@
-"""Embeddings abstraction: one interface, swappable backends (ollama/huggingface)."""
-
-from typing import Protocol
+"""Embeddings abstraction: swappable backends (ollama/huggingface), both
+implementing LangChain's own Embeddings interface so they plug directly
+into any LangChain-compatible vector store, not just Chroma."""
 
 import requests
+from langchain_core.embeddings import Embeddings
 from sentence_transformers import SentenceTransformer
 
 from research_assistant.config import Settings
@@ -10,14 +11,7 @@ from research_assistant.config import Settings
 OLLAMA_EMBED_TIMEOUT_SECONDS = 30
 
 
-class Embeddings(Protocol):
-    """Interface every embeddings backend below implements."""
-
-    def embed_query(self, text: str) -> list[float]: ...
-    def embed_documents(self, texts: list[str]) -> list[list[float]]: ...
-
-
-class OllamaEmbeddings:
+class OllamaEmbeddings(Embeddings):
     """Talks to a local Ollama server's /api/embeddings endpoint."""
 
     def __init__(self, model: str, base_url: str):
@@ -37,7 +31,7 @@ class OllamaEmbeddings:
         return [self.embed_query(text) for text in texts]
 
 
-class HuggingFaceEmbeddings:
+class HuggingFaceEmbeddings(Embeddings):
     """Loads a sentence-transformers model directly into this process."""
 
     def __init__(self, model_name: str):
