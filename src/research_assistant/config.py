@@ -39,6 +39,7 @@ class Settings(BaseSettings):
 
     index_dir: Path = Path("data/index")
     docs_dir: Path = Path("data/documents")
+    max_file_size_mb: int = 25
 
     model_config = SettingsConfigDict(
         env_file=".env", env_nested_delimiter="__", extra="ignore"
