@@ -30,7 +30,7 @@ def test_format_context_includes_source_citation_markers():
 def test_build_prompt_includes_query_and_context():
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
 
-    prompt = build_prompt("What is X?", chunks)
+    prompt = build_prompt("What is X?", format_context(chunks))
 
     assert "What is X?" in prompt
     assert "chunk one" in prompt
@@ -67,5 +67,6 @@ def test_answer_calls_generator_with_context_and_returns_citations(monkeypatch):
 
     assert result.text == "the answer"
     assert result.citations == ["a.pdf", "b.pdf"]
+    assert "chunk one" in result.context
     assert "What is X?" in captured_prompts[0]
     assert "chunk one" in captured_prompts[0]
