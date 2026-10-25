@@ -62,7 +62,7 @@ def _evaluate(args: argparse.Namespace, settings) -> None:
 
 
 def _serve(args: argparse.Namespace, settings) -> None:
-    uvicorn.run(api_app, host="0.0.0.0", port=8000)
+    uvicorn.run(api_app, host="0.0.0.0", port=8000, log_level="info")
 
 
 def build_parser() -> argparse.ArgumentParser:
