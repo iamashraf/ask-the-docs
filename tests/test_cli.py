@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from research_assistant.answer import AnswerResult
 from research_assistant.cli import build_parser
 from research_assistant.config import ProviderConfig, Settings
@@ -137,6 +140,15 @@ def test_evaluate_overrides_query_rewrite_enabled(monkeypatch):
     args.func(args, make_settings())
 
     assert captured_settings["rewrite"] is False
+
+
+def test_evaluate_rejects_hybrid_alpha_out_of_range(monkeypatch):
+    monkeypatch.setattr("research_assistant.cli.run_evaluation", lambda settings, path: [])
+    parser = build_parser()
+    args = parser.parse_args(["evaluate", "--hybrid-alpha", "5.0"])
+
+    with pytest.raises(ValidationError):
+        args.func(args, make_settings())
 
 
 def test_evaluate_combines_multiple_overrides_in_one_call(monkeypatch):
