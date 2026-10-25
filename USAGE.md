@@ -140,6 +140,51 @@ name each file. **Caveat:** there's no dedup yet (the document-update
 workflow is out of scope for this sub-project) — running `index` twice on
 unchanged files duplicates their chunks.
 
+## 5. `serve` — long-running HTTP API server
+
+```bash
+podman compose up -d app   # command: ["serve"] in docker-compose.yml runs
+                             # `research-assistant serve`, which starts uvicorn
+```
+
+The CLI subcommands above each start a fresh container per command — fine
+for one-off use, but a chatbot/UI needs a process that stays up and answers
+many requests. `serve` starts a FastAPI server exposing the same operations
+as HTTP endpoints, all under `/v1/`:
+
+```bash
+curl -X POST localhost:8000/v1/ingest -H "Content-Type: application/json" \
+  -d '{"source": "https://arxiv.org/pdf/2305.10601"}'
+
+curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" \
+  -d '{"query": "What is Tree of Thoughts?", "k": 5}'
+
+curl -X POST localhost:8000/v1/evaluate -H "Content-Type: application/json" \
+  -d '{"embeddings": "huggingface"}'   # or {} to use the default backend
+
+curl -X POST localhost:8000/v1/index -H "Content-Type: application/json" -d '{}'
+
+curl localhost:8000/health   # {"status": "ok"} -- never depends on Settings
+                               # or Ollama, so it reflects only "is the process up"
+```
+
+Every route is a thin wrapper over the exact same functions the CLI calls
+(`dispatch`, `build_index`, `answer`, `run_evaluation`) — same business
+logic, same persisted `data/index/`, just a different interface. Errors
+that the CLI would print as text come back as real HTTP status codes:
+
+| Situation | Status |
+|---|---|
+| Bad/unsafe `source` (path traversal, SSRF, unsupported extension) | 400 |
+| File not found | 404 |
+| Empty `source`/`query`, or `k <= 0` | 422 |
+| Ollama unreachable | 503 |
+
+The one-shot CLI and the server are not alternatives to pick between
+permanently — both stay in the codebase, calling identical logic, so you
+can use whichever fits: CLI for a quick one-off command, `serve` for
+anything that needs to stay running (like a future chatbot UI).
+
 ## Worked example: testing with a real paper
 
 ```bash
@@ -171,7 +216,7 @@ What to check:
 uv run pytest -v
 ```
 
-All 68 unit tests mock the network/SDK/model-loading boundary (no real
+All 85 unit tests mock the network/SDK/model-loading boundary (no real
 Ollama, Anthropic, or HuggingFace calls) — they verify the code's logic,
 not that a live LLM gives good answers. The container walkthrough above is
 what actually proves the end-to-end pipeline works against a real model.
