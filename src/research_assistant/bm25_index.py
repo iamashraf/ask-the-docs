@@ -32,11 +32,15 @@ def get_bm25_index(settings: Settings) -> tuple[BM25Okapi, list[Document]]:
         return pickle.loads(cached)
 
     chunks = get_all_chunks(settings)
-    bm25 = BM25Okapi([_tokenize(chunk.page_content) for chunk in chunks])
+    # BM25Okapi divides by corpus size internally -- an empty corpus (nothing
+    # ingested yet) would otherwise raise ZeroDivisionError.
+    bm25 = BM25Okapi([_tokenize(chunk.page_content) for chunk in chunks]) if chunks else None
     cache_set(client, key, pickle.dumps((bm25, chunks)), ttl_seconds=BM25_CACHE_TTL_SECONDS)
     return bm25, chunks
 
 
 def score(query: str, settings: Settings) -> list[tuple[Document, float]]:
     bm25, chunks = get_bm25_index(settings)
+    if bm25 is None:
+        return []
     return list(zip(chunks, bm25.get_scores(_tokenize(query))))

@@ -25,6 +25,31 @@ def test_rerank_returns_top_k_sorted_descending_by_model_score(monkeypatch):
     assert result == [DOC_B, DOC_C]
 
 
+def test_rerank_returns_all_candidates_when_k_exceeds_pool_size(monkeypatch):
+    monkeypatch.setattr("research_assistant.reranker.CrossEncoder", FakeCrossEncoder)
+
+    reranker = Reranker(model_name="fake-model")
+    result = reranker.rerank("some query", [DOC_A, DOC_B, DOC_C], k=10)
+
+    assert len(result) == 3
+
+
+def test_rerank_handles_empty_candidate_list(monkeypatch):
+    class EmptyCrossEncoder:
+        def __init__(self, model_name):
+            pass
+
+        def predict(self, pairs):
+            return []
+
+    monkeypatch.setattr("research_assistant.reranker.CrossEncoder", EmptyCrossEncoder)
+
+    reranker = Reranker(model_name="fake-model")
+    result = reranker.rerank("some query", [], k=5)
+
+    assert result == []
+
+
 def test_rerank_passes_query_paired_with_each_candidate(monkeypatch):
     captured = {}
 

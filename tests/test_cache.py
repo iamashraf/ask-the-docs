@@ -36,6 +36,18 @@ def test_cache_get_returns_none_on_miss():
     assert cache_get(fake_client, "missing") is None
 
 
+def test_cache_set_passes_ttl_seconds_to_client():
+    captured = {}
+
+    class CapturingClient:
+        def set(self, key, value, ex=None):
+            captured["ex"] = ex
+
+    cache_set(CapturingClient(), "k", b"v", ttl_seconds=123)
+
+    assert captured["ex"] == 123
+
+
 def test_get_cache_client_builds_from_settings_url(monkeypatch):
     captured = {}
     monkeypatch.setattr(
