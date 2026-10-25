@@ -1,11 +1,15 @@
 """Long-running HTTP API: thin routes over the existing ingest/index/answer/evaluate functions."""
 
+from pathlib import Path
+from typing import Literal
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from research_assistant.answer import answer
 from research_assistant.config import get_settings
+from research_assistant.evaluate import run_evaluation
 from research_assistant.index import build_index
 from research_assistant.ingest import (
     PathSecurityError,
@@ -15,6 +19,8 @@ from research_assistant.ingest import (
     dispatch,
 )
 from research_assistant.llm import OllamaUnavailableError
+
+GOLDEN_QUESTIONS_PATH = Path("evals/golden_questions.yaml")
 
 app = FastAPI(title="research-assistant")
 
@@ -92,3 +98,44 @@ class AskResponse(BaseModel):
 def ask(request: AskRequest) -> AskResponse:
     result = answer(request.query, get_settings(), k=request.k)
     return AskResponse(answer=result.text, citations=result.citations)
+
+
+class EvaluateRequest(BaseModel):
+    embeddings: Literal["ollama", "huggingface"] | None = None
+
+
+class JudgeScoreOut(BaseModel):
+    accuracy: float
+    answer_relevance: float
+    context_relevance: float
+    completeness: float
+    justification: str
+
+
+class EvalResultOut(BaseModel):
+    question: str
+    score: JudgeScoreOut | None
+    error: str | None
+
+
+class EvaluateResponse(BaseModel):
+    results: list[EvalResultOut]
+
+
+@app.post("/v1/evaluate")
+def evaluate(request: EvaluateRequest) -> EvaluateResponse:
+    settings = get_settings()
+    if request.embeddings:
+        settings = settings.model_copy(update={"embeddings_backend": request.embeddings})
+
+    results = run_evaluation(settings, GOLDEN_QUESTIONS_PATH)
+    return EvaluateResponse(
+        results=[
+            EvalResultOut(
+                question=r.question,
+                score=JudgeScoreOut(**vars(r.score)) if r.score else None,
+                error=r.error,
+            )
+            for r in results
+        ]
+    )
