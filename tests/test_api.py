@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.documents import Document
@@ -55,3 +57,24 @@ def test_ingest_returns_404_for_missing_file(monkeypatch):
     response = TestClient(app).post("/v1/ingest", json={"source": "missing.pdf"})
 
     assert response.status_code == 404
+
+
+def test_index_discovers_docs_dir_and_builds_index(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "research_assistant.api.get_settings", lambda: SimpleNamespace(docs_dir=tmp_path)
+    )
+    monkeypatch.setattr(
+        "research_assistant.api.discover_sources",
+        lambda docs_dir: [tmp_path / "a.pdf", tmp_path / "b.pdf"],
+    )
+    monkeypatch.setattr("research_assistant.api.dispatch", lambda source: [f"doc-for-{source}"])
+    captured = {}
+    monkeypatch.setattr(
+        "research_assistant.api.build_index", lambda d, s: captured.setdefault("docs", d)
+    )
+
+    response = TestClient(app).post("/v1/index")
+
+    assert response.status_code == 200
+    assert response.json() == {"documents_ingested": 2, "files_found": 2}
+    assert captured["docs"] == ["doc-for-a.pdf", "doc-for-b.pdf"]

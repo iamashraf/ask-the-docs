@@ -6,7 +6,13 @@ from pydantic import BaseModel, Field
 
 from research_assistant.config import get_settings
 from research_assistant.index import build_index
-from research_assistant.ingest import PathSecurityError, UnsupportedFileTypeError, UrlSecurityError, dispatch
+from research_assistant.ingest import (
+    PathSecurityError,
+    UnsupportedFileTypeError,
+    UrlSecurityError,
+    discover_sources,
+    dispatch,
+)
 
 app = FastAPI(title="research-assistant")
 
@@ -44,3 +50,22 @@ def ingest(request: IngestRequest) -> IngestResponse:
     if docs:
         build_index(docs, get_settings())
     return IngestResponse(documents_ingested=len(docs))
+
+
+class IndexResponse(BaseModel):
+    documents_ingested: int
+    files_found: int
+
+
+@app.post("/v1/index")
+def index() -> IndexResponse:
+    """Bulk re-index everything under docs_dir. Running this repeatedly on
+    unchanged files duplicates their chunks (no dedup yet)."""
+    settings = get_settings()
+    paths = discover_sources(settings.docs_dir)
+    docs = []
+    for path in paths:
+        docs.extend(dispatch(str(path.relative_to(settings.docs_dir))))
+    if docs:
+        build_index(docs, settings)
+    return IndexResponse(documents_ingested=len(docs), files_found=len(paths))
