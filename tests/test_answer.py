@@ -200,6 +200,35 @@ def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
     mock_get_llm_client.assert_not_called()
 
 
+def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr(
+        "research_assistant.answer.get_llm_client",
+        lambda config: Mock(generate=Mock(return_value="the answer [1]")),
+    )
+
+    fake_cache = FakeCacheClient()
+    # Prime the cache with a value that would crash a naive json.loads/AnswerResult(**...).
+    key = make_cache_key(
+        "what is x?",
+        5,
+        make_settings().embeddings_backend,
+        make_settings().generator.provider,
+        make_settings().generator.model,
+        make_settings().hybrid_alpha,
+        make_settings().rerank_enabled,
+        make_settings().query_rewrite_enabled,
+        0,
+    )
+    fake_cache.set(key, b"not valid json")
+    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: fake_cache)
+
+    result = answer("What is X?", make_settings(), k=5)
+
+    assert result.text == "the answer [1]"
+
+
 def test_answer_cache_key_changes_when_chunk_count_changes(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)

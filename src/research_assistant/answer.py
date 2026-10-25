@@ -98,7 +98,13 @@ def answer(query: str, settings: Settings, k: int = 5) -> AnswerResult:
 
     cached = cache_get(cache_client, cache_key)
     if cached is not None:
-        return AnswerResult(**json.loads(cached))
+        try:
+            return AnswerResult(**json.loads(cached))
+        except (json.JSONDecodeError, TypeError):
+            # A corrupted value or a schema mismatch from an older cache
+            # entry -- treat it as a miss and recompute, rather than
+            # letting a cache problem break the request.
+            logger.warning("Cached answer value was unusable; recomputing.", exc_info=True)
 
     result = _compute_answer(query, settings, k)
     cache_set(cache_client, cache_key, json.dumps(dataclasses.asdict(result)).encode(), ttl_seconds=ANSWER_CACHE_TTL_SECONDS)
