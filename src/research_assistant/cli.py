@@ -47,8 +47,17 @@ def _ask(args: argparse.Namespace, settings) -> None:
 
 
 def _evaluate(args: argparse.Namespace, settings) -> None:
+    overrides = {}
     if args.embeddings:
-        settings = settings.model_copy(update={"embeddings_backend": args.embeddings})
+        overrides["embeddings_backend"] = args.embeddings
+    if args.hybrid_alpha is not None:
+        overrides["hybrid_alpha"] = args.hybrid_alpha
+    if args.rerank is not None:
+        overrides["rerank_enabled"] = args.rerank == "true"
+    if args.query_rewrite is not None:
+        overrides["query_rewrite_enabled"] = args.query_rewrite == "true"
+    if overrides:
+        settings = settings.model_copy(update=overrides)
 
     for result in run_evaluation(settings, GOLDEN_QUESTIONS_PATH):
         if result.error:
@@ -85,6 +94,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     evaluate_parser = subparsers.add_parser("evaluate", help="Run the golden question set through the LLM judge")
     evaluate_parser.add_argument("--embeddings", choices=["ollama", "huggingface"], default=None)
+    evaluate_parser.add_argument("--hybrid-alpha", type=float, default=None)
+    evaluate_parser.add_argument("--rerank", choices=["true", "false"], default=None)
+    evaluate_parser.add_argument("--query-rewrite", choices=["true", "false"], default=None)
     evaluate_parser.set_defaults(func=_evaluate)
 
     serve_parser = subparsers.add_parser("serve", help="Run the long-running HTTP API server")

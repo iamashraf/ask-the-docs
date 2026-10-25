@@ -91,6 +91,85 @@ def test_evaluate_overrides_embeddings_backend_and_prints_results(capsys, monkey
     assert "Q1" in capsys.readouterr().out
 
 
+def test_evaluate_overrides_hybrid_alpha(monkeypatch):
+    captured_settings = {}
+
+    def fake_run_evaluation(settings, questions_path):
+        captured_settings["alpha"] = settings.hybrid_alpha
+        return []
+
+    monkeypatch.setattr("research_assistant.cli.run_evaluation", fake_run_evaluation)
+
+    parser = build_parser()
+    args = parser.parse_args(["evaluate", "--hybrid-alpha", "0.8"])
+    args.func(args, make_settings())
+
+    assert captured_settings["alpha"] == 0.8
+
+
+def test_evaluate_overrides_rerank_enabled(monkeypatch):
+    captured_settings = {}
+
+    def fake_run_evaluation(settings, questions_path):
+        captured_settings["rerank"] = settings.rerank_enabled
+        return []
+
+    monkeypatch.setattr("research_assistant.cli.run_evaluation", fake_run_evaluation)
+
+    parser = build_parser()
+    args = parser.parse_args(["evaluate", "--rerank", "false"])
+    args.func(args, make_settings())
+
+    assert captured_settings["rerank"] is False
+
+
+def test_evaluate_overrides_query_rewrite_enabled(monkeypatch):
+    captured_settings = {}
+
+    def fake_run_evaluation(settings, questions_path):
+        captured_settings["rewrite"] = settings.query_rewrite_enabled
+        return []
+
+    monkeypatch.setattr("research_assistant.cli.run_evaluation", fake_run_evaluation)
+
+    parser = build_parser()
+    args = parser.parse_args(["evaluate", "--query-rewrite", "false"])
+    args.func(args, make_settings())
+
+    assert captured_settings["rewrite"] is False
+
+
+def test_evaluate_combines_multiple_overrides_in_one_call(monkeypatch):
+    captured_settings = {}
+
+    def fake_run_evaluation(settings, questions_path):
+        captured_settings["backend"] = settings.embeddings_backend
+        captured_settings["alpha"] = settings.hybrid_alpha
+        captured_settings["rerank"] = settings.rerank_enabled
+        captured_settings["rewrite"] = settings.query_rewrite_enabled
+        return []
+
+    monkeypatch.setattr("research_assistant.cli.run_evaluation", fake_run_evaluation)
+
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "evaluate",
+            "--embeddings",
+            "huggingface",
+            "--hybrid-alpha",
+            "0.8",
+            "--rerank",
+            "false",
+            "--query-rewrite",
+            "false",
+        ]
+    )
+    args.func(args, make_settings())
+
+    assert captured_settings == {"backend": "huggingface", "alpha": 0.8, "rerank": False, "rewrite": False}
+
+
 def test_serve_starts_uvicorn(monkeypatch):
     captured = {}
     monkeypatch.setattr(
