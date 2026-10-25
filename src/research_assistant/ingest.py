@@ -100,14 +100,11 @@ def validate_url(url: str) -> str:
     return url
 
 
-def load_pdf(path: Path) -> list[Document]:
+def _extract_pdf_pages(reader, source: str) -> list[Document]:
     """One Document per page; pages with no extractable text (e.g. scanned
-    images) are dropped rather than indexed as empty content."""
-    from pypdf import PdfReader
-
-    reader = PdfReader(str(path))
-    source_doc_id = make_source_doc_id(str(path))
-
+    images) are dropped rather than indexed as empty content. Shared by
+    load_pdf (local file) and load_url (PDF served directly over HTTP)."""
+    source_doc_id = make_source_doc_id(source)
     docs = []
     for i, page in enumerate(reader.pages):
         text = page.extract_text() or ""
@@ -116,10 +113,16 @@ def load_pdf(path: Path) -> list[Document]:
         docs.append(
             Document(
                 page_content=text,
-                metadata={"source": str(path), "source_doc_id": source_doc_id, "page": i + 1},
+                metadata={"source": source, "source_doc_id": source_doc_id, "page": i + 1},
             )
         )
     return docs
+
+
+def load_pdf(path: Path) -> list[Document]:
+    from pypdf import PdfReader
+
+    return _extract_pdf_pages(PdfReader(str(path)), str(path))
 
 
 def load_text(path: Path) -> list[Document]:
@@ -153,10 +156,17 @@ def load_docx(path: Path) -> list[Document]:
 
 
 def load_url(url: str, _redirects_followed: int = 0) -> list[Document]:
-    """Fetches a URL and extracts its visible text. Each redirect hop is
-    re-validated through validate_url (an attacker-controlled redirect
-    target is exactly as dangerous as the original URL)."""
+    """Fetches a URL and extracts its content. PDFs served directly over
+    HTTP (common for whitepapers, often with no .pdf suffix in the URL --
+    e.g. arxiv.org/pdf/<id>) are detected by Content-Type and routed through
+    the same page extraction as load_pdf, rather than decoded as HTML text.
+    Each redirect hop is re-validated through validate_url (an
+    attacker-controlled redirect target is exactly as dangerous as the
+    original URL)."""
+    import io
+
     from bs4 import BeautifulSoup
+    from pypdf import PdfReader
 
     settings = get_settings()
     validate_url(url)
@@ -180,7 +190,12 @@ def load_url(url: str, _redirects_followed: int = 0) -> list[Document]:
             raise UrlSecurityError(f"Response from {url} exceeded {settings.max_url_fetch_size_mb}MB limit")
         chunks.append(chunk)
 
-    html = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+    content = b"".join(chunks)
+    content_type = response.headers.get("Content-Type", "")
+    if "application/pdf" in content_type or url.lower().endswith(".pdf"):
+        return _extract_pdf_pages(PdfReader(io.BytesIO(content)), url)
+
+    html = content.decode(response.encoding or "utf-8", errors="replace")
     soup = BeautifulSoup(html, "html.parser")
     title = soup.title.string.strip() if soup.title and soup.title.string else url
     text = soup.get_text(separator="\n", strip=True)

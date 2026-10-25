@@ -73,6 +73,37 @@ def test_load_url_fetches_and_parses_html(monkeypatch):
     assert docs[0].metadata["title"] == "Hi"
 
 
+def test_load_url_parses_pdf_by_content_type(monkeypatch):
+    """arxiv-style URLs (e.g. https://arxiv.org/pdf/2305.10601) serve a raw PDF
+    with no .pdf suffix in the URL -- Content-Type is the only reliable signal."""
+    _allow_public_host(monkeypatch)
+    _patch_url_settings(monkeypatch)
+
+    class FakePage:
+        def extract_text(self):
+            return "The paper's actual text."
+
+    class FakeReader:
+        def __init__(self, stream):
+            self.pages = [FakePage()]
+
+    monkeypatch.setattr("pypdf.PdfReader", FakeReader)
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda url, timeout, allow_redirects, stream: FakeResponse(
+            b"%PDF-1.4 fake bytes", headers={"Content-Type": "application/pdf"}
+        ),
+    )
+
+    docs = load_url("https://arxiv.org/pdf/2305.10601")
+
+    assert len(docs) == 1
+    assert docs[0].page_content == "The paper's actual text."
+    assert docs[0].metadata["source"] == "https://arxiv.org/pdf/2305.10601"
+    assert docs[0].metadata["page"] == 1
+
+
 def test_load_url_follows_redirect_and_revalidates_target(monkeypatch):
     _allow_public_host(monkeypatch)
     _patch_url_settings(monkeypatch)
