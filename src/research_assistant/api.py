@@ -1,5 +1,6 @@
 """Long-running HTTP API: thin routes over the existing ingest/index/answer/evaluate functions."""
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
@@ -19,10 +20,17 @@ from research_assistant.ingest import (
     dispatch,
 )
 from research_assistant.llm import OllamaUnavailableError
+from research_assistant.seed import seed_if_needed
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    seed_if_needed(get_settings())
+    yield
 
 GOLDEN_QUESTIONS_PATH = Path("evals/golden_questions.yaml")
 
-app = FastAPI(title="research-assistant")
+app = FastAPI(title="research-assistant", lifespan=lifespan)
 
 
 @app.exception_handler(PathSecurityError)

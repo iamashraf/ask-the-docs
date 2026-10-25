@@ -19,6 +19,19 @@ def make_settings() -> Settings:
     )
 
 
+def test_startup_triggers_seeding(monkeypatch):
+    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    captured = {}
+    monkeypatch.setattr(
+        "research_assistant.api.seed_if_needed", lambda settings: captured.setdefault("called", True)
+    )
+
+    with TestClient(app):
+        pass
+
+    assert captured.get("called") is True
+
+
 def test_health_returns_ok():
     client = TestClient(app)
     response = client.get("/health")
