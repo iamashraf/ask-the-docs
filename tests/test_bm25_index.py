@@ -99,6 +99,31 @@ def test_get_bm25_index_skips_rebuild_on_cache_hit(tmp_path, monkeypatch):
     assert calls["count"] == 1
 
 
+def test_get_bm25_index_rebuilds_when_cached_value_is_corrupted(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    calls = {"count": 0}
+
+    def fake_get_all_chunks(s):
+        calls["count"] += 1
+        return FIXTURE_CHUNKS
+
+    class CorruptedCache:
+        def get(self, key):
+            return b"not a valid pickle"
+
+        def set(self, key, value, ex=None):
+            pass
+
+    monkeypatch.setattr("research_assistant.bm25_index.get_all_chunks", fake_get_all_chunks)
+    monkeypatch.setattr("research_assistant.bm25_index.get_chunk_count", lambda s: 3)
+    monkeypatch.setattr("research_assistant.bm25_index.get_cache_client", lambda s: CorruptedCache())
+
+    bm25, chunks = get_bm25_index(settings)
+
+    assert calls["count"] == 1
+    assert chunks == FIXTURE_CHUNKS
+
+
 def test_score_returns_empty_list_for_an_empty_corpus(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     monkeypatch.setattr("research_assistant.bm25_index.get_all_chunks", lambda s: [])
