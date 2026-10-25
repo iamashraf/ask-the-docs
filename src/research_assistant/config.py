@@ -8,10 +8,20 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, SecretStr, model_validator
+from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROVIDERS_REQUIRING_API_KEY = {"anthropic", "openai"}
+
+REFUSAL_MESSAGE = "I don't have enough information in the available documents to answer that."
+
+DEFAULT_SYSTEM_PROMPT_TEMPLATE = (
+    "Answer the user's question using only the context they provide. "
+    "Cite every claim with its [n] marker from the context.\n\n"
+    "If the question is hypothetical, asks you to speculate, or asks about "
+    "something not stated in the context, or if the context does not "
+    f'contain the answer, respond with exactly: "{REFUSAL_MESSAGE}"'
+)
 
 
 class ProviderConfig(BaseModel):
@@ -46,6 +56,13 @@ class Settings(BaseSettings):
     max_file_size_mb: int = 25
     max_url_fetch_size_mb: int = 25
     url_fetch_timeout_seconds: int = 10
+
+    hybrid_alpha: float = Field(default=0.5, ge=0.0, le=1.0)
+    rerank_enabled: bool = True
+    query_rewrite_enabled: bool = True
+    candidate_pool_size: int = Field(default=50, ge=1)
+    system_prompt_template: str = DEFAULT_SYSTEM_PROMPT_TEMPLATE
+    cache_url: str = "redis://localhost:6379/0"
 
     model_config = SettingsConfigDict(env_nested_delimiter="__", extra="ignore")
 
