@@ -4,10 +4,13 @@ project, so this stays a plain module, not a Strategy/Factory pair."""
 
 import hashlib
 import json
+import logging
 
 import redis
 
 from research_assistant.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 def get_cache_client(settings: Settings) -> redis.Redis:
@@ -23,8 +26,18 @@ def make_cache_key(*parts: object) -> str:
 
 
 def cache_get(client, key: str) -> bytes | None:
-    return client.get(key)
+    """Caching is an optimization, not a hard dependency -- same reasoning
+    the pipeline already applies to query rewrite (falls back on failure
+    rather than taking the whole request down with it)."""
+    try:
+        return client.get(key)
+    except redis.RedisError:
+        logger.warning("Cache read failed; treating as a miss.", exc_info=True)
+        return None
 
 
 def cache_set(client, key: str, value: bytes, ttl_seconds: int) -> None:
-    client.set(key, value, ex=ttl_seconds)
+    try:
+        client.set(key, value, ex=ttl_seconds)
+    except redis.RedisError:
+        logger.warning("Cache write failed; continuing without caching this result.", exc_info=True)

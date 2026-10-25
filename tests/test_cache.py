@@ -36,6 +36,22 @@ def test_cache_get_returns_none_on_miss():
     assert cache_get(fake_client, "missing") is None
 
 
+def test_cache_get_returns_none_when_client_raises_redis_error():
+    class BrokenClient:
+        def get(self, key):
+            raise redis.RedisError("connection refused")
+
+    assert cache_get(BrokenClient(), "k") is None
+
+
+def test_cache_set_is_a_noop_when_client_raises_redis_error():
+    class BrokenClient:
+        def set(self, key, value, ex=None):
+            raise redis.RedisError("connection refused")
+
+    cache_set(BrokenClient(), "k", b"v", ttl_seconds=60)  # must not raise
+
+
 def test_cache_set_passes_ttl_seconds_to_client():
     captured = {}
 
