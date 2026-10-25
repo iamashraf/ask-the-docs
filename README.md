@@ -37,14 +37,15 @@ Everything (the app and a local Ollama server) runs through `podman compose`
 
 ```bash
 cp .env.example .env    # defaults point at the "ollama" service name
-podman compose up -d ollama
-podman exec -it $(podman compose ps -q ollama) ollama pull llama3.1:8b
-podman exec -it $(podman compose ps -q ollama) ollama pull nomic-embed-text
-
+podman compose up -d ollama-init   # starts ollama, waits for it to be healthy,
+                                    # pulls llama3.1:8b + nomic-embed-text, then exits
 podman compose run app ingest data/documents/some-paper.pdf
 podman compose run app ask "What does this paper say?"
 podman compose run app evaluate
 ```
+
+The model pull only happens once (the models persist in the `ollama_data`
+volume); re-running `ollama-init` later is a fast no-op.
 
 Set `JUDGE__API_KEY` in `.env` before running `evaluate` (the judge defaults
 to Anthropic, which needs a real key; the generator defaults to the local
