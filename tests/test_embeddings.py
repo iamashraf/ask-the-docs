@@ -3,7 +3,12 @@ from types import SimpleNamespace
 import requests
 
 from research_assistant.config import ProviderConfig, Settings
-from research_assistant.embeddings import HuggingFaceEmbeddings, OllamaEmbeddings, get_embeddings
+from research_assistant.embeddings import (
+    HuggingFaceEmbeddings,
+    OllamaEmbeddings,
+    _get_embeddings_cached,
+    get_embeddings,
+)
 
 
 def make_settings(embeddings_backend: str) -> Settings:
@@ -21,6 +26,24 @@ def test_get_embeddings_returns_ollama_backend():
 def test_get_embeddings_returns_huggingface_backend(monkeypatch):
     monkeypatch.setattr("research_assistant.embeddings.SentenceTransformer", lambda model_name: object())
     assert isinstance(get_embeddings(make_settings("huggingface")), HuggingFaceEmbeddings)
+
+
+def test_get_embeddings_loads_huggingface_model_only_once(monkeypatch):
+    load_count = {"count": 0}
+
+    class CountingModel:
+        def __init__(self, model_name):
+            load_count["count"] += 1
+
+    monkeypatch.setattr("research_assistant.embeddings.SentenceTransformer", CountingModel)
+    _get_embeddings_cached.cache_clear()
+    settings = make_settings("huggingface")
+
+    a = get_embeddings(settings)
+    b = get_embeddings(settings)
+
+    assert a is b
+    assert load_count["count"] == 1
 
 
 def test_ollama_embeddings_embed_query_calls_api(monkeypatch):
