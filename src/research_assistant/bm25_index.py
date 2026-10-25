@@ -35,7 +35,13 @@ def get_bm25_index(settings: Settings) -> tuple[BM25Okapi, list[Document]]:
     # this service itself, never by an untrusted party.
     cached = cache_get(client, key)
     if cached is not None:
-        return pickle.loads(cached)
+        try:
+            return pickle.loads(cached)
+        except (pickle.UnpicklingError, EOFError, AttributeError):
+            # A corrupted entry, or one from an incompatible rank_bm25
+            # version -- treat it as a miss and rebuild, same as the
+            # answer cache's corruption handling.
+            pass
 
     chunks = get_all_chunks(settings)
     # BM25Okapi divides by corpus size internally -- an empty corpus (nothing
