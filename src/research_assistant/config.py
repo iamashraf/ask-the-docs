@@ -1,4 +1,4 @@
-"""Application configuration, loaded once from the environment/.env file."""
+"""Application configuration, loaded once from the environment/.env.local file."""
 
 from functools import lru_cache
 from pathlib import Path
@@ -44,11 +44,11 @@ class Settings(BaseSettings):
     url_fetch_timeout_seconds: int = 10
 
     model_config = SettingsConfigDict(
-        env_file=".env", env_nested_delimiter="__", extra="ignore"
+        env_file=".env.local", env_nested_delimiter="__", extra="ignore"
     )
 
 
 @lru_cache
 def get_settings() -> Settings:
-    """Cached so env/.env is parsed once per process, not on every call."""
+    """Cached so env/.env.local is parsed once per process, not on every call."""
     return Settings()

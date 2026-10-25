@@ -5,6 +5,13 @@ from pydantic import ValidationError
 
 from research_assistant.config import ProviderConfig, Settings
 
+ENV_LOCAL_CONTENTS = (
+    "GENERATOR__PROVIDER=ollama\n"
+    "GENERATOR__MODEL=llama3.1:8b\n"
+    "JUDGE__PROVIDER=ollama\n"
+    "JUDGE__MODEL=llama3.1:70b\n"
+)
+
 
 def test_settings_defaults():
     settings = Settings(
@@ -65,3 +72,15 @@ def test_settings_loads_nested_fields_from_env_vars(monkeypatch):
     assert settings.judge.provider == "anthropic"
     assert settings.judge.api_key.get_secret_value() == "sk-test"
     assert settings.embeddings_backend == "huggingface"
+
+
+def test_settings_loads_from_env_local_file(tmp_path):
+    """Settings is configured via .env.local (never .env -- that name is
+    reserved for a file we never want to accidentally commit)."""
+    env_path = tmp_path / ".env.local"
+    env_path.write_text(ENV_LOCAL_CONTENTS)
+
+    settings = Settings(_env_file=str(env_path))
+
+    assert settings.generator.provider == "ollama"
+    assert settings.generator.model == "llama3.1:8b"

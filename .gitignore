@@ -11,6 +11,7 @@ wheels/
 
 # Secrets and local data
 .env
+.env.local
 data/index/*
 !data/index/.gitkeep
 data/documents/*

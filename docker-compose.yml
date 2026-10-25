@@ -32,7 +32,7 @@ services:
       - ./data:/app/data
       - ./evals:/app/evals
     env_file:
-      - .env
+      - .env.local
 
 volumes:
   ollama_data:

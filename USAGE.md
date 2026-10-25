@@ -13,10 +13,13 @@ and `CLAUDE.md` for architecture.
 ## 0. One-time setup
 
 ```bash
-cp .env.example .env
+cp .env.example .env.local
 ```
 
-Edit `.env`: set `JUDGE__API_KEY` if you'll run `evaluate`. The other
+`.env.example` is reference only (committed); `.env.local` is what's
+actually loaded, and is never committed (listed in `.gitignore`).
+
+Edit `.env.local`: set `JUDGE__API_KEY` if you'll run `evaluate`. The other
 defaults (`GENERATOR__*`, `OLLAMA_BASE_URL`, etc.) already point at the
 `ollama` service name, which is correct for the containerized setup.
 
@@ -105,7 +108,7 @@ isn't parseable JSON is recorded as `ERROR` for that question; the run
 continues rather than aborting.
 
 `--embeddings huggingface` temporarily overrides the embeddings backend for
-just this run (without touching your `.env`), so you can compare backends:
+just this run (without touching your `.env.local`), so you can compare backends:
 
 ```bash
 podman compose run app evaluate --embeddings ollama
@@ -164,13 +167,13 @@ what actually proves the end-to-end pipeline works against a real model.
 ## Troubleshooting
 
 - **Connection error reaching Ollama**: check `podman compose ps` shows
-  `ollama` healthy; confirm `.env`'s `*_BASE_URL` values say `ollama`, not
+  `ollama` healthy; confirm `.env.local`'s `*_BASE_URL` values say `ollama`, not
   `localhost` (inside a container, `localhost` means that container
   itself).
 - **Permission denied writing to `data/`**: the app runs as a non-root
   user (uid 1000) inside the container; `chmod -R a+rwX data/` on the host,
   or run Podman with `--userns=keep-id`.
-- **`evaluate` always errors**: check `JUDGE__API_KEY` is set in `.env` and
+- **`evaluate` always errors**: check `JUDGE__API_KEY` is set in `.env.local` and
   is a valid key for whichever `JUDGE__PROVIDER` you've configured.
 - **`UrlSecurityError` on a real public URL**: check the host actually
   resolves publicly (`dig <host>`) — this should only trigger for
