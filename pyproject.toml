@@ -23,10 +23,22 @@ dependencies = [
     "requests>=2.34.2",
     "sentence-transformers>=6.2.0",
     "tiktoken>=0.14.0",
+    "torch>=2.14.1",
 ]
 
 [project.scripts]
 research-assistant = "research_assistant.cli:main"
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+# Plain PyPI `torch` on Linux bundles full CUDA runtime libraries (multi-GB)
+# even though we only ever do CPU inference here. macOS has no CUDA wheel at
+# all, so it already gets the lean build from the default index.
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]
