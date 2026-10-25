@@ -50,6 +50,41 @@ longer than later starts (15 documents to fetch, chunk, and embed); a
 marker file in `data/index/` means it only happens once per fresh index,
 not on every restart. Edit `seed_sources.yaml` to change what gets seeded.
 
+What's seeded (see `seed_sources.yaml` for the source URLs):
+
+| Topic | Paper |
+|---|---|
+| Core architecture | Attention Is All You Need |
+| Core architecture | Language Models are Few-Shot Learners (GPT-3) |
+| RAG | Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks |
+| Alignment | Training LMs to Follow Instructions with Human Feedback (InstructGPT/RLHF) |
+| Alignment | LoRA: Low-Rank Adaptation of Large Language Models |
+| Reasoning/prompting | Chain-of-Thought Prompting Elicits Reasoning in LLMs |
+| Reasoning/prompting | Self-Consistency Improves Chain of Thought Reasoning |
+| Reasoning/prompting | ReAct: Synergizing Reasoning and Acting in Language Models |
+| Reasoning/prompting | Tree of Thoughts |
+| Reasoning/prompting | Chain-of-Table |
+| Reasoning/prompting | Everything of Thoughts |
+| Reasoning/prompting | Quantifying LLM Sensitivity to Spurious Features in Prompt Design |
+| LLM behavior | What is In-Context Learning (blog) |
+| LLM behavior | Dissociating Language and Thought in LLMs |
+| Applications | LLMs as Data Preprocessors |
+
+Once seeding finishes, query any of those papers right away — no manual
+`ingest` needed:
+
+```bash
+curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" \
+  -d '{"query": "What is Tree of Thoughts and how does it differ from chain-of-thought prompting?"}'
+```
+
+```json
+{
+  "answer": "Tree of Thoughts (ToT) generalizes chain-of-thought prompting by letting the model explore multiple reasoning paths...",
+  "citations": ["https://arxiv.org/pdf/2305.10601"]
+}
+```
+
 ## Two interfaces, one pipeline
 
 Every operation below has two equivalent forms, both calling the exact

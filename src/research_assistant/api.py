@@ -1,5 +1,6 @@
 """Long-running HTTP API: thin routes over the existing ingest/index/answer/evaluate functions."""
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
@@ -21,6 +22,16 @@ from research_assistant.ingest import (
 )
 from research_assistant.llm import OllamaUnavailableError
 from research_assistant.seed import seed_if_needed
+
+# uvicorn only configures its own loggers (uvicorn, uvicorn.access), never
+# arbitrary app loggers -- without this, seed.py's INFO-level progress logs
+# are silently dropped by the default root logger (WARNING threshold).
+_package_logger = logging.getLogger("research_assistant")
+if not _package_logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+    _package_logger.addHandler(_handler)
+_package_logger.setLevel(logging.INFO)
 
 
 @asynccontextmanager
