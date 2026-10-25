@@ -20,10 +20,14 @@ class OllamaUnavailableError(RuntimeError):
 
 
 class LLMClient(Protocol):
+    """Interface every provider-specific client below implements."""
+
     def generate(self, prompt: str) -> str: ...
 
 
 class OllamaLLMClient:
+    """Talks to a local Ollama server over HTTP."""
+
     def __init__(self, model: str, base_url: str):
         self.model = model
         self.base_url = base_url
@@ -50,6 +54,8 @@ class OllamaLLMClient:
 
 
 class AnthropicLLMClient:
+    """Wraps the Anthropic SDK."""
+
     def __init__(self, model: str, api_key: str):
         self.model = model
         self._client = Anthropic(api_key=api_key)
@@ -64,6 +70,8 @@ class AnthropicLLMClient:
 
 
 class OpenAILLMClient:
+    """Wraps the OpenAI SDK."""
+
     def __init__(self, model: str, api_key: str):
         self.model = model
         self._client = OpenAI(api_key=api_key)
@@ -77,6 +85,7 @@ class OpenAILLMClient:
 
 
 def get_llm_client(config: ProviderConfig) -> LLMClient:
+    """Factory: builds the client matching config.provider."""
     if config.provider == "ollama":
         return OllamaLLMClient(model=config.model, base_url=config.base_url or "http://localhost:11434")
     if config.provider == "anthropic":

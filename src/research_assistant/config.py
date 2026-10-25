@@ -11,6 +11,8 @@ PROVIDERS_REQUIRING_API_KEY = {"anthropic", "openai"}
 
 
 class ProviderConfig(BaseModel):
+    """Connection details for one LLM role: which provider/model, and its credentials."""
+
     provider: Literal["ollama", "anthropic", "openai"]
     model: str
     api_key: SecretStr | None = None
@@ -18,12 +20,15 @@ class ProviderConfig(BaseModel):
 
     @model_validator(mode="after")
     def check_api_key_present_for_hosted_providers(self) -> "ProviderConfig":
+        """Hosted providers need a key; ollama is local and doesn't."""
         if self.provider in PROVIDERS_REQUIRING_API_KEY and self.api_key is None:
             raise ValueError(f"provider {self.provider!r} requires an api_key")
         return self
 
 
 class Settings(BaseSettings):
+    """App-wide config. `generator` and `judge` are independently-configured LLM roles."""
+
     generator: ProviderConfig
     judge: ProviderConfig
 
@@ -41,4 +46,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    """Cached so env/.env is parsed once per process, not on every call."""
     return Settings()
