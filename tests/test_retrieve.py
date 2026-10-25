@@ -135,6 +135,63 @@ def test_hybrid_merge_handles_all_equal_scores_without_dividing_by_zero():
     assert len(merged) == 2
 
 
+def test_retrieve_truncates_merged_candidates_to_pool_size_before_rerank(tmp_path, monkeypatch):
+    # 3 vector-only docs + 3 disjoint bm25-only docs = 6 merged candidates,
+    # with candidate_pool_size=2 only the top 2 should reach the reranker.
+    vector_docs = [_doc(f"v{i}") for i in range(3)]
+    bm25_docs = [_doc(f"b{i}") for i in range(3)]
+
+    class FakeIndex:
+        def similarity_search_with_score(self, query, k):
+            return [(doc, 0.1 * (i + 1)) for i, doc in enumerate(vector_docs)]
+
+    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr(
+        "research_assistant.retrieve.bm25_score",
+        lambda query, settings: [(doc, 1.0) for doc in bm25_docs],
+    )
+
+    captured = {}
+
+    class CapturingReranker:
+        def rerank(self, query, candidates, k):
+            captured["candidates"] = candidates
+            return candidates[:k]
+
+    monkeypatch.setattr("research_assistant.retrieve.get_reranker", lambda model_name: CapturingReranker())
+
+    settings = make_settings(tmp_path).model_copy(update={"rerank_enabled": True, "candidate_pool_size": 2})
+    retrieve("anything", settings, k=2)
+
+    assert len(captured["candidates"]) == 2
+
+
+def test_retrieve_excludes_zero_score_bm25_hits_from_merge(tmp_path, monkeypatch):
+    # Simulates an out-of-vocabulary query: BM25 finds no real keyword
+    # match for any chunk, so every chunk ties at score 0.0. Those must be
+    # excluded, not treated as "all equal -> normalize to 1.0" and tie the
+    # best vector match, crowding out real vector hits (rerank_enabled is
+    # False here -- that's exactly the comparison toggle this would bite).
+    doc_v1, doc_v2 = _doc("v1"), _doc("v2")
+    noise1, noise2, noise3 = _doc("n1"), _doc("n2"), _doc("n3")
+
+    class FakeIndex:
+        def similarity_search_with_score(self, query, k):
+            return [(doc_v1, 0.1), (doc_v2, 0.2)]
+
+    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr(
+        "research_assistant.retrieve.bm25_score",
+        lambda query, settings: [(noise1, 0.0), (noise2, 0.0), (noise3, 0.0)],
+    )
+
+    settings = make_settings(tmp_path)
+    results = retrieve("out of vocabulary gibberish", settings, k=5)
+
+    result_ids = {d.metadata["source_doc_id"] for d in results}
+    assert result_ids == {"v1", "v2"}
+
+
 def test_retrieve_falls_back_to_raw_query_when_rewrite_fails(tmp_path, monkeypatch):
     monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
     monkeypatch.setattr("research_assistant.bm25_index.get_cache_client", lambda settings: FakeCache())
