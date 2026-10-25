@@ -8,6 +8,8 @@ from research_assistant.index import (
     CHUNK_SIZE,
     build_index,
     chunk_documents,
+    get_all_chunks,
+    get_chunk_count,
     get_collection_name,
     load_index,
 )
@@ -88,3 +90,30 @@ def test_build_index_then_load_index_round_trips(tmp_path, monkeypatch):
 
     assert len(results) == 1
     assert "Attention is all you need" in results[0].page_content
+
+
+def test_get_all_chunks_returns_every_indexed_chunk(tmp_path, monkeypatch):
+    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    docs = [
+        Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"}),
+        Document(page_content="word " * 400, metadata={"source": "b.pdf", "source_doc_id": "docB"}),
+    ]
+    build_index(docs, settings)
+
+    chunks = get_all_chunks(settings)
+
+    assert len(chunks) == get_chunk_count(settings)
+    assert {c.metadata["source"] for c in chunks} == {"a.pdf", "b.pdf"}
+    assert all(c.page_content for c in chunks)
+
+
+def test_get_chunk_count_matches_number_of_chunks_built(tmp_path, monkeypatch):
+    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    doc = Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    expected = len(chunk_documents([doc], embedding_model="m"))
+    build_index([doc], settings)
+
+    assert get_chunk_count(settings) == expected

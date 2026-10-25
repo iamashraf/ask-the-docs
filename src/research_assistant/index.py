@@ -65,3 +65,19 @@ def load_index(settings: Settings) -> Chroma:
         embedding_function=get_embeddings(settings),
         persist_directory=str(settings.index_dir),
     )
+
+
+def get_all_chunks(settings: Settings) -> list[Document]:
+    """Full chunk fetch -- used to (re)build the BM25 index, not on every
+    query. See get_chunk_count for the cheap per-query staleness check."""
+    result = load_index(settings).get(include=["metadatas", "documents"])
+    return [
+        Document(page_content=content, metadata=metadata)
+        for content, metadata in zip(result["documents"], result["metadatas"])
+    ]
+
+
+def get_chunk_count(settings: Settings) -> int:
+    """Cheap collection size, used as the cache-staleness signal -- avoids
+    fetching every chunk's content just to check if anything changed."""
+    return load_index(settings)._collection.count()
