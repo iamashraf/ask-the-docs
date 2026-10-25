@@ -38,14 +38,21 @@ build).
 ## Two interfaces, one pipeline
 
 Every operation below has two equivalent forms, both calling the exact
-same underlying code and the exact same persisted `data/index/`:
+same underlying code and the exact same persisted `data/index/`. Pick
+whichever fits; nothing about the pipeline itself differs.
 
-- **CLI** (`podman compose run app <subcommand>`) — a fresh container per
-  command. Simple for one-off use.
-- **HTTP API** (`podman compose up -d app`, then `curl`) — one long-running
-  container answering many requests. What a chatbot/UI would use.
+- **CLI** — `podman compose run app <subcommand>`. A fresh container per
+  command, nothing else needs to be running first. Simple for one-off use.
+- **HTTP API** — one long-running container answering many `curl`
+  requests (what a chatbot/UI would use). **Start it once, before any of
+  the `curl` examples below:**
 
-Pick whichever fits; nothing about the pipeline itself differs.
+  ```bash
+  podman compose up -d app
+  ```
+
+  Every `curl .../v1/...` example in this guide assumes that's already
+  running.
 
 ## Ingest — load a document into the index
 
