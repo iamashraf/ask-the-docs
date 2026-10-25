@@ -18,3 +18,6 @@ data/index/*
 !data/index/.gitkeep
 data/documents/*
 !data/documents/.gitkeep
+
+# superpowers execution scratch (ledgers/briefs, not project artifacts)
+.superpowers/
