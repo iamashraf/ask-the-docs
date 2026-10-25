@@ -100,6 +100,17 @@ def test_hybrid_merge_keeps_vector_only_and_bm25_only_matches():
     assert ids == {"a", "b", "c"}
 
 
+def test_hybrid_merge_scores_a_vector_only_match_with_zero_bm25():
+    doc_a = _doc("a")
+    # doc_a is the only candidate on the vector side; with one candidate,
+    # min==max so its normalized vector score is 1.0 (the "all-equal" rule).
+    # The missing BM25 side must contribute exactly 0.0, not get dropped
+    # and not get treated as if it tied for best.
+    merged = hybrid_merge([(doc_a, 0.9)], [], alpha=0.5)
+
+    assert merged == [(doc_a, 0.5)]
+
+
 def test_hybrid_merge_normalizes_each_side_independently():
     doc_a, doc_b = _doc("a"), _doc("b")
     # Vector side spans [0, 10]; BM25 side spans [0, 100] -- wildly different
