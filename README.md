@@ -7,12 +7,12 @@ answers and a configurable LLM (Claude by default) as judge.
 ## Setup
 
 ```bash
-uv sync                 # creates .venv and installs locked dependencies
-cp .env.example .env    # then add your API key
+uv sync                       # creates .venv and installs locked dependencies
+cp .env.example .env.local    # then add your API key -- .env.local is never committed
 ```
 
 Run the CLI directly on your host (requires Ollama running locally, and
-`.env`'s base URLs set to `http://localhost:11434` rather than `ollama`):
+`.env.local`'s base URLs set to `http://localhost:11434` rather than `ollama`):
 
 ```bash
 uv run research-assistant ingest data/documents/some-paper.pdf
@@ -36,7 +36,7 @@ Everything (the app and a local Ollama server) runs through `podman compose`
 (the same `docker-compose.yml` works with `docker compose` too):
 
 ```bash
-cp .env.example .env    # defaults point at the "ollama" service name
+cp .env.example .env.local    # defaults point at the "ollama" service name
 podman compose up -d ollama-init   # starts ollama, waits for it to be healthy,
                                     # pulls llama3.1:8b + nomic-embed-text, then exits
 podman compose run app ingest data/documents/some-paper.pdf
@@ -47,7 +47,7 @@ podman compose run app evaluate
 The model pull only happens once (the models persist in the `ollama_data`
 volume); re-running `ollama-init` later is a fast no-op.
 
-Set `JUDGE__API_KEY` in `.env` before running `evaluate` (the judge defaults
+Set `JUDGE__API_KEY` in `.env.local` before running `evaluate` (the judge defaults
 to Anthropic, which needs a real key; the generator defaults to the local
 Ollama model, which needs none).
 
