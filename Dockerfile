@@ -1,7 +1,9 @@
+# syntax=docker/dockerfile:1
+
 # Build stage: installs dependencies and the app into a virtualenv.
 # Kept separate from the final stage so pip/uv and any build tools never
 # ship in the runtime image.
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -21,7 +23,7 @@ COPY src ./src
 RUN uv sync --frozen --no-dev
 
 # Final stage: just the built virtualenv and app code, no build tools, no root.
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 RUN useradd --create-home --uid 1000 appuser
 
