@@ -95,7 +95,9 @@ def test_serve_starts_uvicorn(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         "research_assistant.cli.uvicorn.run",
-        lambda app, host, port: captured.update(app=app, host=host, port=port),
+        lambda app, host, port, log_level: captured.update(
+            app=app, host=host, port=port, log_level=log_level
+        ),
     )
 
     parser = build_parser()
