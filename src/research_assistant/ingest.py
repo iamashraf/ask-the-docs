@@ -11,6 +11,8 @@ import socket
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from langchain_core.documents import Document
+
 from research_assistant.config import get_settings
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
@@ -94,3 +96,39 @@ def validate_url(url: str) -> str:
         raise UrlSecurityError(f"URL host resolves to a disallowed address: {parts.hostname}")
 
     return url
+
+
+def load_pdf(path: Path) -> list[Document]:
+    """One Document per page; pages with no extractable text (e.g. scanned
+    images) are dropped rather than indexed as empty content."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(path))
+    source_doc_id = make_source_doc_id(str(path))
+
+    docs = []
+    for i, page in enumerate(reader.pages):
+        text = page.extract_text() or ""
+        if not text.strip():
+            continue
+        docs.append(
+            Document(
+                page_content=text,
+                metadata={"source": str(path), "source_doc_id": source_doc_id, "page": i + 1},
+            )
+        )
+    return docs
+
+
+def load_text(path: Path) -> list[Document]:
+    """Loads a .txt/.md file as a single Document; empty/whitespace-only
+    files produce no Document."""
+    text = path.read_text(encoding="utf-8")
+    if not text.strip():
+        return []
+    return [
+        Document(
+            page_content=text,
+            metadata={"source": str(path), "source_doc_id": make_source_doc_id(str(path))},
+        )
+    ]
