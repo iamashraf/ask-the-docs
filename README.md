@@ -1,71 +1,60 @@
 # research-assistant
 
-A local-first RAG research assistant over configurable document sources
-(PDF/DOCX/TXT/MD files, or URLs), using a local Ollama model to generate
-answers and a configurable LLM (Claude by default) as judge.
+A local-first RAG (Retrieval-Augmented Generation) research assistant.
+Point it at PDFs, Word docs, markdown/text files, or URLs, then ask
+questions grounded in that content with cited sources — no data leaves
+your machine except the LLM calls you explicitly configure.
 
-## Dev setup (for tests/tooling only -- the app itself always runs via containers)
+**Key features**
 
-```bash
-uv sync    # creates .venv and installs locked dependencies, for pytest/ruff/IDE support
-```
+- **Local generation by default** — Ollama runs the language model; no
+  API key required for the core pipeline.
+- **Pluggable everywhere** — swap the generator, the judge, and the
+  embeddings backend independently via config, without touching code.
+- **Configurable LLM-as-judge evaluation** — score answer quality on
+  accuracy, relevance, and completeness using a separately-configured
+  model (e.g. Claude).
+- **Two interfaces, same logic** — a one-shot CLI and a long-running HTTP
+  API, both calling identical underlying code.
+- **Containerized** — `podman compose` (or `docker compose`) runs the
+  whole stack; nothing to install beyond that.
+- **Security-hardened ingestion** — path-traversal and SSRF guards on
+  every local file and URL before anything is read.
 
-```bash
-uv run pytest             # whole suite
-uv run pytest -v          # verbose, one line per test
-uv run pytest tests/test_config.py -v   # a single module's tests
-```
+> Currently implements vector RAG (chunk → embed → retrieve → generate).
+> Hybrid search and Graph RAG are planned as separate future additions.
 
-The test suite needs no `.env.local` or real API keys -- every test mocks
-the network/SDK boundary.
-
-## Running the app
-
-Everything (the app and a local Ollama server) runs through `podman compose`
-(the same `docker-compose.yml` works with `docker compose` too):
-
-```bash
-cp .env.example .env.local    # .env.example is reference only (committed);
-                               # .env.local is what's actually loaded, never committed
-podman compose up -d ollama-init   # starts ollama, waits for it to be healthy,
-                                    # pulls llama3.1:8b + nomic-embed-text, then exits
-```
-
-Two ways to use it from here, both calling the exact same underlying code:
-
-**One-shot CLI** (a fresh container per command):
+## Quickstart
 
 ```bash
-podman compose run app ingest data/documents/some-paper.pdf
-podman compose run app ask "What does this paper say?"
-podman compose run app evaluate
+git clone <this-repo> && cd research-assistant
+cp .env.example .env.local        # reference copy -> your local config
+podman compose up -d ollama-init  # starts Ollama, pulls the models (first run only)
+podman compose build app && podman image prune -f
+
+podman compose run app ingest https://arxiv.org/pdf/2305.10601
+podman compose run app ask "What is Tree of Thoughts?"
 ```
 
-**Long-running HTTP API** (one container, many requests -- what a chatbot/UI would use):
+That's the minimum path to a working answer. For every command, the HTTP
+API equivalent, evaluation, bulk re-indexing, and troubleshooting, see
+**[USAGE.md](USAGE.md)**.
+
+## Development
 
 ```bash
-podman compose up -d app
-curl -X POST localhost:8000/v1/ingest -H "Content-Type: application/json" -d '{"source": "data/documents/some-paper.pdf"}'
-curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" -d '{"query": "What does this paper say?"}'
-curl -X POST localhost:8000/v1/evaluate -H "Content-Type: application/json" -d '{}'
+uv sync          # installs locked dependencies for tests/tooling
+uv run pytest    # runs the full test suite (no containers or API keys needed)
 ```
 
-The model pull only happens once (the models persist in the `ollama_data`
-volume); re-running `ollama-init` later is a fast no-op.
-
-Set `JUDGE__API_KEY` in `.env.local` before running `evaluate` (the judge defaults
-to Anthropic, which needs a real key; the generator defaults to the local
-Ollama model, which needs none).
-
-Running `research-assistant index` with no arguments re-indexes everything
-already under `data/documents/` -- note this has no dedup yet, so running it
-twice on unchanged files duplicates their chunks (the document-update/delete
-workflow is intentionally out of scope for this sub-project).
+See **[CLAUDE.md](CLAUDE.md)** for architecture and contribution
+conventions.
 
 ## Layout
 
-- `src/research_assistant/` package: config, ingest, index, retrieve, answer, evaluate, cli
-- `data/documents/` input documents: pdf/docx/txt/md (git-ignored)
-- `data/index/` persisted vector store (git-ignored)
-- `evals/` golden question set for evaluation
-- `tests/` unit tests
+- `src/research_assistant/` — package: `config`, `llm`, `embeddings`,
+  `ingest`, `index`, `retrieve`, `answer`, `evaluate`, `cli`, `api`
+- `data/documents/` — input documents (git-ignored)
+- `data/index/` — persisted vector store (git-ignored)
+- `evals/` — golden question set for evaluation
+- `tests/` — unit tests

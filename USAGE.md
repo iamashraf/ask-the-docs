@@ -1,177 +1,155 @@
 # Usage Guide
 
-How to run the pipeline end to end, what each command actually does under
-the hood, and how to verify it's working. See `README.md` for install/setup
-and `CLAUDE.md` for architecture.
+Full command reference: what each operation does internally, how to run
+it from the CLI or the HTTP API, and how to verify it's working. See
+[README.md](README.md) for the quickstart and [CLAUDE.md](CLAUDE.md) for
+architecture.
 
 ## Prerequisites
 
 - Podman (or Docker) with `compose` support.
 - An Anthropic API key, only if you plan to run `evaluate` (the judge
-  defaults to Claude).
+  defaults to Claude; the generator defaults to local Ollama, which needs
+  no key).
 
-## 0. One-time setup
+## Setup (one-time)
 
 ```bash
 cp .env.example .env.local
 ```
 
-`.env.example` is reference only (committed); `.env.local` is what's
-actually loaded, and is never committed (listed in `.gitignore`).
-
-Edit `.env.local`: set `JUDGE__API_KEY` if you'll run `evaluate`. The other
-defaults (`GENERATOR__*`, `OLLAMA_BASE_URL`, etc.) already point at the
-`ollama` service name, which is correct for the containerized setup.
+`.env.example` is a committed reference file; `.env.local` is what's
+actually loaded (git-ignored — never commit it). Edit `.env.local` to set
+`JUDGE__API_KEY` if you'll run `evaluate`; the other defaults already
+point at the right service names for the containerized setup.
 
 ```bash
-podman compose up -d ollama-init   # starts ollama, waits until healthy,
-                                     # pulls llama3.1:8b + nomic-embed-text, exits
+podman compose up -d ollama-init   # starts Ollama, waits until healthy,
+                                    # pulls llama3.1:8b + nomic-embed-text
 podman compose build app && podman image prune -f
 ```
 
-`ollama-init` only downloads models once — the pulled weights persist in
-the `ollama_data` volume, so re-running this later is a fast no-op.
+Model pulls and the image build each only need to happen once — re-running
+them later is a fast no-op (`ollama pull` skips already-present models;
+`podman image prune -f` reclaims the disk space the multi-stage build's
+intermediate layer leaves behind, at the cost of a slightly slower next
+build).
 
-The `&& podman image prune -f` matters: every multi-stage build leaves the
-intermediate `builder` stage behind as an untagged (`<none>:<none>`) image
-in the local store — it's never run, just build cache, but it does take up
-real disk space (often bigger than the final image itself, since it still
-has `pip`/`uv` in it and hasn't been flattened by the final `COPY`).
-Pruning after each build reclaims that; the tradeoff is the next build
-can't reuse that cached layer, so it'll be a little slower, not faster.
+## Two interfaces, one pipeline
 
-## 1. `ingest <source>` — load a document into the index
+Every operation below has two equivalent forms, both calling the exact
+same underlying code and the exact same persisted `data/index/`:
+
+- **CLI** (`podman compose run app <subcommand>`) — a fresh container per
+  command. Simple for one-off use.
+- **HTTP API** (`podman compose up -d app`, then `curl`) — one long-running
+  container answering many requests. What a chatbot/UI would use.
+
+Pick whichever fits; nothing about the pipeline itself differs.
+
+## Ingest — load a document into the index
 
 ```bash
+# CLI
 podman compose run app ingest https://arxiv.org/pdf/2305.10601
-# or a local file already under data/documents/:
 podman compose run app ingest data/documents/some-paper.pdf
-```
 
-What happens, in order:
-
-1. **`dispatch(source)`** (`ingest.py`) looks at the source string. A URL
-   scheme (`http`/`https`) routes to `load_url`; anything else is treated
-   as a local path and routes to `load_path` after `validate_local_path`
-   checks it doesn't escape `docs_dir`, has an allowed extension, and is
-   under the size limit.
-2. For a URL, **`validate_url`** resolves the hostname and rejects it if it
-   points at a private/loopback/internal address (SSRF guard) — this runs
-   again on every redirect hop, not just the original URL.
-3. The matching **loader** (`load_pdf`, `load_text`, `load_docx`, or
-   `load_url`) turns the raw content into one or more LangChain `Document`
-   objects, each tagged with `source` and `source_doc_id`. A PDF produces
-   one `Document` per page (pages with no extractable text, e.g. scanned
-   images, are dropped). `load_url` detects a PDF response by
-   `Content-Type` even when the URL itself has no `.pdf` suffix (true for
-   arXiv's URLs) and routes through the same page-extraction logic.
-4. **`build_index(docs, settings)`** (`index.py`) chunks each document
-   (`RecursiveCharacterTextSplitter`, 512 chars / 50 overlap) and tags
-   every chunk with `chunk_index`, `total_chunks`, `embedding_model`, and
-   `ingested_at`. Each chunk is embedded (via whichever backend
-   `EMBEDDINGS_BACKEND` selects) and written into a Chroma collection named
-   for that backend (`chunks_ollama` or `chunks_huggingface`) — this keeps
-   the two backends' vectors from ever mixing.
-
-Output: `Ingested N document(s) from 1 source(s).` — `N` is the number of
-page/section `Document`s produced *before* chunking (e.g. a 10-page PDF
-with real text on every page → `N=10`), not the chunk count.
-
-## 2. `ask "<question>"` — query the index
-
-```bash
-podman compose run app ask "What is Tree of Thoughts and how does it differ from chain-of-thought prompting?"
+# API
+curl -X POST localhost:8000/v1/ingest -H "Content-Type: application/json" \
+  -d '{"source": "https://arxiv.org/pdf/2305.10601"}'
 ```
 
 What happens:
 
-1. **`retrieve(query, settings, k=5)`** embeds the query with the *same*
-   embedding backend/model used at index time, and runs a similarity
-   search against the active collection, returning the top-k chunks.
-   (If nothing has been indexed yet, this returns `[]`, not an error.)
-2. If no chunks came back, **`answer()`** short-circuits to `"no relevant
-   context found"` and never calls the LLM — this is deliberate: an
-   empty-context prompt sent to an LLM risks a confident-sounding
-   hallucination instead of an honest "I don't know."
-3. Otherwise, **`format_context`** numbers the chunks `[1]`, `[2]`, ... with
-   their source, **`build_prompt`** wraps that with an instruction to
-   answer only from the given context and cite with those markers, and the
-   **generator** `LLMClient` (Ollama by default) produces the answer text.
-4. Citations printed under `Sources:` come straight from the same chunks'
-   `source` metadata (deduplicated to unique sources, preserving order) —
-   so what the model was told to cite and what gets reported can't drift
-   apart.
+1. The source string is routed by scheme: a URL goes through the SSRF
+   guard (hostname resolved and rejected if it points at a
+   private/loopback/internal address — re-checked on every redirect hop);
+   a local path is checked against path-traversal, extension, and size
+   limits.
+2. The matching loader turns the content into one or more chunks of text,
+   each tagged with its source. A PDF produces one unit per page (pages
+   with no extractable text, e.g. scanned images, are dropped); a PDF
+   served directly over HTTP is detected by `Content-Type`, not just
+   URL suffix (arXiv's URLs have none).
+3. Each unit is split into ~512-character chunks with overlap, embedded
+   with the configured backend, and written into a vector collection
+   named for that backend — so switching embedding backends never mixes
+   incompatible vectors.
 
-## 3. `evaluate [--embeddings ollama|huggingface]` — score answer quality
+CLI output: `Ingested N document(s) from 1 source(s).` — `N` is the number
+of page/section units *before* chunking (a 10-page PDF with text on every
+page → `N=10`), not the chunk count. The API returns the same count as
+`{"documents_ingested": N}`.
 
-```bash
-podman compose run app evaluate
-```
-
-Runs every question in `evals/golden_questions.yaml` through `answer()`,
-then has the **judge** `LLMClient` (Claude by default — a separate,
-independently-configured role from the generator) score each answer on
-four dimensions (accuracy, answer relevance, context relevance,
-completeness), per your course's LLM-as-judge rubric. A judge response that
-isn't parseable JSON is recorded as `ERROR` for that question; the run
-continues rather than aborting.
-
-`--embeddings huggingface` temporarily overrides the embeddings backend for
-just this run (without touching your `.env.local`), so you can compare backends:
+## Ask — query the index
 
 ```bash
-podman compose run app evaluate --embeddings ollama
-podman compose run app evaluate --embeddings huggingface
-```
+# CLI
+podman compose run app ask "What is Tree of Thoughts and how does it differ from chain-of-thought prompting?"
 
-Each needs its own prior `ingest`/`index` run against that backend first —
-collections are backend-specific, so comparing requires having indexed the
-same corpus under both.
-
-## 4. `index` — bulk re-index everything under `data/documents/`
-
-```bash
-podman compose run app index
-```
-
-Walks `data/documents/` for files with an allowed extension and runs the
-same `dispatch` + `build_index` pipeline as `ingest`, without needing to
-name each file. **Caveat:** there's no dedup yet (the document-update
-workflow is out of scope for this sub-project) — running `index` twice on
-unchanged files duplicates their chunks.
-
-## 5. `serve` — long-running HTTP API server
-
-```bash
-podman compose up -d app   # command: ["serve"] in docker-compose.yml runs
-                             # `research-assistant serve`, which starts uvicorn
-```
-
-The CLI subcommands above each start a fresh container per command — fine
-for one-off use, but a chatbot/UI needs a process that stays up and answers
-many requests. `serve` starts a FastAPI server exposing the same operations
-as HTTP endpoints, all under `/v1/`:
-
-```bash
-curl -X POST localhost:8000/v1/ingest -H "Content-Type: application/json" \
-  -d '{"source": "https://arxiv.org/pdf/2305.10601"}'
-
+# API
 curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" \
   -d '{"query": "What is Tree of Thoughts?", "k": 5}'
-
-curl -X POST localhost:8000/v1/evaluate -H "Content-Type: application/json" \
-  -d '{"embeddings": "huggingface"}'   # or {} to use the default backend
-
-curl -X POST localhost:8000/v1/index -H "Content-Type: application/json" -d '{}'
-
-curl localhost:8000/health   # {"status": "ok"} -- never depends on Settings
-                               # or Ollama, so it reflects only "is the process up"
 ```
 
-Every route is a thin wrapper over the exact same functions the CLI calls
-(`dispatch`, `build_index`, `answer`, `run_evaluation`) — same business
-logic, same persisted `data/index/`, just a different interface. Errors
-that the CLI would print as text come back as real HTTP status codes:
+What happens:
+
+1. The query is embedded with the same model used at index time, and a
+   similarity search returns the top-k most relevant chunks. (If nothing
+   has been indexed yet, this returns no results, not an error.)
+2. If nothing relevant was found, the answer is `"no relevant context
+   found"` and the language model is never called — an empty-context
+   prompt risks a confident-sounding hallucination instead of an honest
+   "I don't know."
+3. Otherwise, the retrieved chunks are numbered and given to the
+   generator with an instruction to answer only from that context and
+   cite by number.
+4. Citations in the response come from the same chunks' source metadata
+   (deduplicated to unique sources, preserving order) — what the model
+   was told to cite and what gets reported can't drift apart.
+
+## Evaluate — score answer quality (LLM-as-judge)
+
+```bash
+# CLI
+podman compose run app evaluate
+podman compose run app evaluate --embeddings huggingface   # compare backends
+
+# API
+curl -X POST localhost:8000/v1/evaluate -H "Content-Type: application/json" -d '{}'
+curl -X POST localhost:8000/v1/evaluate -H "Content-Type: application/json" \
+  -d '{"embeddings": "huggingface"}'
+```
+
+Runs every question in `evals/golden_questions.yaml` through the ask
+pipeline, then has a separately-configured judge model score each answer
+on four dimensions (accuracy, answer relevance, context relevance,
+completeness). A judge response that isn't parseable is recorded as an
+error for that question; the run continues rather than aborting.
+
+The `embeddings` override is temporary (doesn't touch `.env.local`), so
+you can compare backends — each needs its own prior `ingest`/`index` run
+against that backend first, since collections are backend-specific.
+
+## Bulk re-index — everything under `data/documents/`
+
+```bash
+# CLI
+podman compose run app index
+
+# API
+curl -X POST localhost:8000/v1/index -H "Content-Type: application/json" -d '{}'
+```
+
+Walks `data/documents/` for files with a supported extension and runs the
+same ingest pipeline on each, without naming files individually.
+**Caveat:** there's no dedup yet — running this repeatedly on unchanged
+files duplicates their chunks (document-update/delete is a planned future
+addition, not built yet).
+
+## API error responses
+
+The CLI prints errors as text; the API returns real HTTP status codes:
 
 | Situation | Status |
 |---|---|
@@ -180,59 +158,53 @@ that the CLI would print as text come back as real HTTP status codes:
 | Empty `source`/`query`, or `k <= 0` | 422 |
 | Ollama unreachable | 503 |
 
-The one-shot CLI and the server are not alternatives to pick between
-permanently — both stay in the codebase, calling identical logic, so you
-can use whichever fits: CLI for a quick one-off command, `serve` for
-anything that needs to stay running (like a future chatbot UI).
+`GET /health` always returns `200 {"status": "ok"}` independent of
+Settings or Ollama — it only reflects whether the process is running
+(what the container healthcheck relies on).
 
-## Worked example: testing with a real paper
+## Worked example
 
 ```bash
 podman compose run app ingest https://arxiv.org/pdf/2305.10601
 podman compose run app ask "What is Tree of Thoughts?"
 podman compose run app ask "How does Tree of Thoughts differ from chain-of-thought prompting?"
-podman compose run app ask "What is the capital of France?"   # should find no relevant context
+podman compose run app ask "What is the capital of France?"   # off-topic on purpose
 ```
 
 (`2305.10601` is "Tree of Thoughts: Deliberate Problem Solving with Large
-Language Models" -- not Voyager, an earlier draft of this doc mislabeled it.)
+Language Models".)
 
 What to check:
 
-- First `ask`: answer should reference Tree-of-Thoughts/search concepts,
-  with `Sources:` naming the arxiv URL.
-- Second `ask`: a more specific question should surface different/more
-  specific chunks than the first — if the answers look identical, retrieval
-  may not be distinguishing between chunks well.
-- Third `ask`: this is intentionally off-topic. It should return
-  `no relevant context found`, not a confidently wrong answer made up from
-  the LLM's own training data — if it answers anyway, that's the
-  hallucination-without-grounding failure RAG exists to prevent, and worth
-  flagging.
+- First two: answers should reference Tree-of-Thoughts/search concepts,
+  with sources naming the arXiv URL; the second, more specific question
+  should surface noticeably different content than the first.
+- Third: intentionally off-topic. Should return "no relevant context
+  found," not a confident wrong answer — if it answers anyway, that's a
+  grounding failure worth reporting.
 
-## Running tests locally (fast, no containers needed)
+## Running tests locally
 
 ```bash
 uv run pytest -v
 ```
 
-All 85 unit tests mock the network/SDK/model-loading boundary (no real
-Ollama, Anthropic, or HuggingFace calls) — they verify the code's logic,
-not that a live LLM gives good answers. The container walkthrough above is
-what actually proves the end-to-end pipeline works against a real model.
+The suite mocks every network/SDK/model-loading boundary (no real Ollama,
+Anthropic, or HuggingFace calls) — it verifies the code's logic, not that
+a live model gives good answers. The worked example above is what proves
+the end-to-end pipeline against a real model.
 
 ## Troubleshooting
 
 - **Connection error reaching Ollama**: check `podman compose ps` shows
-  `ollama` healthy; confirm `.env.local`'s `*_BASE_URL` values say `ollama`, not
-  `localhost` (inside a container, `localhost` means that container
-  itself).
+  `ollama` healthy; confirm `.env.local`'s `*_BASE_URL` values say
+  `ollama`, not `localhost` (inside a container, `localhost` means that
+  container itself).
 - **Permission denied writing to `data/`**: the app runs as a non-root
-  user (uid 1000) inside the container; `chmod -R a+rwX data/` on the host,
-  or run Podman with `--userns=keep-id`.
-- **`evaluate` always errors**: check `JUDGE__API_KEY` is set in `.env.local` and
-  is a valid key for whichever `JUDGE__PROVIDER` you've configured.
+  user inside the container; `chmod -R a+rwX data/` on the host, or run
+  Podman with `--userns=keep-id`.
+- **`evaluate` always errors**: check `JUDGE__API_KEY` is set in
+  `.env.local` and valid for whichever `JUDGE__PROVIDER` is configured.
 - **`UrlSecurityError` on a real public URL**: check the host actually
   resolves publicly (`dig <host>`) — this should only trigger for
-  private/loopback/internal addresses; if a legitimate public site is
-  rejected, that's a bug worth reporting.
+  private/loopback/internal addresses.
