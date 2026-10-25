@@ -1,4 +1,8 @@
-"""Application configuration, loaded once from the environment/.env.local file."""
+"""Application configuration, loaded once from the process environment.
+
+Settings never reads a file itself -- docker-compose's `env_file:`
+directive injects .env.local's contents as real environment variables
+before the container starts, so this is the only mechanism that matters."""
 
 from functools import lru_cache
 from pathlib import Path
@@ -43,12 +47,10 @@ class Settings(BaseSettings):
     max_url_fetch_size_mb: int = 10
     url_fetch_timeout_seconds: int = 10
 
-    model_config = SettingsConfigDict(
-        env_file=".env.local", env_nested_delimiter="__", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_nested_delimiter="__", extra="ignore")
 
 
 @lru_cache
 def get_settings() -> Settings:
-    """Cached so env/.env.local is parsed once per process, not on every call."""
+    """Cached so the environment is parsed once per process, not on every call."""
     return Settings()

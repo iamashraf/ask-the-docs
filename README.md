@@ -4,25 +4,11 @@ A local-first RAG research assistant over configurable document sources
 (PDF/DOCX/TXT/MD files, or URLs), using a local Ollama model to generate
 answers and a configurable LLM (Claude by default) as judge.
 
-## Setup
+## Dev setup (for tests/tooling only -- the app itself always runs via containers)
 
 ```bash
-uv sync                       # creates .venv and installs locked dependencies
-cp .env.example .env.local    # then add your API key -- .env.local is never committed
+uv sync    # creates .venv and installs locked dependencies, for pytest/ruff/IDE support
 ```
-
-Run the CLI directly on your host (requires Ollama running locally, and
-`.env.local`'s base URLs set to `http://localhost:11434` rather than `ollama`):
-
-```bash
-uv run research-assistant ingest data/documents/some-paper.pdf
-uv run research-assistant ask "What does this paper say?"
-```
-
-## Testing
-
-`uv run pytest` runs the suite inside the project's `uv`-managed virtualenv
-(no manual `source .venv/bin/activate` needed).
 
 ```bash
 uv run pytest             # whole suite
@@ -30,13 +16,17 @@ uv run pytest -v          # verbose, one line per test
 uv run pytest tests/test_config.py -v   # a single module's tests
 ```
 
-## Running via containers
+The test suite needs no `.env.local` or real API keys -- every test mocks
+the network/SDK boundary.
+
+## Running the app
 
 Everything (the app and a local Ollama server) runs through `podman compose`
 (the same `docker-compose.yml` works with `docker compose` too):
 
 ```bash
-cp .env.example .env.local    # defaults point at the "ollama" service name
+cp .env.example .env.local    # .env.example is reference only (committed);
+                               # .env.local is what's actually loaded, never committed
 podman compose up -d ollama-init   # starts ollama, waits for it to be healthy,
                                     # pulls llama3.1:8b + nomic-embed-text, then exits
 podman compose run app ingest data/documents/some-paper.pdf
