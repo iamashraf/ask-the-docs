@@ -80,7 +80,7 @@ with real text on every page → `N=10`), not the chunk count.
 ## 2. `ask "<question>"` — query the index
 
 ```bash
-podman compose run app ask "What is Voyager and how does it explore Minecraft?"
+podman compose run app ask "What is Tree of Thoughts and how does it differ from chain-of-thought prompting?"
 ```
 
 What happens:
@@ -98,8 +98,9 @@ What happens:
    answer only from the given context and cite with those markers, and the
    **generator** `LLMClient` (Ollama by default) produces the answer text.
 4. Citations printed under `Sources:` come straight from the same chunks'
-   `source` metadata — so what the model was told to cite and what gets
-   reported can't drift apart.
+   `source` metadata (deduplicated to unique sources, preserving order) —
+   so what the model was told to cite and what gets reported can't drift
+   apart.
 
 ## 3. `evaluate [--embeddings ollama|huggingface]` — score answer quality
 
@@ -143,15 +144,18 @@ unchanged files duplicates their chunks.
 
 ```bash
 podman compose run app ingest https://arxiv.org/pdf/2305.10601
-podman compose run app ask "What is Voyager?"
-podman compose run app ask "How does Voyager explore Minecraft without human demonstrations?"
+podman compose run app ask "What is Tree of Thoughts?"
+podman compose run app ask "How does Tree of Thoughts differ from chain-of-thought prompting?"
 podman compose run app ask "What is the capital of France?"   # should find no relevant context
 ```
 
+(`2305.10601` is "Tree of Thoughts: Deliberate Problem Solving with Large
+Language Models" -- not Voyager, an earlier draft of this doc mislabeled it.)
+
 What to check:
 
-- First `ask`: answer should reference Voyager/Minecraft concepts, with
-  `Sources:` naming the arxiv URL.
+- First `ask`: answer should reference Tree-of-Thoughts/search concepts,
+  with `Sources:` naming the arxiv URL.
 - Second `ask`: a more specific question should surface different/more
   specific chunks than the first — if the answers look identical, retrieval
   may not be distinguishing between chunks well.
