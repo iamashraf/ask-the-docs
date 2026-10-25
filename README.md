@@ -30,10 +30,16 @@ your machine except the LLM calls you explicitly configure.
 git clone <this-repo> && cd research-assistant
 cp .env.example .env.local        # reference copy -> your local config
 podman compose up -d ollama-init  # starts Ollama, pulls the models (first run only)
-podman compose build app && podman image prune -f
+podman compose up -d --build app  # builds if missing, rebuilds if stale, then starts it
+podman image prune -f             # optional: reclaim the builder stage's disk space
+```
 
-podman compose run app ingest https://arxiv.org/pdf/2305.10601
-podman compose run app ask "What is Tree of Thoughts?"
+The first start auto-ingests a curated set of LLM/RAG papers
+(`seed_sources.yaml`), so there's already content to query:
+
+```bash
+curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" \
+  -d '{"query": "What is Tree of Thoughts?"}'
 ```
 
 That's the minimum path to a working answer. For every command, the HTTP

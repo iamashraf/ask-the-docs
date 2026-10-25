@@ -29,11 +29,17 @@ podman compose up -d ollama-init   # starts Ollama, waits until healthy,
 podman compose build app && podman image prune -f
 ```
 
-Model pulls and the image build each only need to happen once — re-running
-them later is a fast no-op (`ollama pull` skips already-present models;
+Model pulls only need to happen once — re-running `ollama-init` later is a
+fast no-op (`ollama pull` skips already-present models).
 `podman image prune -f` reclaims the disk space the multi-stage build's
 intermediate layer leaves behind, at the cost of a slightly slower next
-build).
+build.
+
+After any later code change, you don't need to re-run `build` as a
+separate step — add `--build` to whichever command you run next instead
+(`podman compose run --build app ...` or `podman compose up -d --build
+app`). It rebuilds only what changed (Docker/Podman's layer cache skips
+the rest), so it stays fast when nothing relevant changed.
 
 **First server start seeds a reading list automatically.** The first time
 `podman compose up -d app` runs (CLI's `ingest`/`index` don't trigger
@@ -57,7 +63,7 @@ whichever fits; nothing about the pipeline itself differs.
   the `curl` examples below:**
 
   ```bash
-  podman compose up -d app
+  podman compose up -d --build app
   ```
 
   Every `curl .../v1/...` example in this guide assumes that's already
