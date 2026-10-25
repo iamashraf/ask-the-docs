@@ -9,20 +9,25 @@ your machine except the LLM calls you explicitly configure.
 
 - **Local generation by default** — Ollama runs the language model; no
   API key required for the core pipeline.
+- **Hybrid retrieval** — vector similarity blended with BM25 keyword
+  search, with optional LLM query rewriting and cross-encoder reranking.
+- **Grounded generation** — a deterministic citation guardrail refuses to
+  answer unless the model actually cites retrieved content; cached
+  answers (Valkey) avoid repeating the same retrieval/generation work.
 - **Pluggable everywhere** — swap the generator, the judge, and the
   embeddings backend independently via config, without touching code.
 - **Configurable LLM-as-judge evaluation** — score answer quality on
   accuracy, relevance, and completeness using a separately-configured
-  model (e.g. Claude).
+  model (e.g. Claude), with comparison toggles for the retrieval strategy.
 - **Two interfaces, same logic** — a one-shot CLI and a long-running HTTP
   API, both calling identical underlying code.
 - **Containerized** — `podman compose` (or `docker compose`) runs the
-  whole stack; nothing to install beyond that.
+  whole stack (Ollama, Valkey, the app); nothing to install beyond that.
 - **Security-hardened ingestion** — path-traversal and SSRF guards on
   every local file and URL before anything is read.
 
-> Currently implements vector RAG (chunk → embed → retrieve → generate).
-> Hybrid search and Graph RAG are planned as separate future additions.
+> Implements vector + hybrid (BM25) RAG with reranking and query
+> rewriting. Graph RAG is planned as a separate future addition.
 
 ## Quickstart
 

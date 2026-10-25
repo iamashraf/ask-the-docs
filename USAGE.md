@@ -151,19 +151,33 @@ curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" \
 
 What happens:
 
-1. The query is embedded with the same model used at index time, and a
-   similarity search returns the top-k most relevant chunks. (If nothing
-   has been indexed yet, this returns no results, not an error.)
-2. If nothing relevant was found, the answer is `"no relevant context
-   found"` and the language model is never called — an empty-context
+1. The query is optionally rewritten by the generator LLM into a more
+   effective search query (`query_rewrite_enabled`, on by default; falls
+   back to the raw query if the rewrite call fails).
+2. Retrieval is hybrid: vector similarity and BM25 keyword search each
+   run, get independently normalized, and are blended (`hybrid_alpha`);
+   the merged pool is optionally reranked by a cross-encoder
+   (`rerank_enabled`). If nothing has been indexed yet, or nothing
+   matches, this returns no results, not an error.
+3. If nothing relevant was found, the answer is the refusal message
+   below and the language model is never called — an empty-context
    prompt risks a confident-sounding hallucination instead of an honest
    "I don't know."
-3. Otherwise, the retrieved chunks are numbered and given to the
-   generator with an instruction to answer only from that context and
-   cite by number.
-4. Citations in the response come from the same chunks' source metadata
-   (deduplicated to unique sources, preserving order) — what the model
-   was told to cite and what gets reported can't drift apart.
+4. Otherwise, the retrieved chunks are numbered and given to the
+   generator, with grounding/citation instructions in a system prompt
+   (kept separate from the question itself). A deterministic guardrail
+   then checks every `[n]` citation the model used actually exists among
+   the retrieved chunks — an answer with no citations, or one citing a
+   chunk number that doesn't exist, gets the same refusal message instead
+   of an ungrounded answer.
+5. Citations in a successful response come from the same chunks' source
+   metadata (deduplicated to unique sources, preserving order) — what the
+   model was told to cite and what gets reported can't drift apart.
+6. The refusal message, used in both cases above, is: `"I don't have
+   enough information in the available documents to answer that."`
+7. Repeated identical questions (same query, `k`, and retrieval/
+   generation config, against the same corpus state) are served from a
+   Valkey-backed cache instead of re-running retrieval and generation.
 
 ## Evaluate — score answer quality (LLM-as-judge)
 
@@ -171,11 +185,12 @@ What happens:
 # CLI
 podman compose run app evaluate
 podman compose run app evaluate --embeddings huggingface   # compare backends
+podman compose run app evaluate --hybrid-alpha 0.8 --rerank false --query-rewrite false
 
 # API
 curl -X POST localhost:8000/v1/evaluate -H "Content-Type: application/json" -d '{}'
 curl -X POST localhost:8000/v1/evaluate -H "Content-Type: application/json" \
-  -d '{"embeddings": "huggingface"}'
+  -d '{"hybrid_alpha": 0.8, "rerank_enabled": false, "query_rewrite_enabled": false}'
 ```
 
 Runs every question in `evals/golden_questions.yaml` through the ask
@@ -184,9 +199,11 @@ on four dimensions (accuracy, answer relevance, context relevance,
 completeness). A judge response that isn't parseable is recorded as an
 error for that question; the run continues rather than aborting.
 
-The `embeddings` override is temporary (doesn't touch `.env.local`), so
-you can compare backends — each needs its own prior `ingest`/`index` run
-against that backend first, since collections are backend-specific.
+Every override (`embeddings`, `hybrid-alpha`, `rerank`, `query-rewrite`)
+is temporary (doesn't touch `.env.local`), so you can compare retrieval
+strategies against the same golden questions. The `embeddings` override
+needs its own prior `ingest`/`index` run against that backend first,
+since collections are backend-specific; the others don't.
 
 ## Bulk re-index — everything under `data/documents/`
 
@@ -236,8 +253,9 @@ What to check:
 - First two: answers should reference Tree-of-Thoughts/search concepts,
   with sources naming the arXiv URL; the second, more specific question
   should surface noticeably different content than the first.
-- Third: intentionally off-topic. Should return "no relevant context
-  found," not a confident wrong answer — if it answers anyway, that's a
+- Third: intentionally off-topic. Should return the refusal message
+  ("I don't have enough information in the available documents to answer
+  that."), not a confident wrong answer — if it answers anyway, that's a
   grounding failure worth reporting.
 
 ## Running tests locally
