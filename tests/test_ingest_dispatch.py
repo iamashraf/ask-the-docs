@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import docx as docx_module
 import requests
 
-from research_assistant.ingest import dispatch, load_docx, load_url
+from research_assistant.ingest import discover_sources, dispatch, load_docx, load_url
 
 SENTINEL = [object()]
 
@@ -143,3 +143,18 @@ def test_dispatch_routes_local_path_to_load_path(tmp_path, monkeypatch):
     monkeypatch.setattr("research_assistant.ingest.load_path", lambda path: SENTINEL)
 
     assert dispatch("paper.pdf") == SENTINEL
+
+
+def test_discover_sources_finds_allowed_extensions_only(tmp_path):
+    (tmp_path / "paper.pdf").write_bytes(b"x")
+    (tmp_path / "notes.md").write_text("x")
+    (tmp_path / "ignore.exe").write_bytes(b"x")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "nested.txt").write_text("x")
+
+    found = discover_sources(tmp_path)
+
+    assert found == sorted(
+        [tmp_path / "paper.pdf", tmp_path / "notes.md", sub / "nested.txt"]
+    )

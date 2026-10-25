@@ -205,6 +205,13 @@ def load_path(path: Path) -> list[Document]:
     raise UnsupportedFileTypeError(f"Unsupported file extension: {suffix}")
 
 
+def discover_sources(docs_dir: Path) -> list[Path]:
+    """Finds every file under docs_dir with an allowed extension, for bulk re-indexing."""
+    return sorted(
+        path for path in docs_dir.rglob("*") if path.is_file() and path.suffix.lower() in ALLOWED_EXTENSIONS
+    )
+
+
 def dispatch(source: str) -> list[Document]:
     """Routes a user-supplied source string to the right loader, applying
     the relevant security gate first."""
