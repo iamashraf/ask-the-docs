@@ -8,6 +8,8 @@ dependencies = [
     "anthropic>=2.3.0",
     "beautifulsoup4>=4.15.0",
     "chromadb>=1.5.9",
+    "fastapi>=0.162.0",
+    "httpx>=0.28.1",
     "langchain>=1.4.7",
     "langchain-chroma>=1.1.0",
     "langchain-community>=0.4.2",
@@ -24,6 +26,7 @@ dependencies = [
     "sentence-transformers>=6.2.0",
     "tiktoken>=0.14.0",
     "torch>=2.14.1",
+    "uvicorn>=0.54.0",
 ]
 
 [project.scripts]
