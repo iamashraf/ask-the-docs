@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     index_dir: Path = Path("data/index")
     docs_dir: Path = Path("data/documents")
     max_file_size_mb: int = 25
-    max_url_fetch_size_mb: int = 10
+    max_url_fetch_size_mb: int = 25
     url_fetch_timeout_seconds: int = 10
 
     model_config = SettingsConfigDict(env_nested_delimiter="__", extra="ignore")
