@@ -30,7 +30,7 @@ def test_seed_if_needed_skips_when_marker_exists(tmp_path, monkeypatch):
     assert called == []
 
 
-def test_seed_if_needed_ingests_all_sources_and_writes_marker(tmp_path, monkeypatch):
+def test_seed_if_needed_ingests_all_sources_and_writes_marker(tmp_path, monkeypatch, caplog):
     settings = make_settings(tmp_path)
     seed_path = tmp_path / "seed_sources.yaml"
     seed_path.write_text("- a\n- b\n")
@@ -44,14 +44,20 @@ def test_seed_if_needed_ingests_all_sources_and_writes_marker(tmp_path, monkeypa
         "research_assistant.seed.build_index", lambda docs, s: captured.setdefault("docs", docs)
     )
 
-    count = seed_if_needed(settings, seed_sources_path=seed_path)
+    with caplog.at_level("INFO", logger="research_assistant.seed"):
+        count = seed_if_needed(settings, seed_sources_path=seed_path)
 
     assert count == 2
     assert len(captured["docs"]) == 2
     assert seed_marker_path(settings).exists()
+    assert "1/2" in caplog.text and "a" in caplog.text
+    assert "2/2" in caplog.text and "b" in caplog.text
+    assert "2 document" in caplog.text
 
 
-def test_seed_if_needed_continues_past_a_failing_source_and_still_writes_marker(tmp_path, monkeypatch):
+def test_seed_if_needed_continues_past_a_failing_source_and_still_writes_marker(
+    tmp_path, monkeypatch, caplog
+):
     settings = make_settings(tmp_path)
     seed_path = tmp_path / "seed_sources.yaml"
     seed_path.write_text("- good\n- bad\n")
@@ -64,7 +70,10 @@ def test_seed_if_needed_continues_past_a_failing_source_and_still_writes_marker(
     monkeypatch.setattr("research_assistant.seed.dispatch", fake_dispatch)
     monkeypatch.setattr("research_assistant.seed.build_index", lambda docs, s: None)
 
-    count = seed_if_needed(settings, seed_sources_path=seed_path)
+    with caplog.at_level("INFO", logger="research_assistant.seed"):
+        count = seed_if_needed(settings, seed_sources_path=seed_path)
 
     assert count == 1
     assert seed_marker_path(settings).exists()
+    assert "bad" in caplog.text
+    assert "network error" in caplog.text

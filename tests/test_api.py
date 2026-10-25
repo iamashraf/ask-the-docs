@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -194,3 +195,12 @@ def test_evaluate_overrides_embeddings_backend(monkeypatch):
 def test_evaluate_rejects_invalid_embeddings_value():
     response = TestClient(app).post("/v1/evaluate", json={"embeddings": "bogus"})
     assert response.status_code == 422
+
+
+def test_package_logger_configured_for_info_with_a_handler():
+    """Importing api.py must configure the research_assistant logger so
+    INFO-level messages (e.g. seed.py's progress logs) actually reach
+    console output -- uvicorn only configures its own loggers, not ours."""
+    package_logger = logging.getLogger("research_assistant")
+    assert package_logger.getEffectiveLevel() <= logging.INFO
+    assert len(package_logger.handlers) >= 1
