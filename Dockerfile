@@ -16,13 +16,11 @@ WORKDIR /app
 # Dependencies first, in their own layer, so an app-code-only change doesn't
 # invalidate (and re-download) this layer.
 COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev
+RUN uv sync --frozen --no-install-project --no-dev
 
 COPY README.md ./
 COPY src ./src
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev
 
 # Final stage: just the built virtualenv and app code, no build tools, no root.
 FROM python:3.14-slim-bookworm
