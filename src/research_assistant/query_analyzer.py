@@ -41,7 +41,9 @@ FENCED_BLOCK_PATTERN = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL)
 
 
 def _strip_code_fence(raw: str) -> str:
-    """Small/local models often wrap JSON responses in markdown code fences."""
+    """Small/local models often wrap JSON responses in markdown code fences; non-str input is left to json.loads to reject."""
+    if not isinstance(raw, str):
+        return raw
     match = FENCED_BLOCK_PATTERN.match(raw.strip())
     return match.group(1) if match else raw
 
