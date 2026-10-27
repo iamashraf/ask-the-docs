@@ -4,6 +4,7 @@ from neo4j.exceptions import ClientError, ServiceUnavailable
 
 from research_assistant.community import run_community_detection, summarize_communities
 from research_assistant.config import ProviderConfig, Settings
+from research_assistant.llm import OllamaUnavailableError
 
 
 class FakeResult:
@@ -311,6 +312,28 @@ def test_summarize_communities_degrades_when_write_consume_fails(monkeypatch, ca
     queries = [q for q, _ in driver.session_obj.queries]
     assert any("RETURN" in q for q in queries)
     assert any("Community" in q for q in queries)
+    assert any(record.levelname == "WARNING" for record in caplog.records)
+
+
+def test_summarize_communities_continues_past_llm_failure_for_one_community(monkeypatch, caplog):
+    """A transient LLM failure on one community must not abort the rest, and must not
+    undo summaries already written for communities processed before it."""
+
+    driver = FakeDriverWithCommunities({0: ["Transformer"], 1: ["BM25"], 2: ["Neo4j"]})
+
+    class FlakyClient:
+        def generate(self, prompt, system=None):
+            if "BM25" in prompt:
+                raise OllamaUnavailableError("down")
+            return "a summary"
+
+    monkeypatch.setattr("research_assistant.community.get_llm_client", lambda cfg: FlakyClient())
+
+    with caplog.at_level(logging.WARNING):
+        summarize_communities(driver, make_settings())  # must not raise
+
+    written = [(q, p) for q, p in driver.session_obj.queries if "Community" in q and "summary" in p]
+    assert {p["id"] for _, p in written} == {0, 2}
     assert any(record.levelname == "WARNING" for record in caplog.records)
 
 
