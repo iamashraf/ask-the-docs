@@ -269,6 +269,22 @@ Anthropic, or HuggingFace calls) — it verifies the code's logic, not that
 a live model gives good answers. The worked example above is what proves
 the end-to-end pipeline against a real model.
 
+### Chat UI tests (`web/`)
+
+```bash
+cd web && npm test        # fast, mocked (component tests, no real backend)
+```
+
+```bash
+cd web && npm run test:e2e   # real stack must already be running
+```
+
+`npm run test:e2e` drives a real browser (Playwright) against the real
+running stack — `podman compose up app web` (plus whatever else is
+already running) — and asks real questions, asserting on real grounded
+answers/citations/refusals. Not part of `npm test`'s default run, same
+split as the Python suite above.
+
 ## Troubleshooting
 
 - **Connection error reaching Ollama**: check `podman compose ps` shows
