@@ -78,6 +78,19 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  web:
+    image: localhost/research-assistant-web
+    build: ./web
+    environment:
+      - BACKEND_URL=http://app:8000
+    ports:
+      - "3000:3000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   ollama_data:
   valkey_data:
