@@ -186,6 +186,9 @@ def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
         settings.query_rewrite_enabled,
         settings.system_prompt_template,
         settings.candidate_pool_size,
+        settings.graph_enabled,
+        settings.graph_traversal_hop_depth,
+        settings.global_search_top_communities,
         1,
     )
     fake_cache.set(key, json.dumps(dataclasses.asdict(cached_result)).encode())
@@ -223,6 +226,9 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
         make_settings().query_rewrite_enabled,
         make_settings().system_prompt_template,
         make_settings().candidate_pool_size,
+        make_settings().graph_enabled,
+        make_settings().graph_traversal_hop_depth,
+        make_settings().global_search_top_communities,
         0,
     )
     fake_cache.set(key, b"not valid json")
@@ -299,6 +305,39 @@ def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
 
     settings_a = make_settings().model_copy(update={"candidate_pool_size": 20})
     settings_b = make_settings().model_copy(update={"candidate_pool_size": 50})
+
+    answer("What is X?", settings_a, k=5)
+    answer("What is X?", settings_b, k=5)
+
+    assert calls["count"] == 2
+
+
+@pytest.mark.parametrize(
+    ("field", "value_a", "value_b"),
+    [
+        ("graph_enabled", False, True),
+        ("graph_traversal_hop_depth", 1, 2),
+        ("global_search_top_communities", 3, 5),
+    ],
+)
+def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field, value_a, value_b):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: 1)
+    shared_cache = FakeCacheClient()
+    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: shared_cache)
+
+    calls = {"count": 0}
+
+    class FakeClient:
+        def generate(self, prompt, system=None):
+            calls["count"] += 1
+            return "the answer [1]"
+
+    monkeypatch.setattr("research_assistant.answer.get_llm_client", lambda config: FakeClient())
+
+    settings_a = make_settings().model_copy(update={field: value_a})
+    settings_b = make_settings().model_copy(update={field: value_b})
 
     answer("What is X?", settings_a, k=5)
     answer("What is X?", settings_b, k=5)
