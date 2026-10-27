@@ -426,3 +426,32 @@ def test_retrieve_falls_back_to_hybrid_when_local_search_raises(tmp_path, monkey
     result = retrieve("how does BM25 relate to vectors?", settings, k=5)
 
     assert result == [hybrid_doc]
+
+
+def test_retrieve_keeps_local_search_match_in_top_k_when_rerank_disabled(tmp_path, monkeypatch):
+    # Hybrid alone already has more than k matches; without a reranker to
+    # rescore the pool, the final candidates[:k] slice must still keep the
+    # graph-only match rather than cutting it off behind the hybrid list.
+    hybrid_docs = [_doc(f"hybrid{i}") for i in range(5)]
+    graph_only_doc = make_chunk("doc9", 0, "only found via graph traversal")
+
+    monkeypatch.setattr(
+        "research_assistant.retrieve.classify_query",
+        lambda q, s: QueryClassification(label="local", entities=["BM25"]),
+    )
+    monkeypatch.setattr("research_assistant.retrieve.local_search", lambda entities, s: [graph_only_doc])
+
+    class FakeIndex:
+        def similarity_search_with_score(self, query, k):
+            return [(doc, 0.1 * (i + 1)) for i, doc in enumerate(hybrid_docs)]
+
+    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("research_assistant.retrieve.bm25_score", lambda query, settings: [])
+
+    settings = make_settings(tmp_path).model_copy(
+        update={"graph_enabled": True, "rerank_enabled": False, "candidate_pool_size": 5}
+    )
+    result = retrieve("how does BM25 relate to vectors?", settings, k=2)
+
+    assert len(result) == 2
+    assert graph_only_doc in result
