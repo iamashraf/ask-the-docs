@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { ChatMessage, type Message } from "../components/ChatMessage";
 
@@ -49,24 +50,37 @@ export default function Page() {
   }
 
   return (
-    <main>
-      <h1>Research Assistant</h1>
+    <div className="app">
+      <header className="masthead">
+        <h1>Research Assistant</h1>
+        <p>Grounded answers, cited sources.</p>
+        <nav>
+          <Link href="/ingest">Add documents</Link>
+        </nav>
+      </header>
       <div className="message-log">
         {messages.map((message, i) => (
           <ChatMessage key={i} message={message} />
         ))}
       </div>
-      <input
-        type="text"
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && canSend) sendMessage();
+      <form
+        className="composer"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (canSend) sendMessage();
         }}
-      />
-      <button type="button" disabled={!canSend} onClick={sendMessage}>
-        Send
-      </button>
-    </main>
+      >
+        <input
+          type="text"
+          aria-label="Question"
+          placeholder="Ask a question about the indexed documents…"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+        />
+        <button type="submit" disabled={!canSend}>
+          Send
+        </button>
+      </form>
+    </div>
   );
 }
