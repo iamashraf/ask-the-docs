@@ -147,6 +147,14 @@ def test_build_graph_degrades_when_graph_client_unreachable(tmp_path, monkeypatc
         raise ServiceUnavailable("down")
 
     monkeypatch.setattr("research_assistant.index.get_graph_client", boom)
+    detect_calls = []
+    summarize_calls = []
+    monkeypatch.setattr(
+        "research_assistant.index.run_community_detection", lambda d: detect_calls.append(d)
+    )
+    monkeypatch.setattr(
+        "research_assistant.index.summarize_communities", lambda d, s: summarize_calls.append(d)
+    )
     settings = make_settings(tmp_path, graph_enabled=True)
 
     with caplog.at_level(logging.WARNING):
@@ -156,6 +164,12 @@ def test_build_graph_degrades_when_graph_client_unreachable(tmp_path, monkeypatc
         record.name == "research_assistant.index" and "graph" in record.message.lower()
         for record in caplog.records
     )
+    # No driver was ever obtained, so there's nothing to run community
+    # detection/summarization with -- and no second ("Graph build failed")
+    # warning from trying to anyway.
+    assert detect_calls == []
+    assert summarize_calls == []
+    assert len(caplog.records) == 1
 
 
 def test_build_graph_degrades_when_write_graph_raises(tmp_path, monkeypatch, caplog):
@@ -291,6 +305,33 @@ def test_build_graph_noop_safe_when_every_chunk_extracts_zero_triplets(tmp_path,
 
     assert resolve_calls == []
     assert get_client_calls == []
+
+
+def test_build_graph_runs_community_detection_and_summarization_after_write(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr("research_assistant.index.extract_triplets", lambda *a, **k: [Triplet("A", "uses", "B")])
+    monkeypatch.setattr("research_assistant.index.resolve_entities", lambda triplets, s: triplets)
+    monkeypatch.setattr("research_assistant.index.get_graph_client", lambda s: "fake-driver")
+    monkeypatch.setattr(
+        "research_assistant.index.write_graph", lambda *a, **k: calls.append(("write", a[0]))
+    )
+    monkeypatch.setattr(
+        "research_assistant.index.run_community_detection", lambda d: calls.append(("detect", d))
+    )
+    monkeypatch.setattr(
+        "research_assistant.index.summarize_communities", lambda d, s: calls.append(("summarize", d, s))
+    )
+    settings = make_settings(tmp_path, graph_enabled=True)
+
+    build_graph([make_chunk("doc1", 0, "text")], settings)
+
+    # Verifies ordering and that the same driver/settings flow through each
+    # step, not just that each function was called.
+    assert calls == [
+        ("write", "fake-driver"),
+        ("detect", "fake-driver"),
+        ("summarize", "fake-driver", settings),
+    ]
 
 
 def test_build_index_calls_build_graph_with_its_chunks(tmp_path, monkeypatch):
