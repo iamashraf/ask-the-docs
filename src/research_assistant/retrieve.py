@@ -106,19 +106,19 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
         : settings.candidate_pool_size
     ]
     if classification.entities:
-        # Appended after the pool-size truncation, not before: vector_hits alone
+        # Merged after the pool-size truncation, not before: vector_hits alone
         # already fills candidate_pool_size on any corpus of that size or larger,
         # so truncating after the union would silently drop every graph-only
-        # match almost always. Letting the pool grow slightly past
-        # candidate_pool_size here is intended -- rerank()/candidates[:k] below
-        # both already handle an arbitrary-length candidate list.
+        # match almost always. Prepended rather than appended so they also
+        # survive candidates[:k] when rerank is off; the reranker scores each
+        # candidate independently, so order doesn't matter to it.
         try:
             local_results = local_search(classification.entities, settings)
         except Exception:
             logger.warning("Local search failed; continuing with hybrid candidates only.", exc_info=True)
             local_results = []
         seen = {_doc_key(doc) for doc in candidates}
-        candidates += [doc for doc in local_results if _doc_key(doc) not in seen]
+        candidates = [doc for doc in local_results if _doc_key(doc) not in seen] + candidates
 
     if settings.rerank_enabled:
         return get_reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
