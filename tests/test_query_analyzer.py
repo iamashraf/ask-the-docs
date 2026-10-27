@@ -60,6 +60,30 @@ def test_classify_query_parses_global_with_no_entities(monkeypatch):
     assert result == QueryClassification(label="global", entities=[])
 
 
+def test_classify_query_parses_fenced_json(monkeypatch):
+    class FakeClient:
+        def generate(self, prompt, system=None):
+            return '```json\n{"label": "global", "entities": []}\n```'
+
+    monkeypatch.setattr("research_assistant.query_analyzer.get_llm_client", lambda cfg: FakeClient())
+
+    result = classify_query("what are the main themes of this corpus?", make_settings())
+
+    assert result == QueryClassification(label="global", entities=[])
+
+
+def test_classify_query_parses_bare_fenced_json(monkeypatch):
+    class FakeClient:
+        def generate(self, prompt, system=None):
+            return '```\n{"label": "global", "entities": []}\n```'
+
+    monkeypatch.setattr("research_assistant.query_analyzer.get_llm_client", lambda cfg: FakeClient())
+
+    result = classify_query("what are the main themes of this corpus?", make_settings())
+
+    assert result == QueryClassification(label="global", entities=[])
+
+
 def test_classify_query_defaults_to_local_on_malformed_output(monkeypatch):
     class FakeClient:
         def generate(self, prompt, system=None):

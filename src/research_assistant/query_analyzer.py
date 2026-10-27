@@ -3,6 +3,7 @@ retrieval to decide how a user's question should be routed."""
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -36,6 +37,15 @@ Respond with ONLY a JSON object of this exact shape:
 """
 
 
+FENCED_BLOCK_PATTERN = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL)
+
+
+def _strip_code_fence(raw: str) -> str:
+    """Small/local models often wrap JSON responses in markdown code fences."""
+    match = FENCED_BLOCK_PATTERN.match(raw.strip())
+    return match.group(1) if match else raw
+
+
 def rewrite_query(query: str, settings: Settings) -> str:
     client = get_llm_client(settings.generator)
     return client.generate(QUERY_REWRITE_PROMPT_TEMPLATE.format(query=query)).strip()
@@ -53,7 +63,7 @@ def classify_query(query: str, settings: Settings) -> QueryClassification:
     prompt = QUERY_CLASSIFICATION_PROMPT_TEMPLATE.format(query=query)
     raw = client.generate(prompt)
     try:
-        data = json.loads(raw)
+        data = json.loads(_strip_code_fence(raw))
         label = data["label"]
         if label not in ("local", "global"):
             raise ValueError(f"unexpected label: {label!r}")
