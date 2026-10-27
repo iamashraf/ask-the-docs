@@ -7,8 +7,9 @@ from langchain_core.documents import Document
 
 from research_assistant.bm25_index import score as bm25_score
 from research_assistant.config import Settings
+from research_assistant.graph_retrieve import global_search, local_search
 from research_assistant.index import load_index
-from research_assistant.query_analyzer import rewrite_query
+from research_assistant.query_analyzer import QueryClassification, classify_query, rewrite_query
 from research_assistant.reranker import DEFAULT_RERANKER_MODEL, get_reranker
 
 logger = logging.getLogger(__name__)
@@ -57,14 +58,31 @@ def hybrid_merge(
 
 def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
     """Up to k chunks most relevant to query via hybrid (vector + BM25)
-    search with optional query rewrite and reranking; [] if the index has
-    no chunks yet."""
+    search with optional query rewrite and reranking, with a graph-aware
+    "global" short-circuit and "local" candidate merge when graph_enabled;
+    [] if the index has no chunks yet."""
     search_query = query
     if settings.query_rewrite_enabled:
         try:
             search_query = rewrite_query(query, settings)
         except Exception:
             logger.warning("Query rewrite failed; falling back to the raw query.", exc_info=True)
+
+    classification = QueryClassification(label="local", entities=[])
+    if settings.graph_enabled:
+        try:
+            classification = classify_query(query, settings)
+        except Exception:
+            logger.warning("Query classification failed; defaulting to local search.", exc_info=True)
+
+        if classification.label == "global":
+            try:
+                global_results = global_search(query, settings)
+            except Exception:
+                logger.warning("Global search failed; falling back to hybrid search.", exc_info=True)
+                global_results = []
+            if global_results:
+                return global_results[:k]
 
     index = load_index(settings)
     # Chroma's distance is "lower = more similar"; negate so that, after
@@ -84,9 +102,13 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
         if hit[1] > 0
     ][: settings.candidate_pool_size]
 
-    candidates = [doc for doc, _ in hybrid_merge(vector_hits, bm25_hits, settings.hybrid_alpha)][
-        : settings.candidate_pool_size
-    ]
+    candidates = [doc for doc, _ in hybrid_merge(vector_hits, bm25_hits, settings.hybrid_alpha)]
+    if classification.entities:
+        seen = {_doc_key(doc) for doc in candidates}
+        candidates += [
+            doc for doc in local_search(classification.entities, settings) if _doc_key(doc) not in seen
+        ]
+    candidates = candidates[: settings.candidate_pool_size]
 
     if settings.rerank_enabled:
         return get_reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
