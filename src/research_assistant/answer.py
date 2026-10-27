@@ -95,6 +95,9 @@ def answer(query: str, settings: Settings, k: int = 5) -> AnswerResult:
         settings.query_rewrite_enabled,
         settings.system_prompt_template,
         settings.candidate_pool_size,
+        settings.graph_enabled,
+        settings.graph_traversal_hop_depth,
+        settings.global_search_top_communities,
         get_chunk_count(settings),
     )
 
