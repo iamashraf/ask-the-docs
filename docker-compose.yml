@@ -35,10 +35,9 @@ services:
 
   neo4j:
     image: neo4j:5
-    # ${NEO4J_AUTH} is interpolated from .env.local only when compose is run with
-    # `--env-file .env.local`; a plain `compose up` leaves it empty.
+    env_file:
+      - .env.local
     environment:
-      - NEO4J_AUTH=${NEO4J_AUTH}
       - NEO4J_PLUGINS=["graph-data-science"]
     volumes:
       - neo4j_data:/data
