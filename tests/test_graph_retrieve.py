@@ -1,7 +1,7 @@
 import logging
 
 from langchain_core.documents import Document
-from neo4j.exceptions import ClientError, ServiceUnavailable
+from neo4j.exceptions import ClientError, ServiceUnavailable, SessionExpired
 
 from research_assistant.config import ProviderConfig, Settings
 from research_assistant.graph_retrieve import global_search, local_search
@@ -306,6 +306,48 @@ def test_local_search_degrades_on_neo4j_client_error(monkeypatch, caplog):
 
     with caplog.at_level(logging.WARNING):
         result = local_search(["BM25"], make_settings())  # must not raise
+
+    assert result == []
+    assert any(record.levelname == "WARNING" for record in caplog.records)
+
+
+class SessionRaisingSessionExpired:
+    """SessionExpired is a DriverError, not a Neo4jError -- a mid-session connection drop."""
+
+    def run(self, query, **params):
+        raise SessionExpired("connection dropped mid-session")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class DriverRaisingSessionExpired:
+    def session(self):
+        return SessionRaisingSessionExpired()
+
+
+def test_local_search_degrades_on_driver_error_that_is_not_neo4j_error(monkeypatch, caplog):
+    monkeypatch.setattr(
+        "research_assistant.graph_retrieve.get_graph_client", lambda s: DriverRaisingSessionExpired()
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = local_search(["BM25"], make_settings())  # must not raise
+
+    assert result == []
+    assert any(record.levelname == "WARNING" for record in caplog.records)
+
+
+def test_global_search_degrades_on_driver_error_that_is_not_neo4j_error(monkeypatch, caplog):
+    monkeypatch.setattr(
+        "research_assistant.graph_retrieve.get_graph_client", lambda s: DriverRaisingSessionExpired()
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = global_search("anything", make_settings())  # must not raise
 
     assert result == []
     assert any(record.levelname == "WARNING" for record in caplog.records)

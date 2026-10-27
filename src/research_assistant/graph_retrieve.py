@@ -55,7 +55,7 @@ def local_search(entities: list[str], settings: Settings) -> list[Document]:
             # records lazily, so reading them after would see nothing.
             chunk_refs_lists = [record["chunk_refs"] for record in result]
             result.consume()
-    except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
+    except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError, neo4j.exceptions.DriverError):
         logger.warning("Local search graph traversal failed; returning no graph results.", exc_info=True)
         return []
 
@@ -76,7 +76,7 @@ def global_search(query: str, settings: Settings) -> list[Document]:
             # records lazily, so reading them after would see nothing.
             communities = [(record["id"], record["summary"]) for record in result]
             result.consume()
-    except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
+    except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError, neo4j.exceptions.DriverError):
         logger.warning("Global search failed to read communities; returning no graph results.", exc_info=True)
         return []
 
