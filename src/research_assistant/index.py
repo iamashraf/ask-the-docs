@@ -1,13 +1,21 @@
 """Chunking and the per-embeddings-backend Chroma vector index."""
 
+import logging
 from datetime import UTC, datetime
 
+import neo4j
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from research_assistant.config import Settings
 from research_assistant.embeddings import get_embeddings
+from research_assistant.entity_resolution import resolve_entities
+from research_assistant.graph_client import get_graph_client
+from research_assistant.graph_extract import extract_triplets
+from research_assistant.graph_store import write_graph
+
+logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 50
@@ -49,14 +57,43 @@ def _embedding_model_name(settings: Settings) -> str:
     return settings.huggingface_embedding_model
 
 
+def build_graph(chunks: list[Document], settings: Settings) -> None:
+    """Extracts/resolves/writes a knowledge graph from chunks; no-op unless settings.graph_enabled."""
+    if not settings.graph_enabled:
+        return
+
+    triplets = []
+    chunk_refs = []
+    for chunk in chunks:
+        chunk_ref = f"{chunk.metadata['source_doc_id']}:{chunk.metadata['chunk_index']}"
+        for triplet in extract_triplets(chunk.page_content, settings):
+            triplets.append(triplet)
+            chunk_refs.append(chunk_ref)
+
+    if not triplets:
+        return
+
+    # Resolved once over the whole corpus's triplets, not per chunk -- entity
+    # clustering needs every entity name in play to merge well.
+    resolved_triplets = resolve_entities(triplets, settings)
+
+    try:
+        driver = get_graph_client(settings)
+        write_graph(driver, list(zip(resolved_triplets, chunk_refs, strict=True)))
+    except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
+        logger.warning("Graph build failed; continuing without updating the graph.", exc_info=True)
+
+
 def build_index(docs: list[Document], settings: Settings) -> Chroma:
     chunks = chunk_documents(docs, embedding_model=_embedding_model_name(settings))
-    return Chroma.from_documents(
+    index = Chroma.from_documents(
         chunks,
         embedding=get_embeddings(settings),
         collection_name=get_collection_name(settings),
         persist_directory=str(settings.index_dir),
     )
+    build_graph(chunks, settings)
+    return index
 
 
 def load_index(settings: Settings) -> Chroma:
