@@ -22,6 +22,15 @@ def make_chunk(source_doc_id: str, chunk_index: int, text: str) -> Document:
     return Document(page_content=text, metadata={"source_doc_id": source_doc_id, "chunk_index": chunk_index})
 
 
+def fake_chunks_by_refs(chunks: list[Document]):
+    """Stands in for index.get_chunks_by_refs: returns only the chunks whose ref was requested."""
+
+    def fetch(settings, refs):
+        return [c for c in chunks if f"{c.metadata['source_doc_id']}:{c.metadata['chunk_index']}" in refs]
+
+    return fetch
+
+
 class FakeReadResult:
     """Mimics neo4j.Result for a read query: iterable rows, .consume() is a no-op here."""
 
@@ -89,12 +98,14 @@ def test_local_search_returns_matching_chunks(monkeypatch):
     driver = FakeDriverReturningChunkRefs(["doc1:0", "doc2:1"])
     monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_all_chunks",
-        lambda s: [
-            make_chunk("doc1", 0, "about BM25"),
-            make_chunk("doc2", 1, "about vectors"),
-            make_chunk("doc3", 0, "unrelated"),
-        ],
+        "research_assistant.graph_retrieve.get_chunks_by_refs",
+        fake_chunks_by_refs(
+            [
+                make_chunk("doc1", 0, "about BM25"),
+                make_chunk("doc2", 1, "about vectors"),
+                make_chunk("doc3", 0, "unrelated"),
+            ]
+        ),
     )
 
     result = local_search(["BM25"], make_settings())
@@ -123,8 +134,8 @@ def test_local_search_skips_stale_chunk_refs_not_in_index(monkeypatch):
     driver = FakeDriverReturningChunkRefs(["doc1:0", "doc_deleted:5"])
     monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_all_chunks",
-        lambda s: [make_chunk("doc1", 0, "about BM25")],
+        "research_assistant.graph_retrieve.get_chunks_by_refs",
+        fake_chunks_by_refs([make_chunk("doc1", 0, "about BM25")]),
     )
 
     result = local_search(["BM25"], make_settings())
@@ -137,8 +148,8 @@ def test_local_search_dedupes_chunk_refs_across_multiple_rows(monkeypatch):
     driver = FakeDriverReturningChunkRefRows([["doc1:0", "doc2:1"], ["doc2:1", "doc1:0"]])
     monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_all_chunks",
-        lambda s: [make_chunk("doc1", 0, "about BM25"), make_chunk("doc2", 1, "about vectors")],
+        "research_assistant.graph_retrieve.get_chunks_by_refs",
+        fake_chunks_by_refs([make_chunk("doc1", 0, "about BM25"), make_chunk("doc2", 1, "about vectors")]),
     )
 
     result = local_search(["BM25"], make_settings())
@@ -351,3 +362,44 @@ def test_global_search_degrades_on_driver_error_that_is_not_neo4j_error(monkeypa
 
     assert result == []
     assert any(record.levelname == "WARNING" for record in caplog.records)
+
+
+def test_local_search_caps_resolved_refs_at_candidate_pool_size(monkeypatch):
+    """A hub entity's multi-hop traversal can match far more chunks than the reranker should ever see."""
+    refs = [f"doc{i}:0" for i in range(5)]
+    driver = FakeDriverReturningChunkRefs(refs)
+    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
+    requested = []
+
+    def fake_fetch(settings, refs_to_fetch):
+        requested.append(list(refs_to_fetch))
+        return fake_chunks_by_refs([make_chunk(f"doc{i}", 0, f"chunk {i}") for i in range(5)])(
+            settings, refs_to_fetch
+        )
+
+    monkeypatch.setattr("research_assistant.graph_retrieve.get_chunks_by_refs", fake_fetch, raising=False)
+
+    result = local_search(["BM25"], make_settings(candidate_pool_size=2))
+
+    assert len(requested) == 1
+    assert len(requested[0]) == 2
+    assert len(result) == 2
+
+
+def test_local_search_does_not_fetch_the_whole_corpus(monkeypatch):
+    driver = FakeDriverReturningChunkRefs(["doc1:0"])
+    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
+
+    def full_fetch(settings):
+        raise AssertionError("local_search must not load every chunk on each query")
+
+    monkeypatch.setattr("research_assistant.graph_retrieve.get_all_chunks", full_fetch, raising=False)
+    monkeypatch.setattr(
+        "research_assistant.graph_retrieve.get_chunks_by_refs",
+        fake_chunks_by_refs([make_chunk("doc1", 0, "about BM25")]),
+        raising=False,
+    )
+
+    result = local_search(["BM25"], make_settings())
+
+    assert [(d.metadata["source_doc_id"], d.metadata["chunk_index"]) for d in result] == [("doc1", 0)]

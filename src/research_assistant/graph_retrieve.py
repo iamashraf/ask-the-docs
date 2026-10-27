@@ -10,7 +10,7 @@ from langchain_core.documents import Document
 
 from research_assistant.config import Settings
 from research_assistant.graph_client import get_graph_client
-from research_assistant.index import get_all_chunks
+from research_assistant.index import get_chunks_by_refs
 from research_assistant.llm import get_llm_client
 
 logger = logging.getLogger(__name__)
@@ -59,12 +59,11 @@ def local_search(entities: list[str], settings: Settings) -> list[Document]:
         logger.warning("Local search graph traversal failed; returning no graph results.", exc_info=True)
         return []
 
-    refs = {ref for chunk_refs in chunk_refs_lists for ref in chunk_refs}
-    lookup = {
-        f"{doc.metadata['source_doc_id']}:{doc.metadata['chunk_index']}": doc
-        for doc in get_all_chunks(settings)
-    }
-    return [lookup[ref] for ref in refs if ref in lookup]
+    # Capped like the hybrid pool: a hub entity's multi-hop traversal can match
+    # hundreds of chunks, all of which would otherwise reach the reranker.
+    refs = list(dict.fromkeys(ref for chunk_refs in chunk_refs_lists for ref in chunk_refs))
+    refs = refs[: settings.candidate_pool_size]
+    return get_chunks_by_refs(settings, refs)
 
 
 def global_search(query: str, settings: Settings) -> list[Document]:

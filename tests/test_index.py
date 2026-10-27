@@ -14,6 +14,7 @@ from research_assistant.index import (
     chunk_documents,
     get_all_chunks,
     get_chunk_count,
+    get_chunks_by_refs,
     get_collection_name,
     load_index,
 )
@@ -116,6 +117,55 @@ def test_get_all_chunks_returns_every_indexed_chunk(tmp_path, monkeypatch):
     assert len(chunks) == get_chunk_count(settings)
     assert {c.metadata["source"] for c in chunks} == {"a.pdf", "b.pdf"}
     assert all(c.page_content for c in chunks)
+
+
+def _build_two_doc_index(tmp_path, monkeypatch):
+    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    docs = [
+        Document(page_content="alpha " * 200, metadata={"source": "a.pdf", "source_doc_id": "docA"}),
+        Document(page_content="beta " * 200, metadata={"source": "b.pdf", "source_doc_id": "docB"}),
+    ]
+    build_index(docs, settings)
+    return settings
+
+
+def _refs_of(chunks):
+    return {f"{c.metadata['source_doc_id']}:{c.metadata['chunk_index']}" for c in chunks}
+
+
+def test_get_chunks_by_refs_fetches_only_the_requested_chunks(tmp_path, monkeypatch):
+    settings = _build_two_doc_index(tmp_path, monkeypatch)
+
+    chunks = get_chunks_by_refs(settings, ["docA:0", "docB:1"])
+
+    assert _refs_of(chunks) == {"docA:0", "docB:1"}
+    assert all(c.page_content for c in chunks)
+
+
+def test_get_chunks_by_refs_handles_a_single_ref(tmp_path, monkeypatch):
+    settings = _build_two_doc_index(tmp_path, monkeypatch)
+
+    chunks = get_chunks_by_refs(settings, ["docA:1"])
+
+    assert _refs_of(chunks) == {"docA:1"}
+
+
+def test_get_chunks_by_refs_skips_refs_not_in_index(tmp_path, monkeypatch):
+    settings = _build_two_doc_index(tmp_path, monkeypatch)
+
+    chunks = get_chunks_by_refs(settings, ["docA:0", "doc_deleted:5"])
+
+    assert _refs_of(chunks) == {"docA:0"}
+
+
+def test_get_chunks_by_refs_returns_empty_list_for_no_refs(tmp_path, monkeypatch):
+    def no_fetch(settings):
+        raise AssertionError("no refs must not touch Chroma")
+
+    monkeypatch.setattr("research_assistant.index.load_index", no_fetch)
+
+    assert get_chunks_by_refs(make_settings(tmp_path), []) == []
 
 
 def test_get_chunk_count_matches_number_of_chunks_built(tmp_path, monkeypatch):
