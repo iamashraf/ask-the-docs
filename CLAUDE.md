@@ -7,11 +7,14 @@ document sources (white papers, markdown, text, docx, URLs). Educational
 build: implement incrementally, in small reviewed slices, not generated
 wholesale.
 
-Scope: vector + hybrid (BM25) RAG, with cross-encoder reranking and
-LLM-based query rewriting (sub-projects 1-2). Graph RAG (triplet
-extraction, entity resolution, community summaries) is explicitly out of
-scope — its own future spec, not built yet (sub-project 3). Don't add it
-speculatively.
+Scope: vector + hybrid (BM25) RAG with cross-encoder reranking and
+LLM-based query rewriting (sub-project 1-2); Graph RAG — LLM-based
+triplet extraction, embedding-similarity entity resolution, Neo4j GDS
+Leiden community detection/summarization, and local/global query
+routing (sub-project 3) — built, off by default (`graph_enabled`), see
+`docs/ARCHITECTURE.md`/`docs/CONCEPTS.md`. A chatbot/UI consuming the
+existing HTTP API (sub-project 4) is the next planned sub-project, not
+built yet. Don't add it speculatively.
 
 
 ## Conventions
