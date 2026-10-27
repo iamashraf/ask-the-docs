@@ -59,7 +59,14 @@ def summarize_communities(driver: neo4j.Driver, settings: Settings) -> None:
             client = get_llm_client(settings.generator)
             for community_id, names in communities:
                 prompt = _SUMMARY_PROMPT_TEMPLATE.format(names=", ".join(names))
-                summary = client.generate(prompt)
+                try:
+                    summary = client.generate(prompt)
+                except Exception as exc:
+                    # Isolated per community: a transient LLM failure (e.g. Ollama
+                    # unreachable) on one community must not abort the rest, and must
+                    # not undo summaries already written for earlier communities.
+                    logger.warning("Failed to summarize community %s: %s", community_id, exc)
+                    continue
                 # .consume() forces each query to fully execute now, so an error raised
                 # during execution surfaces at this call rather than being deferred and
                 # raised by a later session.run() (neo4j's buffer-on-next-call behavior).
