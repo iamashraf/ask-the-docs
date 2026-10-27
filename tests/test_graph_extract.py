@@ -1,7 +1,11 @@
 import logging
 
 from research_assistant.config import ProviderConfig, Settings
-from research_assistant.graph_extract import Triplet, extract_triplets
+from research_assistant.graph_extract import (
+    Triplet,
+    _strip_code_fence,
+    extract_triplets,
+)
 
 
 def make_settings() -> Settings:
@@ -64,6 +68,44 @@ def test_extract_triplets_returns_empty_list_when_response_is_dict_not_array(mon
     monkeypatch.setattr("research_assistant.graph_extract.get_llm_client", lambda cfg: FakeClient())
 
     assert extract_triplets("some chunk text", make_settings()) == []
+
+
+def test_extract_triplets_parses_fenced_json(monkeypatch):
+    class FakeClient:
+        def generate(self, prompt, system=None):
+            return '```json\n[{"subject": "X", "relation": "Y", "object": "Z"}]\n```'
+
+    monkeypatch.setattr("research_assistant.graph_extract.get_llm_client", lambda cfg: FakeClient())
+
+    result = extract_triplets("some chunk text", make_settings())
+
+    assert result == [Triplet(subject="X", relation="Y", obj="Z")]
+
+
+def test_extract_triplets_returns_empty_list_on_non_str_output(monkeypatch):
+    class FakeClient:
+        def generate(self, prompt, system=None):
+            return None
+
+    monkeypatch.setattr("research_assistant.graph_extract.get_llm_client", lambda cfg: FakeClient())
+
+    assert extract_triplets("some chunk text", make_settings()) == []
+
+
+def test_strip_code_fence_returns_non_str_input_unchanged():
+    assert _strip_code_fence(None) is None
+
+
+def test_strip_code_fence_strips_json_tagged_fence():
+    assert _strip_code_fence('```json\n[1]\n```') == "[1]"
+
+
+def test_strip_code_fence_strips_bare_fence():
+    assert _strip_code_fence('```\n[1]\n```') == "[1]"
+
+
+def test_strip_code_fence_leaves_unfenced_text_unchanged():
+    assert _strip_code_fence("[1]") == "[1]"
 
 
 def test_extract_triplets_includes_chunk_text_in_prompt(monkeypatch):

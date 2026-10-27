@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 
 from research_assistant.config import Settings
@@ -20,6 +21,17 @@ If there are no triplets, respond with an empty array: []
 """
 
 
+FENCED_BLOCK_PATTERN = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL)
+
+
+def _strip_code_fence(raw: str) -> str:
+    """Small/local models often wrap JSON responses in markdown code fences; non-str input is left to json.loads to reject."""
+    if not isinstance(raw, str):
+        return raw
+    match = FENCED_BLOCK_PATTERN.match(raw.strip())
+    return match.group(1) if match else raw
+
+
 @dataclass
 class Triplet:
     subject: str
@@ -33,7 +45,7 @@ def extract_triplets(chunk_text: str, settings: Settings) -> list[Triplet]:
     prompt = TRIPLET_EXTRACTION_PROMPT_TEMPLATE.format(chunk_text=chunk_text)
     raw = client.generate(prompt)
     try:
-        data = json.loads(raw)
+        data = json.loads(_strip_code_fence(raw))
         return [
             Triplet(subject=str(item["subject"]), relation=str(item["relation"]), obj=str(item["object"]))
             for item in data
