@@ -6,6 +6,7 @@ import Page from "../app/page";
 describe("Page", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   test("renders the chat page heading", () => {
@@ -71,5 +72,56 @@ describe("Page", () => {
     render(<Page />);
     await userEvent.type(screen.getByRole("textbox"), "   ");
     expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+  });
+
+  test("shows an empty-state prompt before any message is sent", () => {
+    render(<Page />);
+    expect(screen.getByText(/ask a question/i)).toBeInTheDocument();
+  });
+
+  test("shows a thinking indicator while a request is in flight, then replaces it with the answer", async () => {
+    let resolveFetch: (value: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockReturnValue(
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+      ),
+    );
+
+    render(<Page />);
+    await userEvent.type(screen.getByRole("textbox"), "What is BM25?");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(await screen.findByText(/thinking/i)).toBeInTheDocument();
+
+    resolveFetch!(new Response(JSON.stringify({ answer: "A ranking function.", citations: [] }), { status: 200 }));
+
+    expect(await screen.findByText("A ranking function.")).toBeInTheDocument();
+    expect(screen.queryByText(/thinking/i)).not.toBeInTheDocument();
+  });
+
+  test("auto-focuses the question input on load", () => {
+    render(<Page />);
+    expect(screen.getByRole("textbox")).toHaveFocus();
+  });
+
+  test("scrolls the message log to the latest message when one arrives", async () => {
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ answer: "Answer.", citations: [] }), { status: 200 }),
+      ),
+    );
+
+    render(<Page />);
+    await userEvent.type(screen.getByRole("textbox"), "anything");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText("Answer.");
+
+    expect(scrollIntoView).toHaveBeenCalled();
   });
 });

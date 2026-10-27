@@ -1,13 +1,23 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChatMessage, type Message } from "../components/ChatMessage";
 
 export default function Page() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView();
+  }, [messages, loading]);
 
   const canSend = input.trim().length > 0 && !loading;
 
@@ -59,9 +69,18 @@ export default function Page() {
         </nav>
       </header>
       <div className="message-log">
+        {messages.length === 0 && !loading && (
+          <p className="empty-state">Ask a question about the indexed documents to get started.</p>
+        )}
         {messages.map((message, i) => (
           <ChatMessage key={i} message={message} />
         ))}
+        {loading && (
+          <div className="message message--assistant message--thinking">
+            <p>Thinking…</p>
+          </div>
+        )}
+        <div ref={bottomRef} />
       </div>
       <form
         className="composer"
@@ -71,6 +90,7 @@ export default function Page() {
         }}
       >
         <input
+          ref={inputRef}
           type="text"
           aria-label="Question"
           placeholder="Ask a question about the indexed documents…"

@@ -99,6 +99,17 @@ a {
   border: 1px solid var(--error-border);
 }
 
+.message--thinking p {
+  color: var(--ink-muted);
+  font-style: italic;
+}
+
+.empty-state {
+  color: var(--ink-muted);
+  text-align: center;
+  margin-top: 2rem;
+}
+
 .message__citations {
   margin: 0.4rem 0 0;
   padding: 0;
