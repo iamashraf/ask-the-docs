@@ -142,6 +142,22 @@ def test_evaluate_overrides_query_rewrite_enabled(monkeypatch):
     assert captured_settings["rewrite"] is False
 
 
+def test_evaluate_overrides_graph_enabled(monkeypatch):
+    captured_settings = {}
+
+    def fake_run_evaluation(settings, questions_path):
+        captured_settings["graph"] = settings.graph_enabled
+        return []
+
+    monkeypatch.setattr("research_assistant.cli.run_evaluation", fake_run_evaluation)
+
+    parser = build_parser()
+    args = parser.parse_args(["evaluate", "--graph", "true"])
+    args.func(args, make_settings())
+
+    assert captured_settings["graph"] is True
+
+
 def test_evaluate_rejects_hybrid_alpha_out_of_range(monkeypatch):
     monkeypatch.setattr("research_assistant.cli.run_evaluation", lambda settings, path: [])
     parser = build_parser()

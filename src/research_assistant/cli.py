@@ -56,6 +56,8 @@ def _evaluate(args: argparse.Namespace, settings) -> None:
         overrides["rerank_enabled"] = args.rerank == "true"
     if args.query_rewrite is not None:
         overrides["query_rewrite_enabled"] = args.query_rewrite == "true"
+    if args.graph is not None:
+        overrides["graph_enabled"] = args.graph == "true"
     if overrides:
         # model_copy(update=...) skips validation entirely -- model_validate
         # re-runs it, so an out-of-range --hybrid-alpha is rejected here the
@@ -101,6 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_parser.add_argument("--hybrid-alpha", type=float, default=None)
     evaluate_parser.add_argument("--rerank", choices=["true", "false"], default=None)
     evaluate_parser.add_argument("--query-rewrite", choices=["true", "false"], default=None)
+    evaluate_parser.add_argument("--graph", choices=["true", "false"], default=None)
     evaluate_parser.set_defaults(func=_evaluate)
 
     serve_parser = subparsers.add_parser("serve", help="Run the long-running HTTP API server")
