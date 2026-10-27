@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     system_prompt_template: str = DEFAULT_SYSTEM_PROMPT_TEMPLATE
     cache_url: str = "redis://localhost:6379/0"
 
+    graph_enabled: bool = False
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: SecretStr = SecretStr("neo4j")
+    entity_resolution_similarity_threshold: float = Field(default=0.85, ge=0.0, le=1.0)
+    graph_traversal_hop_depth: int = Field(default=2, ge=1)
+    global_search_top_communities: int = Field(default=3, ge=1)
+
     model_config = SettingsConfigDict(env_nested_delimiter="__", extra="ignore")
 
 

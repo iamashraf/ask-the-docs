@@ -122,3 +122,27 @@ def test_settings_loads_nested_fields_from_env_vars(monkeypatch):
     assert settings.judge.provider == "anthropic"
     assert settings.judge.api_key.get_secret_value() == "sk-test"
     assert settings.embeddings_backend == "huggingface"
+
+
+def test_settings_graph_defaults():
+    settings = Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+    )
+    assert settings.graph_enabled is False
+    assert settings.neo4j_uri == "bolt://localhost:7687"
+    assert settings.neo4j_user == "neo4j"
+    assert settings.neo4j_password.get_secret_value() == "neo4j"
+    assert settings.entity_resolution_similarity_threshold == 0.85
+    assert settings.graph_traversal_hop_depth == 2
+    assert settings.global_search_top_communities == 3
+
+
+def test_existing_settings_construction_unaffected_by_graph_fields():
+    # Every other test file constructs Settings with no graph kwargs; graph_enabled
+    # must stay False so retrieve()'s classification branch (Task 13) stays off for them.
+    settings = Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+    )
+    assert settings.graph_enabled is False

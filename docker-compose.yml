@@ -33,6 +33,26 @@ services:
       timeout: 5s
       retries: 10
 
+  neo4j:
+    image: neo4j:5
+    # NEO4J_AUTH (user/password) comes from .env.local; compose ${VAR} substitution
+    # would read .env, not .env.local, so the whole file is passed through instead.
+    env_file:
+      - .env.local
+    environment:
+      - NEO4J_PLUGINS=["graph-data-science"]
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_plugins:/plugins
+    ports:
+      - "7687:7687"
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$${NEO4J_AUTH#*/}\" 'RETURN 1' || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
   app:
     image: localhost/research-assistant-app
     build: .
@@ -41,6 +61,8 @@ services:
       ollama-init:
         condition: service_completed_successfully
       valkey:
+        condition: service_healthy
+      neo4j:
         condition: service_healthy
     volumes:
       - ./data:/app/data
@@ -63,3 +85,6 @@ services:
 volumes:
   ollama_data:
   valkey_data:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_plugins:
