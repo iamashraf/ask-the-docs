@@ -127,6 +127,22 @@ def get_all_chunks(settings: Settings) -> list[Document]:
     ]
 
 
+def get_chunks_by_refs(settings: Settings, refs: list[str]) -> list[Document]:
+    """Targeted fetch of "source_doc_id:chunk_index" refs; Chroma rejects $or/$and with fewer than two clauses."""
+    if not refs:
+        return []
+    clauses = []
+    for ref in refs:
+        source_doc_id, chunk_index = ref.rsplit(":", 1)
+        clauses.append({"$and": [{"source_doc_id": source_doc_id}, {"chunk_index": int(chunk_index)}]})
+    where = clauses[0] if len(clauses) == 1 else {"$or": clauses}
+    result = load_index(settings).get(where=where, include=["metadatas", "documents"])
+    return [
+        Document(page_content=content, metadata=metadata)
+        for content, metadata in zip(result["documents"], result["metadatas"])
+    ]
+
+
 def get_chunk_count(settings: Settings) -> int:
     """Cheap collection size, used as the cache-staleness signal -- avoids
     fetching every chunk's content just to check if anything changed."""
