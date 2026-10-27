@@ -1,3 +1,5 @@
+import logging
+
 from research_assistant.config import ProviderConfig, Settings
 from research_assistant.graph_extract import Triplet, extract_triplets
 
@@ -35,6 +37,29 @@ def test_extract_triplets_returns_empty_list_when_items_missing_required_field(m
     class FakeClient:
         def generate(self, prompt, system=None):
             return '[{"subject": "Transformer"}]'
+
+    monkeypatch.setattr("research_assistant.graph_extract.get_llm_client", lambda cfg: FakeClient())
+
+    assert extract_triplets("some chunk text", make_settings()) == []
+
+
+def test_extract_triplets_logs_warning_on_malformed_json(monkeypatch, caplog):
+    class FakeClient:
+        def generate(self, prompt, system=None):
+            return "not json"
+
+    monkeypatch.setattr("research_assistant.graph_extract.get_llm_client", lambda cfg: FakeClient())
+
+    with caplog.at_level(logging.WARNING, logger="research_assistant.graph_extract"):
+        extract_triplets("some chunk text", make_settings())
+
+    assert any("invalid JSON" in record.message for record in caplog.records)
+
+
+def test_extract_triplets_returns_empty_list_when_response_is_dict_not_array(monkeypatch):
+    class FakeClient:
+        def generate(self, prompt, system=None):
+            return '{"triplets": [{"subject": "A", "relation": "uses", "object": "B"}]}'
 
     monkeypatch.setattr("research_assistant.graph_extract.get_llm_client", lambda cfg: FakeClient())
 
