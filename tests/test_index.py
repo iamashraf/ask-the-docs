@@ -17,6 +17,7 @@ from research_assistant.index import (
     get_collection_name,
     load_index,
 )
+from research_assistant.llm import OllamaUnavailableError
 
 
 def make_settings(tmp_path, embeddings_backend: str = "ollama", graph_enabled: bool = False) -> Settings:
@@ -177,6 +178,25 @@ def test_build_graph_degrades_when_write_graph_raises(tmp_path, monkeypatch, cap
     )
 
 
+def test_build_graph_degrades_when_extract_triplets_raises(tmp_path, monkeypatch, caplog):
+    # A hard failure (e.g. the LLM backend itself unreachable), not just the
+    # malformed-output case extract_triplets already degrades internally --
+    # must not crash build_graph, same as the narrower Neo4j-specific catch.
+    def boom(chunk_text, settings):
+        raise OllamaUnavailableError("ollama is down")
+
+    monkeypatch.setattr("research_assistant.index.extract_triplets", boom)
+    settings = make_settings(tmp_path, graph_enabled=True)
+
+    with caplog.at_level(logging.WARNING):
+        build_graph([make_chunk("doc1", 0, "text")], settings)  # must not raise
+
+    assert any(
+        record.name == "research_assistant.index" and "graph" in record.message.lower()
+        for record in caplog.records
+    )
+
+
 def test_build_graph_pairs_resolved_triplets_with_correct_chunk_refs(tmp_path, monkeypatch):
     def fake_extract(chunk_text, settings):
         return {
@@ -298,6 +318,21 @@ def test_build_index_completes_vector_indexing_when_graph_build_degrades(tmp_pat
         raise ServiceUnavailable("down")
 
     monkeypatch.setattr("research_assistant.index.get_graph_client", boom)
+    settings = make_settings(tmp_path, graph_enabled=True)
+    doc = Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    build_index([doc], settings)  # must not raise
+
+    assert get_chunk_count(settings) > 0
+
+
+def test_build_index_completes_vector_indexing_when_graph_extraction_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
+
+    def boom(chunk_text, settings):
+        raise OllamaUnavailableError("ollama is down")
+
+    monkeypatch.setattr("research_assistant.index.extract_triplets", boom)
     settings = make_settings(tmp_path, graph_enabled=True)
     doc = Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
 
