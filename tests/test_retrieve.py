@@ -1,6 +1,7 @@
 import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+from neo4j.exceptions import SessionExpired
 
 from research_assistant.config import ProviderConfig, Settings
 from research_assistant.index import build_index
@@ -398,3 +399,30 @@ def test_retrieve_keeps_local_search_match_when_hybrid_pool_is_already_full(tmp_
     result = retrieve("how does BM25 relate to vectors?", settings, k=10)
 
     assert graph_only_doc in result
+
+
+def test_retrieve_falls_back_to_hybrid_when_local_search_raises(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "research_assistant.retrieve.classify_query",
+        lambda q, s: QueryClassification(label="local", entities=["BM25"]),
+    )
+
+    def failing_local_search(entities, settings):
+        raise SessionExpired("connection dropped mid-session")
+
+    monkeypatch.setattr("research_assistant.retrieve.local_search", failing_local_search)
+
+    hybrid_doc = _doc("hybrid-hit")
+
+    class FakeIndex:
+        def similarity_search_with_score(self, query, k):
+            return [(hybrid_doc, 0.1)]
+
+    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("research_assistant.retrieve.bm25_score", lambda query, settings: [])
+
+    settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
+    # must not propagate -- a crashing local_search must degrade to hybrid, not crash the request
+    result = retrieve("how does BM25 relate to vectors?", settings, k=5)
+
+    assert result == [hybrid_doc]
