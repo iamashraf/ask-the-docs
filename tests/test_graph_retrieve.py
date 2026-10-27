@@ -1,5 +1,7 @@
+import logging
+
 from langchain_core.documents import Document
-from neo4j.exceptions import ServiceUnavailable
+from neo4j.exceptions import ClientError, ServiceUnavailable
 
 from research_assistant.config import ProviderConfig, Settings
 from research_assistant.graph_retrieve import local_search
@@ -54,6 +56,32 @@ class FakeDriverReturningChunkRefs:
         return self.session_obj
 
 
+class FakeSessionReturningChunkRefRows:
+    """Like FakeSessionReturningChunkRefs but models multiple graph rows, one per connected entity."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.queries = []
+
+    def run(self, query, **params):
+        self.queries.append((query, params))
+        return FakeReadResult([{"chunk_refs": row} for row in self._rows])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class FakeDriverReturningChunkRefRows:
+    def __init__(self, rows):
+        self.session_obj = FakeSessionReturningChunkRefRows(rows)
+
+    def session(self):
+        return self.session_obj
+
+
 def test_local_search_returns_matching_chunks(monkeypatch):
     driver = FakeDriverReturningChunkRefs(["doc1:0", "doc2:1"])
     monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
@@ -88,8 +116,7 @@ def test_local_search_degrades_on_neo4j_unavailable(monkeypatch):
 
 
 def test_local_search_skips_stale_chunk_refs_not_in_index(monkeypatch):
-    """Re-ingestion doesn't clear old graph data, so a chunk_ref can point at
-    content no longer in the index -- local_search must skip it, not KeyError."""
+    """Stale chunk_ref from re-ingestion (nothing clears old graph data) must be skipped, not KeyError."""
     driver = FakeDriverReturningChunkRefs(["doc1:0", "doc_deleted:5"])
     monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
     monkeypatch.setattr(
@@ -100,3 +127,75 @@ def test_local_search_skips_stale_chunk_refs_not_in_index(monkeypatch):
     result = local_search(["BM25"], make_settings())
 
     assert {(d.metadata["source_doc_id"], d.metadata["chunk_index"]) for d in result} == {("doc1", 0)}
+
+
+def test_local_search_dedupes_chunk_refs_across_multiple_rows(monkeypatch):
+    """graph_store writes the same chunk_ref onto both triplet endpoints, so overlapping rows are the realistic shape."""
+    driver = FakeDriverReturningChunkRefRows([["doc1:0", "doc2:1"], ["doc2:1", "doc1:0"]])
+    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
+    monkeypatch.setattr(
+        "research_assistant.graph_retrieve.get_all_chunks",
+        lambda s: [make_chunk("doc1", 0, "about BM25"), make_chunk("doc2", 1, "about vectors")],
+    )
+
+    result = local_search(["BM25"], make_settings())
+
+    assert len(result) == 2
+    assert {(d.metadata["source_doc_id"], d.metadata["chunk_index"]) for d in result} == {
+        ("doc1", 0),
+        ("doc2", 1),
+    }
+
+
+def test_local_search_degrades_when_session_run_raises_service_unavailable(monkeypatch, caplog):
+    class RaisingRunSession:
+        def run(self, query, **params):
+            raise ServiceUnavailable("connection lost mid-transaction")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class DriverWithRaisingSession:
+        def session(self):
+            return RaisingRunSession()
+
+    monkeypatch.setattr(
+        "research_assistant.graph_retrieve.get_graph_client", lambda s: DriverWithRaisingSession()
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = local_search(["BM25"], make_settings())  # must not raise
+
+    assert result == []
+    assert any(record.levelname == "WARNING" for record in caplog.records)
+
+
+def test_local_search_degrades_on_neo4j_client_error(monkeypatch, caplog):
+    """Exercises the Neo4jError half of the except tuple."""
+
+    class SessionRaisingClientError:
+        def run(self, query, **params):
+            raise ClientError("some client error")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class DriverRaisingClientError:
+        def session(self):
+            return SessionRaisingClientError()
+
+    monkeypatch.setattr(
+        "research_assistant.graph_retrieve.get_graph_client", lambda s: DriverRaisingClientError()
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = local_search(["BM25"], make_settings())  # must not raise
+
+    assert result == []
+    assert any(record.levelname == "WARNING" for record in caplog.records)
