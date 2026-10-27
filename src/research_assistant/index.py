@@ -68,7 +68,14 @@ def build_graph(chunks: list[Document], settings: Settings) -> None:
         chunk_refs = []
         for chunk in chunks:
             chunk_ref = f"{chunk.metadata['source_doc_id']}:{chunk.metadata['chunk_index']}"
-            for triplet in extract_triplets(chunk.page_content, settings):
+            try:
+                chunk_triplets = extract_triplets(chunk.page_content, settings)
+            except Exception as exc:
+                # Isolated per chunk: one transient LLM failure must not abort
+                # graph building for every other chunk in the ingest.
+                logger.warning("Graph triplet extraction failed for chunk %s: %s", chunk_ref, exc)
+                continue
+            for triplet in chunk_triplets:
                 triplets.append(triplet)
                 chunk_refs.append(chunk_ref)
 
