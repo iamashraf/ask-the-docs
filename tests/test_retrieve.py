@@ -371,3 +371,30 @@ def test_retrieve_dedupes_local_search_against_existing_hybrid_candidate(tmp_pat
     result = retrieve("how does BM25 relate to vectors?", settings, k=5)
 
     assert result.count(shared_doc) == 1  # hybrid already found it -- local_search must not duplicate it
+
+
+def test_retrieve_keeps_local_search_match_when_hybrid_pool_is_already_full(tmp_path, monkeypatch):
+    # vector_hits alone fills candidate_pool_size on any corpus >= that size,
+    # so hybrid_merge's output is already at the pool-size limit before the
+    # local_search union happens. The graph-only doc must still survive.
+    pool_size = 3
+    hybrid_docs = [_doc(f"hybrid{i}") for i in range(pool_size)]
+    graph_only_doc = make_chunk("doc9", 0, "only found via graph traversal")
+
+    monkeypatch.setattr(
+        "research_assistant.retrieve.classify_query",
+        lambda q, s: QueryClassification(label="local", entities=["BM25"]),
+    )
+    monkeypatch.setattr("research_assistant.retrieve.local_search", lambda entities, s: [graph_only_doc])
+
+    class FakeIndex:
+        def similarity_search_with_score(self, query, k):
+            return [(doc, 0.1 * (i + 1)) for i, doc in enumerate(hybrid_docs)]
+
+    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("research_assistant.retrieve.bm25_score", lambda query, settings: [])
+
+    settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True, "candidate_pool_size": pool_size})
+    result = retrieve("how does BM25 relate to vectors?", settings, k=10)
+
+    assert graph_only_doc in result
