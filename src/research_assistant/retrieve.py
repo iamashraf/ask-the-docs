@@ -102,13 +102,20 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
         if hit[1] > 0
     ][: settings.candidate_pool_size]
 
-    candidates = [doc for doc, _ in hybrid_merge(vector_hits, bm25_hits, settings.hybrid_alpha)]
+    candidates = [doc for doc, _ in hybrid_merge(vector_hits, bm25_hits, settings.hybrid_alpha)][
+        : settings.candidate_pool_size
+    ]
     if classification.entities:
+        # Appended after the pool-size truncation, not before: vector_hits alone
+        # already fills candidate_pool_size on any corpus of that size or larger,
+        # so truncating after the union would silently drop every graph-only
+        # match almost always. Letting the pool grow slightly past
+        # candidate_pool_size here is intended -- rerank()/candidates[:k] below
+        # both already handle an arbitrary-length candidate list.
         seen = {_doc_key(doc) for doc in candidates}
         candidates += [
             doc for doc in local_search(classification.entities, settings) if _doc_key(doc) not in seen
         ]
-    candidates = candidates[: settings.candidate_pool_size]
 
     if settings.rerank_enabled:
         return get_reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
