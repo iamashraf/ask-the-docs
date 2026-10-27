@@ -403,3 +403,46 @@ def test_local_search_does_not_fetch_the_whole_corpus(monkeypatch):
     result = local_search(["BM25"], make_settings())
 
     assert [(d.metadata["source_doc_id"], d.metadata["chunk_index"]) for d in result] == [("doc1", 0)]
+
+
+class FakeSessionMatchingEntityNames:
+    """Emulates the start-entity match: case-insensitive only if the query lowercases both sides."""
+
+    def __init__(self, stored_names, chunk_refs):
+        self._stored_names = stored_names
+        self._chunk_refs = chunk_refs
+        self.queries = []
+
+    def run(self, query, **params):
+        self.queries.append((query, params))
+        if "toLower(start.name) IN [e IN $entities | toLower(e)]" in query:
+            wanted = {e.lower() for e in params["entities"]}
+            matched = any(name.lower() in wanted for name in self._stored_names)
+        else:
+            matched = any(name in params["entities"] for name in self._stored_names)
+        return FakeReadResult([{"chunk_refs": self._chunk_refs}] if matched else [])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_local_search_matches_entities_case_insensitively(monkeypatch):
+    """classify_query's LLM-extracted entities rarely match the stored canonical casing exactly."""
+    session = FakeSessionMatchingEntityNames(stored_names=["BM25"], chunk_refs=["doc1:0"])
+
+    class Driver:
+        def session(self):
+            return session
+
+    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: Driver())
+    monkeypatch.setattr(
+        "research_assistant.graph_retrieve.get_chunks_by_refs",
+        fake_chunks_by_refs([make_chunk("doc1", 0, "about BM25")]),
+    )
+
+    result = local_search(["bm25"], make_settings())
+
+    assert [(d.metadata["source_doc_id"], d.metadata["chunk_index"]) for d in result] == [("doc1", 0)]

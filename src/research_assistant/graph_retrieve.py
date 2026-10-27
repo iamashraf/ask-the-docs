@@ -16,7 +16,7 @@ from research_assistant.llm import get_llm_client
 logger = logging.getLogger(__name__)
 
 _LOCAL_SEARCH_QUERY_TEMPLATE = (
-    "MATCH (start:Entity) WHERE start.name IN $entities "
+    "MATCH (start:Entity) WHERE toLower(start.name) IN [e IN $entities | toLower(e)] "
     "MATCH (start)-[:RELATED_TO*1..{hop_depth}]-(connected:Entity) "
     "RETURN DISTINCT connected.chunk_refs AS chunk_refs"
 )
