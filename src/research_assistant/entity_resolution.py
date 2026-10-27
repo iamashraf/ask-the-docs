@@ -37,6 +37,7 @@ def resolve_entities(triplets: list[Triplet], settings: Settings) -> list[Triple
         root_i, root_j = find(i), find(j)
         if root_i == root_j:
             return
+        # Merge by index, not rank/size -- canonical-name lookup relies on root == first-seen index.
         if root_i < root_j:
             parent[root_j] = root_i
         else:
