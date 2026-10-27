@@ -261,6 +261,41 @@ def test_build_graph_degrades_when_extract_triplets_raises(tmp_path, monkeypatch
     )
 
 
+def test_build_graph_continues_past_extraction_failure_for_one_chunk(tmp_path, monkeypatch, caplog):
+    """A transient LLM failure on one chunk must not abort graph building for every other chunk."""
+
+    def flaky_extract(chunk_text, settings):
+        if chunk_text == "doc1 text 2":
+            raise OllamaUnavailableError("down")
+        return {"doc1 text": [Triplet("A", "uses", "B")], "doc2 text": [Triplet("C", "implements", "D")]}[
+            chunk_text
+        ]
+
+    written = {}
+    monkeypatch.setattr("research_assistant.index.extract_triplets", flaky_extract)
+    monkeypatch.setattr("research_assistant.index.resolve_entities", lambda triplets, s: triplets)
+    monkeypatch.setattr("research_assistant.index.get_graph_client", lambda s: "fake-driver")
+    monkeypatch.setattr(
+        "research_assistant.index.write_graph", lambda driver, chunk_triplets: written.update(ct=chunk_triplets)
+    )
+    monkeypatch.setattr("research_assistant.index.run_community_detection", lambda driver: None)
+    monkeypatch.setattr("research_assistant.index.summarize_communities", lambda driver, s: None)
+
+    chunks = [
+        make_chunk("doc1", 0, "doc1 text"),
+        make_chunk("doc1", 1, "doc1 text 2"),
+        make_chunk("doc2", 0, "doc2 text"),
+    ]
+    with caplog.at_level(logging.WARNING):
+        build_graph(chunks, make_settings(tmp_path, graph_enabled=True))
+
+    assert written["ct"] == [
+        (Triplet("A", "uses", "B"), "doc1:0"),
+        (Triplet("C", "implements", "D"), "doc2:0"),
+    ]
+    assert any(record.levelname == "WARNING" for record in caplog.records)
+
+
 def test_build_graph_pairs_resolved_triplets_with_correct_chunk_refs(tmp_path, monkeypatch):
     def fake_extract(chunk_text, settings):
         return {
