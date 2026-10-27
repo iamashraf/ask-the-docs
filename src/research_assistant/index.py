@@ -62,25 +62,30 @@ def build_graph(chunks: list[Document], settings: Settings) -> None:
     if not settings.graph_enabled:
         return
 
-    triplets = []
-    chunk_refs = []
-    for chunk in chunks:
-        chunk_ref = f"{chunk.metadata['source_doc_id']}:{chunk.metadata['chunk_index']}"
-        for triplet in extract_triplets(chunk.page_content, settings):
-            triplets.append(triplet)
-            chunk_refs.append(chunk_ref)
-
-    if not triplets:
-        return
-
-    # Resolved once over the whole corpus's triplets, not per chunk -- entity
-    # clustering needs every entity name in play to merge well.
-    resolved_triplets = resolve_entities(triplets, settings)
-
     try:
-        driver = get_graph_client(settings)
-        write_graph(driver, list(zip(resolved_triplets, chunk_refs, strict=True)))
-    except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
+        triplets = []
+        chunk_refs = []
+        for chunk in chunks:
+            chunk_ref = f"{chunk.metadata['source_doc_id']}:{chunk.metadata['chunk_index']}"
+            for triplet in extract_triplets(chunk.page_content, settings):
+                triplets.append(triplet)
+                chunk_refs.append(chunk_ref)
+
+        if not triplets:
+            return
+
+        # Resolved once over the whole corpus's triplets, not per chunk -- entity
+        # clustering needs every entity name in play to merge well.
+        resolved_triplets = resolve_entities(triplets, settings)
+
+        try:
+            driver = get_graph_client(settings)
+            write_graph(driver, list(zip(resolved_triplets, chunk_refs, strict=True)))
+        except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
+            logger.warning("Graph write failed; continuing without updating the graph.", exc_info=True)
+    except Exception:
+        # Graph building is an optional enhancement, same reasoning as
+        # retrieve.py's query-rewrite step -- it must never crash ingestion.
         logger.warning("Graph build failed; continuing without updating the graph.", exc_info=True)
 
 
