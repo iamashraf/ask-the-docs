@@ -35,11 +35,10 @@ services:
 
   neo4j:
     image: neo4j:5
-    # NEO4J_AUTH (user/password) comes from .env.local; compose ${VAR} substitution
-    # would read .env, not .env.local, so the whole file is passed through instead.
-    env_file:
-      - .env.local
+    # ${NEO4J_AUTH} is interpolated from .env.local only when compose is run with
+    # `--env-file .env.local`; a plain `compose up` leaves it empty.
     environment:
+      - NEO4J_AUTH=${NEO4J_AUTH}
       - NEO4J_PLUGINS=["graph-data-science"]
     volumes:
       - neo4j_data:/data
@@ -61,8 +60,6 @@ services:
       ollama-init:
         condition: service_completed_successfully
       valkey:
-        condition: service_healthy
-      neo4j:
         condition: service_healthy
     volumes:
       - ./data:/app/data
