@@ -15,6 +15,7 @@ _READ_COMMUNITIES_QUERY = (
     "MATCH (e:Entity) WHERE e.communityId IS NOT NULL "
     "RETURN e.communityId AS id, collect(e.name) AS names"
 )
+_DELETE_COMMUNITIES_QUERY = "MATCH (c:Community) DETACH DELETE c"
 _WRITE_SUMMARY_QUERY = "MERGE (c:Community {id: $id}) SET c.summary = $summary"
 
 _SUMMARY_PROMPT_TEMPLATE = (
@@ -49,6 +50,9 @@ def run_community_detection(driver: neo4j.Driver) -> None:
 def summarize_communities(driver: neo4j.Driver, settings: Settings) -> None:
     try:
         with driver.session() as session:
+            # Leiden community IDs aren't stable between runs, so MERGE alone would
+            # leave a previous run's communities behind for global_search to read.
+            session.run(_DELETE_COMMUNITIES_QUERY).consume()
             result = session.run(_READ_COMMUNITIES_QUERY)
             # Materialize rows before .consume() and before issuing any writes: the
             # real driver streams records lazily, so writes in the same session
