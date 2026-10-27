@@ -8,6 +8,7 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from research_assistant.community import run_community_detection, summarize_communities
 from research_assistant.config import Settings
 from research_assistant.embeddings import get_embeddings
 from research_assistant.entity_resolution import resolve_entities
@@ -78,11 +79,18 @@ def build_graph(chunks: list[Document], settings: Settings) -> None:
         # clustering needs every entity name in play to merge well.
         resolved_triplets = resolve_entities(triplets, settings)
 
+        driver = None
         try:
             driver = get_graph_client(settings)
             write_graph(driver, list(zip(resolved_triplets, chunk_refs, strict=True)))
         except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
             logger.warning("Graph write failed; continuing without updating the graph.", exc_info=True)
+
+        # Skip if get_graph_client itself failed above -- no driver to run
+        # community detection/summarization with.
+        if driver is not None:
+            run_community_detection(driver)
+            summarize_communities(driver, settings)
     except Exception:
         # Graph building is an optional enhancement, same reasoning as
         # retrieve.py's query-rewrite step -- it must never crash ingestion.
