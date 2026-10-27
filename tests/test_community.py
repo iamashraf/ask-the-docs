@@ -296,7 +296,9 @@ def test_summarize_communities_degrades_when_write_consume_fails(monkeypatch, ca
             self.queries.append((query, params))
             if "RETURN" in query:
                 return FakeReadResult([{"id": 0, "names": ["Transformer"]}])
-            return FakeResult(raise_on_consume=ServiceUnavailable("write failed on consume"))
+            if "MERGE" in query:
+                return FakeResult(raise_on_consume=ServiceUnavailable("write failed on consume"))
+            return FakeResult()
 
         def __enter__(self):
             return self
@@ -319,7 +321,7 @@ def test_summarize_communities_degrades_when_write_consume_fails(monkeypatch, ca
 
     queries = [q for q, _ in driver.session_obj.queries]
     assert any("RETURN" in q for q in queries)
-    assert any("Community" in q for q in queries)
+    assert any("MERGE" in q and "Community" in q for q in queries)
     assert any(record.levelname == "WARNING" for record in caplog.records)
 
 
@@ -366,3 +368,16 @@ def test_run_community_detection_degrades_on_neo4j_client_error(caplog):
         run_community_detection(DriverGdsMissing())  # must not raise
 
     assert any(record.levelname == "WARNING" for record in caplog.records)
+
+
+def test_summarize_communities_deletes_previous_communities_before_writing(monkeypatch):
+    """Leiden IDs aren't stable across runs, so a previous run's communities must not linger."""
+    driver = FakeDriverWithCommunities({0: ["Transformer"]})
+    monkeypatch.setattr("research_assistant.community.get_llm_client", lambda cfg: FakeClient("a summary"))
+
+    summarize_communities(driver, make_settings())
+
+    queries = [q for q, _ in driver.session_obj.queries]
+    delete_idx = next(i for i, q in enumerate(queries) if "MATCH (c:Community) DETACH DELETE c" in q)
+    first_write_idx = next(i for i, q in enumerate(queries) if "MERGE (c:Community" in q)
+    assert delete_idx < first_write_idx
