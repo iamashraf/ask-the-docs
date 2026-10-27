@@ -55,6 +55,14 @@ def test_run_community_detection_projects_runs_leiden_and_drops_projection():
     assert project_idx < leiden_idx < drop_idx
 
 
+def test_run_community_detection_projects_relationships_as_undirected():
+    """GDS Leiden refuses directed graphs, so the projection itself must be undirected."""
+    driver = FakeDriver()
+    run_community_detection(driver)
+    project_query = next(q for q, p in driver.session_obj.queries if "gds.graph.project" in q)
+    assert "UNDIRECTED" in project_query
+
+
 def test_run_community_detection_degrades_on_neo4j_unavailable():
     class BrokenDriver:
         def session(self):

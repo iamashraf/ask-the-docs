@@ -30,7 +30,7 @@ def run_community_detection(driver: neo4j.Driver) -> None:
             # during execution surfaces at this call rather than being deferred and
             # raised by a later session.run() (neo4j's buffer-on-next-call behavior).
             session.run(
-                "CALL gds.graph.project($graph_name, 'Entity', 'RELATED_TO')",
+                "CALL gds.graph.project($graph_name, 'Entity', {RELATED_TO: {orientation: 'UNDIRECTED'}})",
                 graph_name=_GRAPH_NAME,
             ).consume()
             try:
