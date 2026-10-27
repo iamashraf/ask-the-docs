@@ -20,3 +20,7 @@
 - question: "What caused the 2008 global financial crisis?"
   notes: "unrelated to the seeded corpus"
   expected_refusal: true
+- question: "How does the ReAct agent framework build on Chain-of-Thought prompting?"
+  notes: "specific named entities and the relationship between them -- should classify as local"
+- question: "What are the major themes connecting the reasoning and prompting papers in this corpus?"
+  notes: "corpus-wide synthesis across many documents, no single named entity -- should classify as global"
