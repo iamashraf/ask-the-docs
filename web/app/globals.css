@@ -2,3 +2,27 @@ body {
   margin: 0;
   font-family: system-ui, sans-serif;
 }
+
+.message {
+  max-width: 70%;
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+}
+
+.message--user {
+  margin-left: auto;
+  background: #e8f0fe;
+}
+
+.message--assistant {
+  margin-right: auto;
+  background: #f1f1f1;
+}
+
+.message--error {
+  margin-right: auto;
+  background: #fdecea;
+  color: #611a15;
+  border: 1px solid #f5c6cb;
+}

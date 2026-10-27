@@ -17,12 +17,25 @@ export async function POST(request: Request) {
     );
   }
 
-  const data = await backendResponse.json();
+  let data: unknown;
+  try {
+    data = await backendResponse.json();
+  } catch {
+    // An unhandled backend exception falls through to a plain-text 500,
+    // not JSON -- degrade to a visible error rather than letting this
+    // throw and produce no response at all.
+    return Response.json(
+      { error: "The backend returned an unexpected response." },
+      { status: 502 },
+    );
+  }
 
   if (!backendResponse.ok) {
-    return Response.json({ error: data.detail ?? "Request failed." }, {
-      status: backendResponse.status,
-    });
+    const detail = (data as { detail?: unknown }).detail;
+    return Response.json(
+      { error: typeof detail === "string" ? detail : "Request failed." },
+      { status: backendResponse.status },
+    );
   }
 
   return Response.json(data, { status: backendResponse.status });

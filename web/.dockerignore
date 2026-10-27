@@ -3,3 +3,6 @@ node_modules
 .git
 tests
 e2e
+test-results
+playwright-report
+next-env.d.ts
