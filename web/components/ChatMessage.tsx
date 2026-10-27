@@ -5,9 +5,10 @@ export type Message = {
 };
 
 export function ChatMessage({ message }: { message: Message }) {
+  const isError = message.role === "error";
   return (
-    <div className={`message message--${message.role}`}>
-      <p>{message.text}</p>
+    <div className={`message message--${message.role}`} role={isError ? "alert" : undefined}>
+      <p>{isError ? `Error: ${message.text}` : message.text}</p>
       {message.citations && message.citations.length > 0 && (
         <ul className="message__citations">
           {message.citations.map((citation) => (

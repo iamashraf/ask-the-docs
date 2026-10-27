@@ -49,7 +49,17 @@ describe("Page", () => {
     await userEvent.type(screen.getByRole("textbox"), "anything");
     await userEvent.click(screen.getByRole("button", { name: /send/i }));
 
-    expect(await screen.findByText("Backend unreachable")).toBeInTheDocument();
+    expect(await screen.findByText(/Backend unreachable/)).toBeInTheDocument();
+  });
+
+  test("shows an error message when fetch itself rejects (client can't reach /api/ask)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+
+    render(<Page />);
+    await userEvent.type(screen.getByRole("textbox"), "anything");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(await screen.findByText(/couldn't reach the server/i)).toBeInTheDocument();
   });
 
   test("the send button is disabled for empty input", () => {

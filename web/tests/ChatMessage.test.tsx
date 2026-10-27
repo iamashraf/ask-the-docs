@@ -27,8 +27,17 @@ describe("ChatMessage", () => {
     const { container } = render(
       <ChatMessage message={{ role: "error", text: "Couldn't reach the server" }} />,
     );
-    expect(screen.getByText("Couldn't reach the server")).toBeInTheDocument();
+    expect(screen.getByText(/Couldn't reach the server/)).toBeInTheDocument();
     expect(container.querySelector(".message--error")).not.toBeNull();
     expect(container.querySelector(".message--assistant")).toBeNull();
+  });
+
+  test("an error message is visibly labeled, not just differently classed", () => {
+    render(<ChatMessage message={{ role: "error", text: "Couldn't reach the server" }} />);
+    // role="alert" is both an accessibility signal and a real, testable
+    // guarantee that an error renders differently from a plain message --
+    // a CSS class alone isn't enough (a reviewer specifically flagged this).
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText(/^Error:/)).toBeInTheDocument();
   });
 });

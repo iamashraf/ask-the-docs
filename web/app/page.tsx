@@ -34,6 +34,15 @@ export default function Page() {
           { role: "assistant", text: data.answer, citations: data.citations },
         ]);
       }
+    } catch {
+      // The browser couldn't reach /api/ask at all (e.g. the web
+      // container itself is down) -- /api/ask's own route handler already
+      // degrades a backend-side failure to a normal JSON error response,
+      // so this only covers the client-side fetch failing outright.
+      setMessages((prev) => [
+        ...prev,
+        { role: "error", text: "Couldn't reach the server — is it running?" },
+      ]);
     } finally {
       setLoading(false);
     }
