@@ -23,12 +23,15 @@ def write_graph(driver: neo4j.Driver, chunk_triplets: list[tuple[Triplet, str]])
     try:
         with driver.session() as session:
             for triplet, chunk_ref in chunk_triplets:
+                # .consume() forces each query to fully execute now, so an error raised
+                # during execution surfaces at this call rather than being deferred and
+                # raised by a later session.run() (neo4j's buffer-on-next-call behavior).
                 session.run(
                     _MERGE_TRIPLET_QUERY,
                     subject=triplet.subject,
                     relation=triplet.relation,
                     object=triplet.obj,
                     chunk_ref=chunk_ref,
-                )
+                ).consume()
     except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
         logger.warning("Graph write failed; continuing without updating the graph.", exc_info=True)

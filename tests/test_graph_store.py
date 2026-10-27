@@ -7,12 +7,24 @@ from research_assistant.graph_extract import Triplet
 from research_assistant.graph_store import write_graph
 
 
+class FakeResult:
+    """Mimics neo4j.Result: errors from query execution surface on .consume()."""
+
+    def __init__(self, raise_on_consume=None):
+        self._raise_on_consume = raise_on_consume
+
+    def consume(self):
+        if self._raise_on_consume is not None:
+            raise self._raise_on_consume
+
+
 class FakeSession:
     def __init__(self):
         self.queries = []
 
     def run(self, query, **params):
         self.queries.append((query, params))
+        return FakeResult()
 
     def __enter__(self):
         return self
@@ -101,4 +113,46 @@ def test_write_graph_degrades_when_session_run_raises(caplog):
             DriverWithRaisingSession(), [(Triplet(subject="A", relation="uses", obj="B"), "doc1:0")]
         )  # must not raise
 
+    assert any(record.levelname == "WARNING" for record in caplog.records)
+
+
+def test_write_graph_warns_when_last_triplets_consume_fails(caplog):
+    """Real neo4j driver defers execution errors to .consume(), not to run() itself.
+    If write_graph doesn't call .consume() on each result, a failure on the LAST
+    triplet in a batch has no later run() call to surface it on, so it would be
+    dropped silently -- no exception, no warning. This proves we consume() each
+    result so that failure is caught and logged instead."""
+
+    class SessionLastConsumeFails:
+        def __init__(self):
+            self.queries = []
+
+        def run(self, query, **params):
+            self.queries.append((query, params))
+            if params.get("subject") == "C":
+                return FakeResult(raise_on_consume=ServiceUnavailable("write lost on consume"))
+            return FakeResult()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class DriverLastConsumeFails:
+        def __init__(self):
+            self.session_obj = SessionLastConsumeFails()
+
+        def session(self):
+            return self.session_obj
+
+    driver = DriverLastConsumeFails()
+    chunk_triplets = [
+        (Triplet(subject="A", relation="uses", obj="B"), "doc1:0"),
+        (Triplet(subject="C", relation="implements", obj="D"), "doc2:3"),
+    ]
+    with caplog.at_level(logging.WARNING):
+        write_graph(driver, chunk_triplets)  # must not raise
+
+    assert len(driver.session_obj.queries) == 2
     assert any(record.levelname == "WARNING" for record in caplog.records)
