@@ -1,5 +1,4 @@
-"""LLM-based triplet extraction: pulls (subject, relation, object) facts out
-of a chunk of text, as a first step toward building a knowledge graph."""
+"""LLM-based triplet extraction: pulls (subject, relation, object) facts out of a chunk of text."""
 
 import json
 import logging
@@ -40,5 +39,8 @@ def extract_triplets(chunk_text: str, settings: Settings) -> list[Triplet]:
             for item in data
         ]
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        logger.warning("Triplet extraction response was not parseable JSON; skipping chunk.", exc_info=True)
+        # ValueError is unreachable through this function's own logic (no float()/int()
+        # calls like evaluate.judge's), but kept for shape-consistency with judge's except
+        # tuple -- json.JSONDecodeError already subclasses ValueError, so it's harmless.
+        logger.warning("Triplet extraction response was invalid JSON or had an unexpected shape; skipping chunk.", exc_info=True)
         return []
