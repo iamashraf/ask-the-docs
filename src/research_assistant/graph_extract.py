@@ -39,8 +39,6 @@ def extract_triplets(chunk_text: str, settings: Settings) -> list[Triplet]:
             for item in data
         ]
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        # ValueError is unreachable through this function's own logic (no float()/int()
-        # calls like evaluate.judge's), but kept for shape-consistency with judge's except
-        # tuple -- json.JSONDecodeError already subclasses ValueError, so it's harmless.
+        # Unreachable here; kept to match evaluate.judge's except tuple.
         logger.warning("Triplet extraction response was invalid JSON or had an unexpected shape; skipping chunk.", exc_info=True)
         return []
