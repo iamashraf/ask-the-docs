@@ -1,5 +1,6 @@
 """Chunking and the per-embeddings-backend Chroma vector index."""
 
+import hashlib
 import logging
 from datetime import UTC, datetime
 
@@ -22,9 +23,22 @@ CHUNK_SIZE = 512
 CHUNK_OVERLAP = 50
 
 
+def _hash_sources(docs: list[Document]) -> dict[str, str]:
+    """SHA-256 of each source_doc_id's full raw content (every Document
+    sharing that id, concatenated in input order), computed before
+    chunking -- lets a re-ingest detect an unchanged source without
+    comparing chunk-by-chunk."""
+    content_by_id: dict[str, str] = {}
+    for doc in docs:
+        doc_id = doc.metadata["source_doc_id"]
+        content_by_id[doc_id] = content_by_id.get(doc_id, "") + doc.page_content
+    return {doc_id: hashlib.sha256(content.encode()).hexdigest() for doc_id, content in content_by_id.items()}
+
+
 def chunk_documents(docs: list[Document], embedding_model: str) -> list[Document]:
     """Splits docs into chunks and tags each with chunk_index/total_chunks
-    (per source_doc_id), embedding_model, and ingested_at."""
+    (per source_doc_id), embedding_model, ingested_at, and content_hash."""
+    source_hashes = _hash_sources(docs)
     splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     chunks = splitter.split_documents(docs)
 
@@ -41,6 +55,7 @@ def chunk_documents(docs: list[Document], embedding_model: str) -> list[Document
         chunk.metadata["total_chunks"] = totals[doc_id]
         chunk.metadata["embedding_model"] = embedding_model
         chunk.metadata["ingested_at"] = ingested_at
+        chunk.metadata["content_hash"] = source_hashes[doc_id]
         running_index[doc_id] = chunk.metadata["chunk_index"] + 1
 
     return chunks
