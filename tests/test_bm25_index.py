@@ -60,7 +60,7 @@ def test_score_matches_keyword_despite_surrounding_punctuation(tmp_path, monkeyp
     ]
     settings = make_settings(tmp_path)
     monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", lambda s: chunks)
-    monkeypatch.setattr("ask_the_docs.bm25_index.get_chunk_count", lambda s: len(chunks))
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: len(chunks))
     monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
 
     scores = score("What is LoRA?", settings)
@@ -73,7 +73,7 @@ def test_score_matches_keyword_despite_surrounding_punctuation(tmp_path, monkeyp
 def test_score_ranks_keyword_matches_higher(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", lambda s: FIXTURE_CHUNKS)
-    monkeypatch.setattr("ask_the_docs.bm25_index.get_chunk_count", lambda s: len(FIXTURE_CHUNKS))
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: len(FIXTURE_CHUNKS))
     monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
 
     scores = score("transformer attention", settings)
@@ -92,7 +92,7 @@ def test_get_bm25_index_skips_rebuild_on_cache_hit(tmp_path, monkeypatch):
 
     shared_cache = FakeCache()
     monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", fake_get_all_chunks)
-    monkeypatch.setattr("ask_the_docs.bm25_index.get_chunk_count", lambda s: 2)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: 2)
     monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: shared_cache)
 
     get_bm25_index(settings)
@@ -117,7 +117,7 @@ def test_get_bm25_index_rebuilds_when_cached_value_is_corrupted(tmp_path, monkey
             pass
 
     monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", fake_get_all_chunks)
-    monkeypatch.setattr("ask_the_docs.bm25_index.get_chunk_count", lambda s: 3)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: 3)
     monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: CorruptedCache())
 
     bm25, chunks = get_bm25_index(settings)
@@ -129,16 +129,20 @@ def test_get_bm25_index_rebuilds_when_cached_value_is_corrupted(tmp_path, monkey
 def test_score_returns_empty_list_for_an_empty_corpus(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", lambda s: [])
-    monkeypatch.setattr("ask_the_docs.bm25_index.get_chunk_count", lambda s: 0)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: 0)
     monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
 
     assert score("anything", settings) == []
 
 
-def test_get_bm25_index_rebuilds_when_live_chunk_count_changes(tmp_path, monkeypatch):
+def test_get_bm25_index_rebuilds_when_index_generation_changes_even_with_same_chunk_count(tmp_path, monkeypatch):
+    """A content change that happens to produce the same number of chunks
+    (e.g. a same-length edit) must still bust this cache -- chunk count
+    alone can't distinguish it, which is why the cache key uses the
+    index generation (bumped on every real write) instead."""
     settings = make_settings(tmp_path)
     calls = {"count": 0}
-    counts = [2, 3]
+    generations = [2, 3]
 
     def fake_get_all_chunks(s):
         calls["count"] += 1
@@ -146,7 +150,7 @@ def test_get_bm25_index_rebuilds_when_live_chunk_count_changes(tmp_path, monkeyp
 
     shared_cache = FakeCache()
     monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", fake_get_all_chunks)
-    monkeypatch.setattr("ask_the_docs.bm25_index.get_chunk_count", lambda s: counts.pop(0))
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: generations.pop(0))
     monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: shared_cache)
 
     get_bm25_index(settings)
@@ -156,8 +160,11 @@ def test_get_bm25_index_rebuilds_when_live_chunk_count_changes(tmp_path, monkeyp
 
 
 def test_get_bm25_index_degrades_to_no_results_when_chroma_fails(tmp_path, monkeypatch, caplog):
+    # Deliberately does not mock get_index_generation: the cache key must
+    # be computable (it reads a local file, not Chroma) without going near
+    # the broken get_all_chunks below, so this proves the fail-open fires
+    # for a real Chroma outage, not just a mocked-around one.
     monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
-    monkeypatch.setattr("ask_the_docs.bm25_index.get_chunk_count", lambda s: 1)
 
     def boom(settings):
         raise RuntimeError("chroma unavailable")

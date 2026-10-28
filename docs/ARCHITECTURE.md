@@ -88,8 +88,10 @@ Both the CLI (`ingest`/`index`/`ask`/`evaluate`/`serve`) and the HTTP API
   `Protocol`/factory pair (`llm.py`, `embeddings.py`), so swapping
   providers is a config change, not a code change.
 - **Caching** — exact-match query cache (Valkey), keyed on the query plus
-  every setting that affects the answer (including corpus chunk count),
-  so a re-ingest invalidates stale entries automatically.
+  every setting that affects the answer (including the index generation,
+  a counter bumped on every real ingest write), so a re-ingest
+  invalidates stale entries automatically, even one that replaces a
+  source with the same chunk count.
 - **Graph RAG (local/global search)** — at ingest time, an LLM extracts
   (subject, relation, object) triplets per chunk, resolved to canonical
   entities by embedding similarity and written to Neo4j; Neo4j GDS Leiden
