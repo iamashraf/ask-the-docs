@@ -84,14 +84,18 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
             if global_results:
                 return global_results[:k]
 
-    index = load_index(settings)
-    # Chroma's distance is "lower = more similar"; negate so that, after
-    # min-max normalization, the closest match ends up near 1.0 like BM25's
-    # "higher = more relevant" scores, instead of inverting the ranking.
-    vector_hits = [
-        (doc, -distance)
-        for doc, distance in index.similarity_search_with_score(search_query, k=settings.candidate_pool_size)
-    ]
+    try:
+        index = load_index(settings)
+        # Chroma's distance is "lower = more similar"; negate so that, after
+        # min-max normalization, the closest match ends up near 1.0 like BM25's
+        # "higher = more relevant" scores, instead of inverting the ranking.
+        vector_hits = [
+            (doc, -distance)
+            for doc, distance in index.similarity_search_with_score(search_query, k=settings.candidate_pool_size)
+        ]
+    except Exception:
+        logger.warning("Vector search failed; falling back to BM25-only results.", exc_info=True)
+        vector_hits = []
     # A score of 0 means "no keyword overlap at all" (e.g. an out-of-vocabulary
     # query) -- excluding it keeps that chunk from tying every other
     # zero-score chunk at normalized score 1.0 ("all equal" rule) and
