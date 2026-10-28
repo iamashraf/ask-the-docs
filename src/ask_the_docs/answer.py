@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 
 CITATION_PATTERN = re.compile(r"\[(\d+)\]")
 ANSWER_CACHE_TTL_SECONDS = 86400
+# A local LLM's citation formatting is non-deterministic -- it occasionally
+# fails to emit [n] markers (or cites an invalid one) on a question it could
+# otherwise answer correctly. One retry resolves the large majority of these
+# without materially changing worst-case latency.
+MAX_GENERATION_ATTEMPTS = 2
 
 
 @dataclasses.dataclass
@@ -43,8 +48,9 @@ def build_prompt(query: str, context: str) -> str:
 
 def citation_guardrail_passes(answer_text: str, num_chunks: int) -> bool:
     """Deterministic backstop: fails an answer with no [n] markers at all,
-    or one that cites a chunk number that doesn't exist -- no retry, no
-    extra LLM call, just a hard pass/fail on the model's own citations."""
+    or one that cites a chunk number that doesn't exist. Pure pass/fail on
+    one piece of text -- the retry-on-failure policy lives in the caller,
+    not here."""
     citations = CITATION_PATTERN.findall(answer_text)
     if not citations:
         return False
@@ -69,13 +75,19 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
     client = get_llm_client(settings.generator)
     prompt = build_prompt(query, context)
     logger.debug("LLM call -- system=%r, prompt=%r", settings.system_prompt_template, prompt)
-    text = client.generate(prompt, system=settings.system_prompt_template)
 
-    if not citation_guardrail_passes(text, num_chunks=len(chunks)):
-        return AnswerResult(text=REFUSAL_MESSAGE, citations=[])
+    for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
+        text = client.generate(prompt, system=settings.system_prompt_template)
+        if citation_guardrail_passes(text, num_chunks=len(chunks)):
+            citations = list(dict.fromkeys(chunk.metadata["source"] for chunk in chunks))
+            return AnswerResult(text=text, citations=citations, context=context)
+        logger.warning(
+            "Generated answer failed the citation guardrail (attempt %d/%d).",
+            attempt,
+            MAX_GENERATION_ATTEMPTS,
+        )
 
-    citations = list(dict.fromkeys(chunk.metadata["source"] for chunk in chunks))
-    return AnswerResult(text=text, citations=citations, context=context)
+    return AnswerResult(text=REFUSAL_MESSAGE, citations=[])
 
 
 def answer(query: str, settings: Settings, k: int = 5) -> AnswerResult:
