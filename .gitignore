@@ -5,13 +5,19 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
+.ruff_cache/
 
 # Virtual environments
 .venv
 
 # Secrets and local data
 .env
+.env.local
 data/index/*
 !data/index/.gitkeep
-data/papers/*
-!data/papers/.gitkeep
+data/documents/*
+!data/documents/.gitkeep
+
+# superpowers execution scratch (ledgers/briefs, not project artifacts)
+.superpowers/

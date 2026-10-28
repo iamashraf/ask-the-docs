@@ -1,0 +1,301 @@
+import logging
+from types import SimpleNamespace
+
+import pytest
+from fastapi.testclient import TestClient
+from langchain_core.documents import Document
+
+from ask_the_docs.answer import AnswerResult
+from ask_the_docs.api import app
+from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.evaluate import EvalResult, JudgeScore
+from ask_the_docs.ingest import PathSecurityError, UnsupportedFileTypeError, UrlSecurityError
+from ask_the_docs.llm import OllamaUnavailableError
+
+
+def make_settings() -> Settings:
+    return Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+    )
+
+
+def test_startup_triggers_seeding(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    captured = {}
+    monkeypatch.setattr(
+        "ask_the_docs.api.seed_if_needed", lambda settings: captured.setdefault("called", True)
+    )
+
+    with TestClient(app):
+        pass
+
+    assert captured.get("called") is True
+
+
+def test_health_returns_ok():
+    client = TestClient(app)
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_ingest_calls_dispatch_and_build_index(monkeypatch):
+    docs = [Document(page_content="x", metadata={"source": "a.pdf", "source_doc_id": "1"})]
+    monkeypatch.setattr("ask_the_docs.api.dispatch", lambda source: docs)
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    captured = {}
+    monkeypatch.setattr(
+        "ask_the_docs.api.build_index", lambda d, settings: captured.setdefault("docs", d)
+    )
+
+    response = TestClient(app).post("/v1/ingest", json={"source": "a.pdf"})
+
+    assert response.status_code == 200
+    assert response.json() == {"documents_ingested": 1}
+    assert captured["docs"] == docs
+
+
+def test_ingest_rejects_empty_source():
+    response = TestClient(app).post("/v1/ingest", json={"source": ""})
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("exc_class", [PathSecurityError, UrlSecurityError, UnsupportedFileTypeError])
+def test_ingest_returns_400_for_security_and_type_errors(monkeypatch, exc_class):
+    def raise_error(source):
+        raise exc_class("bad source")
+
+    monkeypatch.setattr("ask_the_docs.api.dispatch", raise_error)
+
+    response = TestClient(app).post("/v1/ingest", json={"source": "bad"})
+
+    assert response.status_code == 400
+
+
+def test_ingest_returns_404_for_missing_file(monkeypatch):
+    def raise_error(source):
+        raise FileNotFoundError(source)
+
+    monkeypatch.setattr("ask_the_docs.api.dispatch", raise_error)
+
+    response = TestClient(app).post("/v1/ingest", json={"source": "missing.pdf"})
+
+    assert response.status_code == 404
+
+
+def test_index_discovers_docs_dir_and_builds_index(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.api.get_settings", lambda: SimpleNamespace(docs_dir=tmp_path)
+    )
+    monkeypatch.setattr(
+        "ask_the_docs.api.discover_sources",
+        lambda docs_dir: [tmp_path / "a.pdf", tmp_path / "b.pdf"],
+    )
+    monkeypatch.setattr("ask_the_docs.api.dispatch", lambda source: [f"doc-for-{source}"])
+    captured = {}
+    monkeypatch.setattr(
+        "ask_the_docs.api.build_index", lambda d, s: captured.setdefault("docs", d)
+    )
+
+    response = TestClient(app).post("/v1/index")
+
+    assert response.status_code == 200
+    assert response.json() == {"documents_ingested": 2, "files_found": 2}
+    assert captured["docs"] == ["doc-for-a.pdf", "doc-for-b.pdf"]
+
+
+def test_ask_returns_answer_and_citations(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    captured = {}
+
+    def fake_answer(query, settings, k):
+        captured["query"] = query
+        captured["k"] = k
+        return AnswerResult(text="42", citations=["a.pdf"], context="ctx")
+
+    monkeypatch.setattr("ask_the_docs.api.answer", fake_answer)
+
+    response = TestClient(app).post("/v1/ask", json={"query": "What is X?"})
+
+    assert response.status_code == 200
+    assert response.json() == {"answer": "42", "citations": ["a.pdf"]}
+    assert captured["query"] == "What is X?"
+    assert captured["k"] == 5
+
+
+def test_ask_rejects_empty_query():
+    response = TestClient(app).post("/v1/ask", json={"query": ""})
+    assert response.status_code == 422
+
+
+def test_ask_rejects_non_positive_k():
+    response = TestClient(app).post("/v1/ask", json={"query": "hi", "k": 0})
+    assert response.status_code == 422
+
+
+def test_ask_returns_503_when_ollama_unavailable(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+
+    def raise_error(query, settings, k):
+        raise OllamaUnavailableError("could not reach ollama")
+
+    monkeypatch.setattr("ask_the_docs.api.answer", raise_error)
+
+    response = TestClient(app).post("/v1/ask", json={"query": "hi"})
+
+    assert response.status_code == 503
+
+
+def test_evaluate_returns_results(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    results = [
+        EvalResult(
+            question="Q1",
+            score=JudgeScore(
+                accuracy=1.0,
+                answer_relevance=1.0,
+                context_relevance=1.0,
+                completeness=1.0,
+                justification="ok",
+            ),
+            error=None,
+        ),
+        EvalResult(question="Q2", score=None, error="boom"),
+    ]
+    monkeypatch.setattr("ask_the_docs.api.run_evaluation", lambda settings, path: results)
+
+    response = TestClient(app).post("/v1/evaluate", json={})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["results"][0]["question"] == "Q1"
+    assert body["results"][0]["score"]["accuracy"] == 1.0
+    assert body["results"][0]["error"] is None
+    assert body["results"][1]["score"] is None
+    assert body["results"][1]["error"] == "boom"
+
+
+def test_evaluate_overrides_embeddings_backend(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    captured = {}
+
+    def fake_run_evaluation(settings, path):
+        captured["backend"] = settings.embeddings_backend
+        return []
+
+    monkeypatch.setattr("ask_the_docs.api.run_evaluation", fake_run_evaluation)
+
+    response = TestClient(app).post("/v1/evaluate", json={"embeddings": "huggingface"})
+
+    assert response.status_code == 200
+    assert captured["backend"] == "huggingface"
+
+
+def test_evaluate_rejects_invalid_embeddings_value():
+    response = TestClient(app).post("/v1/evaluate", json={"embeddings": "bogus"})
+    assert response.status_code == 422
+
+
+def test_evaluate_overrides_hybrid_alpha(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    captured = {}
+
+    def fake_run_evaluation(settings, path):
+        captured["alpha"] = settings.hybrid_alpha
+        return []
+
+    monkeypatch.setattr("ask_the_docs.api.run_evaluation", fake_run_evaluation)
+
+    response = TestClient(app).post("/v1/evaluate", json={"hybrid_alpha": 0.8})
+
+    assert response.status_code == 200
+    assert captured["alpha"] == 0.8
+
+
+def test_evaluate_overrides_rerank_enabled(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    captured = {}
+
+    def fake_run_evaluation(settings, path):
+        captured["rerank"] = settings.rerank_enabled
+        return []
+
+    monkeypatch.setattr("ask_the_docs.api.run_evaluation", fake_run_evaluation)
+
+    response = TestClient(app).post("/v1/evaluate", json={"rerank_enabled": False})
+
+    assert response.status_code == 200
+    assert captured["rerank"] is False
+
+
+def test_evaluate_overrides_query_rewrite_enabled(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    captured = {}
+
+    def fake_run_evaluation(settings, path):
+        captured["rewrite"] = settings.query_rewrite_enabled
+        return []
+
+    monkeypatch.setattr("ask_the_docs.api.run_evaluation", fake_run_evaluation)
+
+    response = TestClient(app).post("/v1/evaluate", json={"query_rewrite_enabled": False})
+
+    assert response.status_code == 200
+    assert captured["rewrite"] is False
+
+
+def test_evaluate_rejects_hybrid_alpha_out_of_range():
+    response = TestClient(app).post("/v1/evaluate", json={"hybrid_alpha": 1.5})
+    assert response.status_code == 422
+
+
+def test_evaluate_accepts_hybrid_alpha_boundary_values(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    captured = []
+    monkeypatch.setattr(
+        "ask_the_docs.api.run_evaluation",
+        lambda settings, path: captured.append(settings.hybrid_alpha) or [],
+    )
+
+    low = TestClient(app).post("/v1/evaluate", json={"hybrid_alpha": 0.0})
+    high = TestClient(app).post("/v1/evaluate", json={"hybrid_alpha": 1.0})
+
+    assert low.status_code == 200 and high.status_code == 200
+    assert captured == [0.0, 1.0]
+
+
+def test_evaluate_combines_multiple_overrides_in_one_call(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    captured = {}
+
+    def fake_run_evaluation(settings, path):
+        captured["backend"] = settings.embeddings_backend
+        captured["alpha"] = settings.hybrid_alpha
+        captured["rerank"] = settings.rerank_enabled
+        captured["rewrite"] = settings.query_rewrite_enabled
+        return []
+
+    monkeypatch.setattr("ask_the_docs.api.run_evaluation", fake_run_evaluation)
+
+    response = TestClient(app).post(
+        "/v1/evaluate",
+        json={
+            "embeddings": "huggingface",
+            "hybrid_alpha": 0.8,
+            "rerank_enabled": False,
+            "query_rewrite_enabled": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured == {"backend": "huggingface", "alpha": 0.8, "rerank": False, "rewrite": False}
+
+
+def test_package_logger_configured_for_info_with_a_handler():
+    """Importing api.py must configure the ask_the_docs logger so
+    INFO-level messages (e.g. seed.py's progress logs) actually reach
+    console output -- uvicorn only configures its own loggers, not ours."""
+    package_logger = logging.getLogger("ask_the_docs")
+    assert package_logger.getEffectiveLevel() <= logging.INFO
+    assert len(package_logger.handlers) >= 1
