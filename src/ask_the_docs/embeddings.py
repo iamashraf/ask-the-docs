@@ -14,7 +14,8 @@ OLLAMA_EMBED_TIMEOUT_SECONDS = 30
 
 
 class OllamaEmbeddings(Embeddings):
-    """Talks to a local Ollama server's /api/embeddings endpoint."""
+    """Talks to a local Ollama server's /api/embeddings (single) and
+    /api/embed (batch) endpoints."""
 
     def __init__(self, model: str, base_url: str):
         self.model = model
@@ -30,7 +31,15 @@ class OllamaEmbeddings(Embeddings):
         return response.json()["embedding"]
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [self.embed_query(text) for text in texts]
+        if not texts:
+            return []
+        response = requests.post(
+            f"{self.base_url}/api/embed",
+            json={"model": self.model, "input": texts},
+            timeout=OLLAMA_EMBED_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return response.json()["embeddings"]
 
 
 class HuggingFaceEmbeddings(Embeddings):

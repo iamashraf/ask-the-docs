@@ -62,18 +62,30 @@ def test_ollama_embeddings_embed_query_calls_api(monkeypatch):
     assert captured["json"] == {"model": "nomic-embed-text", "prompt": "hello"}
 
 
-def test_ollama_embeddings_embed_documents_calls_api_per_text(monkeypatch):
-    calls = []
+def test_ollama_embeddings_embed_documents_calls_api_once_with_all_texts(monkeypatch):
+    captured = {}
 
     def fake_post(url, json, timeout):
-        calls.append(json["prompt"])
-        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"embedding": [1.0]})
+        captured["url"] = url
+        captured["json"] = json
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"embeddings": [[1.0], [2.0]]})
 
     monkeypatch.setattr(requests, "post", fake_post)
 
     emb = OllamaEmbeddings(model="nomic-embed-text", base_url="http://localhost:11434")
-    assert emb.embed_documents(["a", "b"]) == [[1.0], [1.0]]
-    assert calls == ["a", "b"]
+    assert emb.embed_documents(["a", "b"]) == [[1.0], [2.0]]
+    assert captured["url"] == "http://localhost:11434/api/embed"
+    assert captured["json"] == {"model": "nomic-embed-text", "input": ["a", "b"]}
+
+
+def test_ollama_embeddings_embed_documents_of_empty_list_skips_the_request(monkeypatch):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("must not call the API for an empty text list")
+
+    monkeypatch.setattr(requests, "post", fail_if_called)
+
+    emb = OllamaEmbeddings(model="nomic-embed-text", base_url="http://localhost:11434")
+    assert emb.embed_documents([]) == []
 
 
 def test_huggingface_embeddings_embed_query_uses_model_encode(monkeypatch):
