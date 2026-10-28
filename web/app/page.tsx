@@ -62,7 +62,7 @@ export default function Page() {
   return (
     <div className="app">
       <header className="masthead">
-        <h1>Research Assistant</h1>
+        <h1>Marginalia</h1>
         <p>Grounded answers, cited sources.</p>
         <nav>
           <Link href="/ingest">Add documents</Link>
