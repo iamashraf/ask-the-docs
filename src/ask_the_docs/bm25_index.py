@@ -2,6 +2,7 @@
 so neither the CLI's one-shot processes nor the long-running API server
 rebuild it from scratch on every query."""
 
+import logging
 import pickle
 import re
 
@@ -11,6 +12,8 @@ from rank_bm25 import BM25Okapi
 from ask_the_docs.cache import cache_get, cache_set, get_cache_client, make_cache_key
 from ask_the_docs.config import Settings
 from ask_the_docs.index import get_all_chunks, get_chunk_count, get_collection_name
+
+logger = logging.getLogger(__name__)
 
 BM25_CACHE_TTL_SECONDS = 86400
 
@@ -43,7 +46,11 @@ def get_bm25_index(settings: Settings) -> tuple[BM25Okapi, list[Document]]:
             # answer cache's corruption handling.
             pass
 
-    chunks = get_all_chunks(settings)
+    try:
+        chunks = get_all_chunks(settings)
+    except Exception:
+        logger.warning("Reading chunks from Chroma for the BM25 index failed; degrading to no BM25 results.", exc_info=True)
+        return None, []
     # BM25Okapi divides by corpus size internally -- an empty corpus (nothing
     # ingested yet) would otherwise raise ZeroDivisionError.
     bm25 = BM25Okapi([_tokenize(chunk.page_content) for chunk in chunks]) if chunks else None

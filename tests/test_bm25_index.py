@@ -1,3 +1,5 @@
+import logging
+
 from langchain_core.documents import Document
 
 from ask_the_docs.bm25_index import get_bm25_index, score
@@ -151,3 +153,20 @@ def test_get_bm25_index_rebuilds_when_live_chunk_count_changes(tmp_path, monkeyp
     get_bm25_index(settings)
 
     assert calls["count"] == 2
+
+
+def test_get_bm25_index_degrades_to_no_results_when_chroma_fails(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_chunk_count", lambda s: 1)
+
+    def boom(settings):
+        raise RuntimeError("chroma unavailable")
+
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", boom)
+
+    with caplog.at_level(logging.WARNING):
+        bm25, chunks = get_bm25_index(make_settings(tmp_path))
+
+    assert bm25 is None
+    assert chunks == []
+    assert any("chroma" in record.message.lower() or "bm25" in record.message.lower() for record in caplog.records)
