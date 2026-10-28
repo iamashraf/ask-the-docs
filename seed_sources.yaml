@@ -1,0 +1,31 @@
+# Auto-ingested once when the API server starts (ask_the_docs.api's
+# lifespan hook). A marker file in data/index/ prevents re-ingesting on
+# every container restart -- see ask_the_docs.seed.
+#
+# Ordered roughly as a learning path: architecture -> RAG -> alignment ->
+# reasoning/prompting techniques.
+
+# Core architecture & scaling
+- https://arxiv.org/pdf/1706.03762   # Attention Is All You Need
+- https://arxiv.org/pdf/2005.14165   # Language Models are Few-Shot Learners (GPT-3)
+
+# Retrieval-augmented generation
+- https://arxiv.org/pdf/2005.11401   # Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks
+
+# Alignment & fine-tuning
+- https://arxiv.org/pdf/2203.02155   # Training LMs to Follow Instructions with Human Feedback (InstructGPT/RLHF)
+- https://arxiv.org/pdf/2106.09685   # LoRA: Low-Rank Adaptation of Large Language Models
+
+# Reasoning & prompting techniques
+- https://arxiv.org/pdf/2201.11903   # Chain-of-Thought Prompting Elicits Reasoning in LLMs
+- https://arxiv.org/pdf/2203.11171   # Self-Consistency Improves Chain of Thought Reasoning
+- https://arxiv.org/pdf/2210.03629   # ReAct: Synergizing Reasoning and Acting in Language Models
+- https://arxiv.org/pdf/2305.10601   # Tree of Thoughts
+- https://arxiv.org/pdf/2401.04398   # Chain-of-Table
+- https://arxiv.org/pdf/2311.04254   # Everything of Thoughts
+- https://arxiv.org/pdf/2310.11324   # Quantifying LLM Sensitivity to Spurious Features in Prompt Design
+
+# LLM behavior & applications
+- https://www.lakera.ai/blog/what-is-in-context-learning
+- https://arxiv.org/pdf/2301.06627   # Dissociating Language and Thought in LLMs
+- https://arxiv.org/pdf/2308.16361   # LLMs as Data Preprocessors
