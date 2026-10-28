@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
@@ -455,3 +457,21 @@ def test_retrieve_keeps_local_search_match_in_top_k_when_rerank_disabled(tmp_pat
 
     assert len(result) == 2
     assert graph_only_doc in result
+
+
+def test_retrieve_falls_back_to_bm25_only_when_vector_search_fails(tmp_path, monkeypatch, caplog):
+    class BrokenIndex:
+        def similarity_search_with_score(self, query, k):
+            raise RuntimeError("chroma unavailable")
+
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: BrokenIndex())
+    bm25_doc = _doc("b1")
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [(bm25_doc, 1.0)])
+
+    settings = make_settings(tmp_path)
+    with caplog.at_level(logging.WARNING):
+        results = retrieve("anything", settings, k=1)
+
+    assert len(results) == 1
+    assert results[0].metadata["source_doc_id"] == "b1"
+    assert any("vector search" in record.message.lower() for record in caplog.records)
