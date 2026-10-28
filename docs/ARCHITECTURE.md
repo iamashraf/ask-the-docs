@@ -102,3 +102,32 @@ Both the CLI (`ingest`/`index`/`ask`/`evaluate`/`serve`) and the HTTP API
   hybrid/rerank. Off by default (`graph_enabled`); every Neo4j/LLM call on
   this path degrades to the plain hybrid result rather than failing the
   request.
+
+## Tech stack & rationale
+
+- **Chroma** — the vector store (`index.py`). Runs embedded in-process
+  against a local persistence directory, so there's no separate database
+  server to run or operate, matching this project's local-first,
+  minimal-footprint posture.
+- **Valkey** (Redis-protocol) — the cache (`cache.py`): BM25 index
+  rebuilds and exact-match answers, both keyed to invalidate
+  automatically on re-ingest. An open-source, Linux-Foundation-backed
+  fork rather than Redis itself, avoiding Redis Inc.'s post-2024
+  source-available licensing.
+- **Neo4j, with GDS** — the graph store for Graph RAG (`graph_store.py`,
+  `community.py`), off by default. Leiden community detection runs
+  *in the database* via the GDS library against the graph already
+  stored there, instead of pulling the whole graph into Python for a
+  separate algorithm library.
+- **FastAPI** — the HTTP API (`api.py`). Pydantic request/response
+  models give it the same validation idiom already used for `Settings`
+  (`config.py`), rather than a second one.
+- **Ollama, pluggable** — the default LLM/embeddings backend
+  (`llm.py`, `embeddings.py`): runs locally, no API key needed for the
+  core pipeline. Anthropic/OpenAI swap in via config alone (same
+  `LLMClient`/`Embeddings` interface) — e.g. for the judge role in
+  evaluation — without touching call sites.
+- **Podman- or Docker-compose** — the whole stack (Ollama, Valkey,
+  Neo4j, the app) is one standard compose file; Podman's rootless,
+  daemonless execution is the documented default, with Docker Compose
+  working against the same file.
