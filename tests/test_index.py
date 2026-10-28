@@ -80,6 +80,43 @@ def test_chunk_documents_indexes_restart_per_source_doc():
     assert [c.metadata["chunk_index"] for c in b_chunks] == list(range(len(b_chunks)))
 
 
+def test_chunk_documents_sets_content_hash_metadata():
+    doc = Document(page_content="hello world", metadata={"source": "a.txt", "source_doc_id": "a"})
+    chunks = chunk_documents([doc], embedding_model="m")
+    assert all("content_hash" in c.metadata for c in chunks)
+
+
+def test_chunk_documents_content_hash_is_same_across_a_multi_page_source():
+    page1 = Document(page_content="page one", metadata={"source": "a.pdf", "source_doc_id": "a"})
+    page2 = Document(page_content="page two", metadata={"source": "a.pdf", "source_doc_id": "a"})
+    chunks = chunk_documents([page1, page2], embedding_model="m")
+    assert len({c.metadata["content_hash"] for c in chunks}) == 1
+
+
+def test_chunk_documents_content_hash_differs_across_sources():
+    doc_a = Document(page_content="hello world", metadata={"source": "a.txt", "source_doc_id": "a"})
+    doc_b = Document(page_content="goodbye world", metadata={"source": "b.txt", "source_doc_id": "b"})
+    chunks = chunk_documents([doc_a, doc_b], embedding_model="m")
+    hash_a = next(c.metadata["content_hash"] for c in chunks if c.metadata["source_doc_id"] == "a")
+    hash_b = next(c.metadata["content_hash"] for c in chunks if c.metadata["source_doc_id"] == "b")
+    assert hash_a != hash_b
+
+
+def test_chunk_documents_content_hash_is_stable_across_calls():
+    doc = Document(page_content="hello world", metadata={"source": "a.txt", "source_doc_id": "a"})
+    first = chunk_documents([doc], embedding_model="m")[0].metadata["content_hash"]
+    second = chunk_documents([doc], embedding_model="m")[0].metadata["content_hash"]
+    assert first == second
+
+
+def test_chunk_documents_content_hash_changes_when_content_changes():
+    doc_v1 = Document(page_content="hello world", metadata={"source": "a.txt", "source_doc_id": "a"})
+    doc_v2 = Document(page_content="hello universe", metadata={"source": "a.txt", "source_doc_id": "a"})
+    hash_v1 = chunk_documents([doc_v1], embedding_model="m")[0].metadata["content_hash"]
+    hash_v2 = chunk_documents([doc_v2], embedding_model="m")[0].metadata["content_hash"]
+    assert hash_v1 != hash_v2
+
+
 def test_get_collection_name_differs_by_backend(tmp_path):
     ollama_settings = make_settings(tmp_path, embeddings_backend="ollama")
     hf_settings = make_settings(tmp_path, embeddings_backend="huggingface")
