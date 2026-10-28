@@ -10,6 +10,7 @@ from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.graph_extract import Triplet
 from ask_the_docs.index import (
     CHUNK_SIZE,
+    INDEX_WRITE_BATCH_SIZE,
     IndexWriteError,
     build_graph,
     build_index,
@@ -18,6 +19,7 @@ from ask_the_docs.index import (
     get_chunk_count,
     get_chunks_by_refs,
     get_collection_name,
+    get_index_generation,
     load_index,
 )
 from ask_the_docs.llm import OllamaUnavailableError
@@ -635,3 +637,118 @@ def test_build_index_completes_vector_indexing_when_graph_extraction_raises(tmp_
     build_index([doc], settings)  # must not raise
 
     assert get_chunk_count(settings) > 0
+
+
+def test_build_index_reingesting_a_source_with_no_content_hash_metadata_replaces_it(tmp_path, monkeypatch):
+    """Reproduces the reviewer's Critical finding: chunks indexed before
+    content-hash dedup existed have no content_hash key at all, not a
+    mismatched one -- m["content_hash"] must not KeyError on them."""
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    legacy_chunk = Document(
+        page_content="pre-dedup content",
+        metadata={"source_doc_id": "docA", "chunk_index": 0},
+    )
+    load_index(settings).add_documents([legacy_chunk])
+    doc = Document(page_content="fresh content", metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    build_index([doc], settings)  # must not raise KeyError
+
+    chunks = get_all_chunks(settings)
+    assert all("pre-dedup" not in c.page_content for c in chunks)
+    assert all("fresh content" in c.page_content for c in chunks)
+
+
+def test_get_index_generation_starts_at_zero(tmp_path):
+    settings = make_settings(tmp_path)
+    assert get_index_generation(settings) == 0
+
+
+def test_build_index_bumps_generation_on_a_real_write(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    doc = Document(page_content="hello world", metadata={"source": "a.txt", "source_doc_id": "a"})
+
+    build_index([doc], settings)
+
+    assert get_index_generation(settings) == 1
+
+
+def test_build_index_does_not_bump_generation_on_a_noop_reingest(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    doc = Document(page_content="hello world", metadata={"source": "a.txt", "source_doc_id": "a"})
+
+    build_index([doc], settings)
+    build_index([doc], settings)
+
+    assert get_index_generation(settings) == 1
+
+
+def test_build_index_bumps_generation_on_a_same_chunk_count_replace(tmp_path, monkeypatch):
+    """Reproduces the reviewer's Important finding: a content change that
+    happens to produce the same number of chunks must still be visible to
+    cache-key construction -- chunk count alone can't distinguish it."""
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    doc_v1 = Document(page_content="hello world", metadata={"source": "a.txt", "source_doc_id": "a"})
+    doc_v2 = Document(page_content="hello earth", metadata={"source": "a.txt", "source_doc_id": "a"})
+
+    build_index([doc_v1], settings)
+    gen_after_first = get_index_generation(settings)
+    build_index([doc_v2], settings)
+
+    assert get_chunk_count(settings) == 1
+    assert get_index_generation(settings) == gen_after_first + 1
+
+
+def test_build_index_writes_large_inserts_in_bounded_batches(tmp_path, monkeypatch):
+    """Reproduces the reviewer's Important finding: build_index used to go
+    through Chroma.from_documents, which internally batches via
+    create_batches; load_index().add_documents() doesn't. A large ingest
+    must be chunked here instead, or a single oversized embed request
+    risks an Ollama timeout and a single upsert risks exceeding Chroma's
+    batch limit."""
+    call_sizes = []
+
+    class RecordingEmbeddings(Embeddings):
+        def embed_documents(self, texts):
+            call_sizes.append(len(texts))
+            return [_vector(t) for t in texts]
+
+        def embed_query(self, text):
+            return _vector(text)
+
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: RecordingEmbeddings())
+    settings = make_settings(tmp_path)
+    docs = [
+        Document(
+            page_content=f"unique content block number {i} " * 5,
+            metadata={"source": f"{i}.txt", "source_doc_id": f"d{i}"},
+        )
+        for i in range(100)
+    ]
+
+    build_index(docs, settings)
+
+    assert len(call_sizes) > 1
+    assert all(size <= INDEX_WRITE_BATCH_SIZE for size in call_sizes)
+    assert sum(call_sizes) == 100
+
+
+def test_build_index_deletes_chunks_for_a_source_that_becomes_empty(tmp_path, monkeypatch):
+    """Reproduces the reviewer's Important finding: a source whose new
+    content chunks to zero (e.g. a PDF replaced by a scanned version with
+    no extractable text) never appears in the per-source chunk grouping,
+    so its old chunks were never deleted. The spec says changed content
+    means delete all existing chunks for that source_doc_id -- "no new
+    chunks" is a change too."""
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    doc_v1 = Document(page_content="real extracted text", metadata={"source": "a.pdf", "source_doc_id": "docA"})
+    build_index([doc_v1], settings)
+
+    doc_v2_now_empty = Document(page_content="", metadata={"source": "a.pdf", "source_doc_id": "docA"})
+    build_index([doc_v2_now_empty], settings)
+
+    assert get_all_chunks(settings) == []

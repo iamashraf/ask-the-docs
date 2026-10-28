@@ -61,12 +61,12 @@ class FakeCacheClient:
 
 @pytest.fixture(autouse=True)
 def _no_real_cache_or_index(monkeypatch):
-    """answer() always computes a cache key (needs get_chunk_count) and
-    checks a cache client before doing anything else -- without this,
+    """answer() always computes a cache key (needs get_index_generation)
+    and checks a cache client before doing anything else -- without this,
     every test in this file would hit a real Chroma dir and a real Valkey
     connection. A fresh, empty FakeCacheClient per test means every call
     here is a cache miss by default unless a test wires up its own."""
-    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: 0)
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 0)
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: FakeCacheClient())
 
 
@@ -196,7 +196,7 @@ def test_answer_logs_prompt_at_debug_level(monkeypatch, caplog):
 
 
 def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
-    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: 1)
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
     fake_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: fake_cache)
     settings = make_settings()
@@ -269,7 +269,7 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
 def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
-    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: 1)
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
 
@@ -292,7 +292,7 @@ def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
 def test_answer_cache_key_changes_when_system_prompt_template_changes(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
-    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: 1)
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
 
@@ -317,7 +317,7 @@ def test_answer_cache_key_changes_when_system_prompt_template_changes(monkeypatc
 def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
-    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: 1)
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
 
@@ -350,7 +350,7 @@ def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
 def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field, value_a, value_b):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
-    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: 1)
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
 
@@ -372,12 +372,12 @@ def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field,
     assert calls["count"] == 2
 
 
-def test_answer_cache_key_changes_when_chunk_count_changes(monkeypatch):
+def test_answer_cache_key_changes_when_index_generation_changes(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
 
-    counts = [2, 3]
-    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: counts.pop(0))
+    generations = [2, 3]
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: generations.pop(0))
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
 

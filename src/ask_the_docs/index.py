@@ -3,6 +3,7 @@
 import hashlib
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 
 import neo4j
 from langchain_chroma import Chroma
@@ -22,10 +23,36 @@ logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 50
+# Chroma.from_documents used to batch writes internally (create_batches);
+# load_index(settings).add_documents() doesn't, so build_index batches it
+# here instead -- keeps each Ollama embed request and each Chroma upsert
+# bounded regardless of corpus size.
+INDEX_WRITE_BATCH_SIZE = 64
 
 
 class IndexWriteError(RuntimeError):
     pass
+
+
+def _generation_path(settings: Settings) -> Path:
+    return settings.index_dir / ".generation"
+
+
+def get_index_generation(settings: Settings) -> int:
+    """Monotonic counter bumped on every real write to the index (insert
+    or delete-and-replace) -- unlike chunk count, it changes even when a
+    replace produces the same number of chunks, so cache keys built from
+    it (answer.py, bm25_index.py) can't be fooled by a same-length edit.
+    Reads a local file, not Chroma, so computing a cache key never needs
+    the index to be reachable."""
+    path = _generation_path(settings)
+    return int(path.read_text()) if path.exists() else 0
+
+
+def _bump_index_generation(settings: Settings) -> None:
+    path = _generation_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(get_index_generation(settings) + 1))
 
 
 def _hash_sources(docs: list[Document]) -> dict[str, str]:
@@ -138,14 +165,27 @@ def build_index(docs: list[Document], settings: Settings) -> Chroma:
     its existing chunks deleted and replaced."""
     chunks = chunk_documents(docs, embedding_model=_embedding_model_name(settings))
     index = load_index(settings)
+    chunks_by_source = _group_by_source(chunks)
+    # Iterate every source_doc_id that was *attempted*, not just the ones
+    # that produced a chunk: a source whose content now chunks to zero
+    # (e.g. no extractable text) still needs its stale existing chunks
+    # deleted, which a chunks-only loop would silently skip.
+    attempted_source_ids = {doc.metadata["source_doc_id"] for doc in docs}
 
     to_insert: list[Document] = []
-    for source_doc_id, source_chunks in _group_by_source(chunks).items():
+    for source_doc_id in attempted_source_ids:
+        source_chunks = chunks_by_source.get(source_doc_id, [])
         existing = index.get(where={"source_doc_id": source_doc_id}, include=["metadatas"])
         if existing["ids"]:
-            existing_hashes = {m["content_hash"] for m in existing["metadatas"]}
-            if existing_hashes == {source_chunks[0].metadata["content_hash"]} and len(existing["ids"]) == len(
+            # .get(), not [...]: a chunk indexed before content-hash dedup
+            # existed has no "content_hash" key at all, not a mismatched
+            # one -- None here correctly reads as "changed" and triggers
+            # a replace, same as any other mismatch.
+            existing_hashes = {m.get("content_hash") for m in existing["metadatas"]}
+            if (
                 source_chunks
+                and existing_hashes == {source_chunks[0].metadata["content_hash"]}
+                and len(existing["ids"]) == len(source_chunks)
             ):
                 continue
             index.delete(ids=existing["ids"])
@@ -153,11 +193,13 @@ def build_index(docs: list[Document], settings: Settings) -> Chroma:
 
     if to_insert:
         try:
-            index.add_documents(to_insert)
+            for i in range(0, len(to_insert), INDEX_WRITE_BATCH_SIZE):
+                index.add_documents(to_insert[i : i + INDEX_WRITE_BATCH_SIZE])
         except OllamaUnavailableError:
             raise
         except Exception as exc:
             raise IndexWriteError(f"Failed to write {len(to_insert)} chunk(s) to the index") from exc
+        _bump_index_generation(settings)
     build_graph(chunks, settings)
     return index
 

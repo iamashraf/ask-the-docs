@@ -11,7 +11,7 @@ from rank_bm25 import BM25Okapi
 
 from ask_the_docs.cache import cache_get, cache_set, get_cache_client, make_cache_key
 from ask_the_docs.config import Settings
-from ask_the_docs.index import get_all_chunks, get_chunk_count, get_collection_name
+from ask_the_docs.index import get_all_chunks, get_collection_name, get_index_generation
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +28,12 @@ def _tokenize(text: str) -> list[str]:
 
 
 def get_bm25_index(settings: Settings) -> tuple[BM25Okapi, list[Document]]:
-    """Cache key embeds the live chunk count -- a new ingest (from this
-    process or another) changes the key, so a stale entry is simply never
-    looked up again, with no explicit invalidation step."""
+    """Cache key embeds the index generation -- a write from this process
+    or another (including a same-chunk-count replace, which chunk count
+    alone wouldn't catch) changes the key, so a stale entry is simply
+    never looked up again, with no explicit invalidation step."""
     client = get_cache_client(settings)
-    key = make_cache_key("bm25", get_collection_name(settings), get_chunk_count(settings))
+    key = make_cache_key("bm25", get_collection_name(settings), get_index_generation(settings))
 
     # pickle is safe here: this cache is exclusively written and read by
     # this service itself, never by an untrusted party.

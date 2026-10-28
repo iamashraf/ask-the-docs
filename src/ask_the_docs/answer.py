@@ -10,7 +10,7 @@ from langchain_core.documents import Document
 
 from ask_the_docs.cache import cache_get, cache_set, get_cache_client, make_cache_key
 from ask_the_docs.config import REFUSAL_MESSAGE, Settings
-from ask_the_docs.index import get_chunk_count
+from ask_the_docs.index import get_index_generation
 from ask_the_docs.llm import get_llm_client
 from ask_the_docs.retrieve import retrieve
 
@@ -92,9 +92,11 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
 
 def answer(query: str, settings: Settings, k: int = 5) -> AnswerResult:
     """Exact-match cached wrapper around _compute_answer -- a hit skips
-    retrieval, reranking, and the LLM call entirely. The corpus chunk count
-    is part of the cache key, so a new ingest produces a new key rather
-    than needing explicit cache invalidation."""
+    retrieval, reranking, and the LLM call entirely. The index generation
+    is part of the cache key, so any real ingest write (including a
+    same-chunk-count replace) produces a new key rather than needing
+    explicit cache invalidation; reading it never touches Chroma, so
+    computing the key doesn't depend on the index being reachable."""
     cache_client = get_cache_client(settings)
     cache_key = make_cache_key(
         query.strip().lower(),
@@ -110,7 +112,7 @@ def answer(query: str, settings: Settings, k: int = 5) -> AnswerResult:
         settings.graph_enabled,
         settings.graph_traversal_hop_depth,
         settings.global_search_top_communities,
-        get_chunk_count(settings),
+        get_index_generation(settings),
     )
 
     cached = cache_get(cache_client, cache_key)
