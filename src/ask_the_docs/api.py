@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from ask_the_docs.answer import answer
 from ask_the_docs.config import get_settings
 from ask_the_docs.evaluate import run_evaluation
-from ask_the_docs.index import build_index
+from ask_the_docs.index import IndexWriteError, build_index
 from ask_the_docs.ingest import (
     PathSecurityError,
     UnsupportedFileTypeError,
@@ -56,6 +56,7 @@ def _not_found_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=404, content={"detail": str(exc)})
 
 
+@app.exception_handler(IndexWriteError)
 @app.exception_handler(OllamaUnavailableError)
 def _service_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=503, content={"detail": str(exc)})
