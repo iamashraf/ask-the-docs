@@ -5,6 +5,8 @@ Point it at PDFs, Word docs, markdown/text files, or URLs, then ask
 questions grounded in that content with cited sources — no data leaves
 your machine except the LLM calls you explicitly configure.
 
+![Ingesting a document, asking grounded questions about it, then asking something outside its scope and getting a clean refusal](docs/demo.gif)
+
 **Key features**
 
 - **Local generation by default** — Ollama runs the language model; no
@@ -19,15 +21,20 @@ your machine except the LLM calls you explicitly configure.
 - **Configurable LLM-as-judge evaluation** — score answer quality on
   accuracy, relevance, and completeness using a separately-configured
   model (e.g. Claude), with comparison toggles for the retrieval strategy.
-- **Two interfaces, same logic** — a one-shot CLI and a long-running HTTP
-  API, both calling identical underlying code.
+- **Three interfaces, same logic** — a one-shot CLI, a long-running HTTP
+  API, and a chat UI, all calling identical underlying code.
+- **Graph RAG** — LLM-based triplet extraction, embedding-similarity
+  entity resolution, and Neo4j GDS community detection power a local
+  (entity-traversal) and global (corpus-theme) search path alongside
+  hybrid retrieval, off by default.
 - **Containerized** — `podman compose` (or `docker compose`) runs the
-  whole stack (Ollama, Valkey, the app); nothing to install beyond that.
+  whole stack (Ollama, Valkey, the app, the chat UI); nothing to install
+  beyond that.
 - **Security-hardened ingestion** — path-traversal and SSRF guards on
   every local file and URL before anything is read.
 
-> Implements vector + hybrid (BM25) RAG with reranking and query
-> rewriting. Graph RAG is planned as a separate future addition.
+> See `docs/ARCHITECTURE.md` and `docs/CONCEPTS.md` for how retrieval,
+> reranking, and Graph RAG fit together.
 
 ## Quickstart
 
