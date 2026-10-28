@@ -16,11 +16,16 @@ from ask_the_docs.entity_resolution import resolve_entities
 from ask_the_docs.graph_client import get_graph_client
 from ask_the_docs.graph_extract import extract_triplets
 from ask_the_docs.graph_store import write_graph
+from ask_the_docs.llm import OllamaUnavailableError
 
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 50
+
+
+class IndexWriteError(RuntimeError):
+    pass
 
 
 def _hash_sources(docs: list[Document]) -> dict[str, str]:
@@ -147,7 +152,12 @@ def build_index(docs: list[Document], settings: Settings) -> Chroma:
         to_insert.extend(source_chunks)
 
     if to_insert:
-        index.add_documents(to_insert)
+        try:
+            index.add_documents(to_insert)
+        except OllamaUnavailableError:
+            raise
+        except Exception as exc:
+            raise IndexWriteError(f"Failed to write {len(to_insert)} chunk(s) to the index") from exc
     build_graph(chunks, settings)
     return index
 

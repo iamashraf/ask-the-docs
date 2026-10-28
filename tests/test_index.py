@@ -1,6 +1,7 @@
 import hashlib
 import logging
 
+import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from neo4j.exceptions import Neo4jError, ServiceUnavailable
@@ -9,6 +10,7 @@ from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.graph_extract import Triplet
 from ask_the_docs.index import (
     CHUNK_SIZE,
+    IndexWriteError,
     build_graph,
     build_index,
     chunk_documents,
@@ -18,6 +20,7 @@ from ask_the_docs.index import (
     get_collection_name,
     load_index,
 )
+from ask_the_docs.llm import OllamaUnavailableError
 from ask_the_docs.llm import OllamaUnavailableError
 
 
@@ -233,6 +236,41 @@ def test_build_index_with_empty_docs_list_is_a_noop(tmp_path, monkeypatch):
     build_index([], settings)  # must not raise
 
     assert get_chunk_count(settings) == 0
+
+
+def test_build_index_wraps_non_ollama_write_failures(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+
+    class BrokenChroma:
+        def get(self, where, include):
+            return {"ids": [], "metadatas": []}
+
+        def add_documents(self, docs):
+            raise RuntimeError("disk full")
+
+    monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: BrokenChroma())
+    doc = Document(page_content="hello", metadata={"source": "a.txt", "source_doc_id": "a"})
+
+    with pytest.raises(IndexWriteError) as exc_info:
+        build_index([doc], make_settings(tmp_path))
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
+def test_build_index_lets_ollama_unavailable_propagate_unwrapped(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+
+    class UnreachableChroma:
+        def get(self, where, include):
+            return {"ids": [], "metadatas": []}
+
+        def add_documents(self, docs):
+            raise OllamaUnavailableError("could not reach ollama")
+
+    monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: UnreachableChroma())
+    doc = Document(page_content="hello", metadata={"source": "a.txt", "source_doc_id": "a"})
+
+    with pytest.raises(OllamaUnavailableError):
+        build_index([doc], make_settings(tmp_path))
 
 
 def test_get_all_chunks_returns_every_indexed_chunk(tmp_path, monkeypatch):

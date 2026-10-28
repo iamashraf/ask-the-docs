@@ -9,6 +9,7 @@ from ask_the_docs.answer import AnswerResult
 from ask_the_docs.api import app
 from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.evaluate import EvalResult, JudgeScore
+from ask_the_docs.index import IndexWriteError
 from ask_the_docs.ingest import PathSecurityError, UnsupportedFileTypeError, UrlSecurityError
 from ask_the_docs.llm import OllamaUnavailableError
 
@@ -103,6 +104,25 @@ def test_index_discovers_docs_dir_and_builds_index(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"documents_ingested": 2, "files_found": 2}
     assert captured["docs"] == ["doc-for-a.pdf", "doc-for-b.pdf"]
+
+
+def test_index_endpoint_returns_503_on_index_write_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.api.get_settings", lambda: SimpleNamespace(docs_dir=tmp_path)
+    )
+    monkeypatch.setattr(
+        "ask_the_docs.api.discover_sources", lambda docs_dir: [tmp_path / "a.pdf"]
+    )
+    monkeypatch.setattr("ask_the_docs.api.dispatch", lambda source: [f"doc-for-{source}"])
+
+    def boom(docs, settings):
+        raise IndexWriteError("disk full")
+
+    monkeypatch.setattr("ask_the_docs.api.build_index", boom)
+
+    response = TestClient(app).post("/v1/index")
+
+    assert response.status_code == 503
 
 
 def test_ask_returns_answer_and_citations(monkeypatch):
