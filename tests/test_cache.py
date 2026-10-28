@@ -1,7 +1,7 @@
 import redis
 
-from research_assistant.cache import cache_get, cache_set, get_cache_client, make_cache_key
-from research_assistant.config import ProviderConfig, Settings
+from ask_the_docs.cache import cache_get, cache_set, get_cache_client, make_cache_key
+from ask_the_docs.config import ProviderConfig, Settings
 
 
 class FakeRedis:

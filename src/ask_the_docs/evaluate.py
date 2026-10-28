@@ -7,9 +7,9 @@ from pathlib import Path
 
 import yaml
 
-from research_assistant.answer import answer
-from research_assistant.config import REFUSAL_MESSAGE, Settings
-from research_assistant.llm import LLMClient, get_llm_client
+from ask_the_docs.answer import answer
+from ask_the_docs.config import REFUSAL_MESSAGE, Settings
+from ask_the_docs.llm import LLMClient, get_llm_client
 
 JUDGE_PROMPT_TEMPLATE = """You are evaluating a RAG system's answer.
 

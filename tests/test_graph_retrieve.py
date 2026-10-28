@@ -3,8 +3,8 @@ import logging
 from langchain_core.documents import Document
 from neo4j.exceptions import ClientError, ServiceUnavailable, SessionExpired
 
-from research_assistant.config import ProviderConfig, Settings
-from research_assistant.graph_retrieve import global_search, local_search
+from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.graph_retrieve import global_search, local_search
 
 
 def make_settings(**overrides) -> Settings:
@@ -96,9 +96,9 @@ class FakeDriverReturningChunkRefRows:
 
 def test_local_search_returns_matching_chunks(monkeypatch):
     driver = FakeDriverReturningChunkRefs(["doc1:0", "doc2:1"])
-    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: driver)
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_chunks_by_refs",
+        "ask_the_docs.graph_retrieve.get_chunks_by_refs",
         fake_chunks_by_refs(
             [
                 make_chunk("doc1", 0, "about BM25"),
@@ -124,7 +124,7 @@ def test_local_search_degrades_on_neo4j_unavailable(monkeypatch):
     def boom(s):
         raise ServiceUnavailable("down")
 
-    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", boom)
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", boom)
 
     assert local_search(["BM25"], make_settings()) == []
 
@@ -132,9 +132,9 @@ def test_local_search_degrades_on_neo4j_unavailable(monkeypatch):
 def test_local_search_skips_stale_chunk_refs_not_in_index(monkeypatch):
     """Stale chunk_ref from re-ingestion (nothing clears old graph data) must be skipped, not KeyError."""
     driver = FakeDriverReturningChunkRefs(["doc1:0", "doc_deleted:5"])
-    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: driver)
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_chunks_by_refs",
+        "ask_the_docs.graph_retrieve.get_chunks_by_refs",
         fake_chunks_by_refs([make_chunk("doc1", 0, "about BM25")]),
     )
 
@@ -146,9 +146,9 @@ def test_local_search_skips_stale_chunk_refs_not_in_index(monkeypatch):
 def test_local_search_dedupes_chunk_refs_across_multiple_rows(monkeypatch):
     """graph_store writes the same chunk_ref onto both triplet endpoints, so overlapping rows are the realistic shape."""
     driver = FakeDriverReturningChunkRefRows([["doc1:0", "doc2:1"], ["doc2:1", "doc1:0"]])
-    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: driver)
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_chunks_by_refs",
+        "ask_the_docs.graph_retrieve.get_chunks_by_refs",
         fake_chunks_by_refs([make_chunk("doc1", 0, "about BM25"), make_chunk("doc2", 1, "about vectors")]),
     )
 
@@ -177,7 +177,7 @@ def test_local_search_degrades_when_session_run_raises_service_unavailable(monke
             return RaisingRunSession()
 
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_graph_client", lambda s: DriverWithRaisingSession()
+        "ask_the_docs.graph_retrieve.get_graph_client", lambda s: DriverWithRaisingSession()
     )
 
     with caplog.at_level(logging.WARNING):
@@ -228,9 +228,9 @@ class FakeClient:
 
 def test_global_search_returns_top_scored_community_summaries(monkeypatch):
     driver = FakeDriverReturningCommunities([(0, "summary about RAG"), (1, "summary about transformers")])
-    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: driver)
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_llm_client",
+        "ask_the_docs.graph_retrieve.get_llm_client",
         lambda cfg: FakeClient(responses=['{"relevance": 0.9}', '{"relevance": 0.2}']),
     )
     settings_top_1 = settings.model_copy(update={"global_search_top_communities": 1})
@@ -246,7 +246,7 @@ def test_global_search_returns_top_scored_community_summaries(monkeypatch):
 
 def test_global_search_returns_empty_list_when_no_communities(monkeypatch):
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_graph_client", lambda s: FakeDriverReturningCommunities([])
+        "ask_the_docs.graph_retrieve.get_graph_client", lambda s: FakeDriverReturningCommunities([])
     )
 
     assert global_search("anything", settings) == []
@@ -256,19 +256,19 @@ def test_global_search_degrades_on_neo4j_unavailable(monkeypatch):
     def boom(s):
         raise ServiceUnavailable("down")
 
-    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", boom)
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", boom)
 
     assert global_search("anything", settings) == []
 
 
 def test_global_search_scores_community_zero_when_llm_raises(monkeypatch):
     """One community's scoring call raising entirely (e.g. backend unreachable) must not abort the others."""
-    from research_assistant.llm import OllamaUnavailableError
+    from ask_the_docs.llm import OllamaUnavailableError
 
     driver = FakeDriverReturningCommunities([(0, "summary about RAG"), (1, "summary about transformers")])
-    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: driver)
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_llm_client",
+        "ask_the_docs.graph_retrieve.get_llm_client",
         lambda cfg: FakeClient(responses=[OllamaUnavailableError("down"), '{"relevance": 0.7}']),
     )
     settings_top_1 = settings.model_copy(update={"global_search_top_communities": 1})
@@ -281,9 +281,9 @@ def test_global_search_scores_community_zero_when_llm_raises(monkeypatch):
 
 def test_global_search_parses_relevance_score_wrapped_in_markdown_fence(monkeypatch):
     driver = FakeDriverReturningCommunities([(0, "summary about RAG"), (1, "summary about transformers")])
-    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: driver)
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_llm_client",
+        "ask_the_docs.graph_retrieve.get_llm_client",
         lambda cfg: FakeClient(responses=['```json\n{"relevance": 0.9}\n```', '{"relevance": 0.1}']),
     )
     settings_top_1 = settings.model_copy(update={"global_search_top_communities": 1})
@@ -312,7 +312,7 @@ def test_local_search_degrades_on_neo4j_client_error(monkeypatch, caplog):
             return SessionRaisingClientError()
 
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_graph_client", lambda s: DriverRaisingClientError()
+        "ask_the_docs.graph_retrieve.get_graph_client", lambda s: DriverRaisingClientError()
     )
 
     with caplog.at_level(logging.WARNING):
@@ -342,7 +342,7 @@ class DriverRaisingSessionExpired:
 
 def test_local_search_degrades_on_driver_error_that_is_not_neo4j_error(monkeypatch, caplog):
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_graph_client", lambda s: DriverRaisingSessionExpired()
+        "ask_the_docs.graph_retrieve.get_graph_client", lambda s: DriverRaisingSessionExpired()
     )
 
     with caplog.at_level(logging.WARNING):
@@ -354,7 +354,7 @@ def test_local_search_degrades_on_driver_error_that_is_not_neo4j_error(monkeypat
 
 def test_global_search_degrades_on_driver_error_that_is_not_neo4j_error(monkeypatch, caplog):
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_graph_client", lambda s: DriverRaisingSessionExpired()
+        "ask_the_docs.graph_retrieve.get_graph_client", lambda s: DriverRaisingSessionExpired()
     )
 
     with caplog.at_level(logging.WARNING):
@@ -368,7 +368,7 @@ def test_local_search_caps_resolved_refs_at_candidate_pool_size(monkeypatch):
     """A hub entity's multi-hop traversal can match far more chunks than the reranker should ever see."""
     refs = [f"doc{i}:0" for i in range(5)]
     driver = FakeDriverReturningChunkRefs(refs)
-    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: driver)
     requested = []
 
     def fake_fetch(settings, refs_to_fetch):
@@ -377,7 +377,7 @@ def test_local_search_caps_resolved_refs_at_candidate_pool_size(monkeypatch):
             settings, refs_to_fetch
         )
 
-    monkeypatch.setattr("research_assistant.graph_retrieve.get_chunks_by_refs", fake_fetch, raising=False)
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_chunks_by_refs", fake_fetch, raising=False)
 
     result = local_search(["BM25"], make_settings(candidate_pool_size=2))
 
@@ -388,14 +388,14 @@ def test_local_search_caps_resolved_refs_at_candidate_pool_size(monkeypatch):
 
 def test_local_search_does_not_fetch_the_whole_corpus(monkeypatch):
     driver = FakeDriverReturningChunkRefs(["doc1:0"])
-    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: driver)
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: driver)
 
     def full_fetch(settings):
         raise AssertionError("local_search must not load every chunk on each query")
 
-    monkeypatch.setattr("research_assistant.graph_retrieve.get_all_chunks", full_fetch, raising=False)
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_all_chunks", full_fetch, raising=False)
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_chunks_by_refs",
+        "ask_the_docs.graph_retrieve.get_chunks_by_refs",
         fake_chunks_by_refs([make_chunk("doc1", 0, "about BM25")]),
         raising=False,
     )
@@ -437,9 +437,9 @@ def test_local_search_matches_entities_case_insensitively(monkeypatch):
         def session(self):
             return session
 
-    monkeypatch.setattr("research_assistant.graph_retrieve.get_graph_client", lambda s: Driver())
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: Driver())
     monkeypatch.setattr(
-        "research_assistant.graph_retrieve.get_chunks_by_refs",
+        "ask_the_docs.graph_retrieve.get_chunks_by_refs",
         fake_chunks_by_refs([make_chunk("doc1", 0, "about BM25")]),
     )
 

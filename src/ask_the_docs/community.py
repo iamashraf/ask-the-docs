@@ -4,8 +4,8 @@ import logging
 
 import neo4j
 
-from research_assistant.config import Settings
-from research_assistant.llm import get_llm_client
+from ask_the_docs.config import Settings
+from ask_the_docs.llm import get_llm_client
 
 logger = logging.getLogger(__name__)
 

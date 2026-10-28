@@ -10,7 +10,7 @@ import requests
 from anthropic import Anthropic
 from openai import OpenAI
 
-from research_assistant.config import ProviderConfig
+from ask_the_docs.config import ProviderConfig
 
 OLLAMA_CHAT_TIMEOUT_SECONDS = 60
 

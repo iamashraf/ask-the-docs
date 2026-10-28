@@ -5,12 +5,12 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.documents import Document
 
-from research_assistant.answer import AnswerResult
-from research_assistant.api import app
-from research_assistant.config import ProviderConfig, Settings
-from research_assistant.evaluate import EvalResult, JudgeScore
-from research_assistant.ingest import PathSecurityError, UnsupportedFileTypeError, UrlSecurityError
-from research_assistant.llm import OllamaUnavailableError
+from ask_the_docs.answer import AnswerResult
+from ask_the_docs.api import app
+from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.evaluate import EvalResult, JudgeScore
+from ask_the_docs.ingest import PathSecurityError, UnsupportedFileTypeError, UrlSecurityError
+from ask_the_docs.llm import OllamaUnavailableError
 
 
 def make_settings() -> Settings:
@@ -21,10 +21,10 @@ def make_settings() -> Settings:
 
 
 def test_startup_triggers_seeding(monkeypatch):
-    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
     captured = {}
     monkeypatch.setattr(
-        "research_assistant.api.seed_if_needed", lambda settings: captured.setdefault("called", True)
+        "ask_the_docs.api.seed_if_needed", lambda settings: captured.setdefault("called", True)
     )
 
     with TestClient(app):
@@ -42,11 +42,11 @@ def test_health_returns_ok():
 
 def test_ingest_calls_dispatch_and_build_index(monkeypatch):
     docs = [Document(page_content="x", metadata={"source": "a.pdf", "source_doc_id": "1"})]
-    monkeypatch.setattr("research_assistant.api.dispatch", lambda source: docs)
-    monkeypatch.setattr("research_assistant.api.get_settings", lambda: object())
+    monkeypatch.setattr("ask_the_docs.api.dispatch", lambda source: docs)
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
     captured = {}
     monkeypatch.setattr(
-        "research_assistant.api.build_index", lambda d, settings: captured.setdefault("docs", d)
+        "ask_the_docs.api.build_index", lambda d, settings: captured.setdefault("docs", d)
     )
 
     response = TestClient(app).post("/v1/ingest", json={"source": "a.pdf"})
@@ -66,7 +66,7 @@ def test_ingest_returns_400_for_security_and_type_errors(monkeypatch, exc_class)
     def raise_error(source):
         raise exc_class("bad source")
 
-    monkeypatch.setattr("research_assistant.api.dispatch", raise_error)
+    monkeypatch.setattr("ask_the_docs.api.dispatch", raise_error)
 
     response = TestClient(app).post("/v1/ingest", json={"source": "bad"})
 
@@ -77,7 +77,7 @@ def test_ingest_returns_404_for_missing_file(monkeypatch):
     def raise_error(source):
         raise FileNotFoundError(source)
 
-    monkeypatch.setattr("research_assistant.api.dispatch", raise_error)
+    monkeypatch.setattr("ask_the_docs.api.dispatch", raise_error)
 
     response = TestClient(app).post("/v1/ingest", json={"source": "missing.pdf"})
 
@@ -86,16 +86,16 @@ def test_ingest_returns_404_for_missing_file(monkeypatch):
 
 def test_index_discovers_docs_dir_and_builds_index(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "research_assistant.api.get_settings", lambda: SimpleNamespace(docs_dir=tmp_path)
+        "ask_the_docs.api.get_settings", lambda: SimpleNamespace(docs_dir=tmp_path)
     )
     monkeypatch.setattr(
-        "research_assistant.api.discover_sources",
+        "ask_the_docs.api.discover_sources",
         lambda docs_dir: [tmp_path / "a.pdf", tmp_path / "b.pdf"],
     )
-    monkeypatch.setattr("research_assistant.api.dispatch", lambda source: [f"doc-for-{source}"])
+    monkeypatch.setattr("ask_the_docs.api.dispatch", lambda source: [f"doc-for-{source}"])
     captured = {}
     monkeypatch.setattr(
-        "research_assistant.api.build_index", lambda d, s: captured.setdefault("docs", d)
+        "ask_the_docs.api.build_index", lambda d, s: captured.setdefault("docs", d)
     )
 
     response = TestClient(app).post("/v1/index")
@@ -106,7 +106,7 @@ def test_index_discovers_docs_dir_and_builds_index(tmp_path, monkeypatch):
 
 
 def test_ask_returns_answer_and_citations(monkeypatch):
-    monkeypatch.setattr("research_assistant.api.get_settings", lambda: object())
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
     captured = {}
 
     def fake_answer(query, settings, k):
@@ -114,7 +114,7 @@ def test_ask_returns_answer_and_citations(monkeypatch):
         captured["k"] = k
         return AnswerResult(text="42", citations=["a.pdf"], context="ctx")
 
-    monkeypatch.setattr("research_assistant.api.answer", fake_answer)
+    monkeypatch.setattr("ask_the_docs.api.answer", fake_answer)
 
     response = TestClient(app).post("/v1/ask", json={"query": "What is X?"})
 
@@ -135,12 +135,12 @@ def test_ask_rejects_non_positive_k():
 
 
 def test_ask_returns_503_when_ollama_unavailable(monkeypatch):
-    monkeypatch.setattr("research_assistant.api.get_settings", lambda: object())
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
 
     def raise_error(query, settings, k):
         raise OllamaUnavailableError("could not reach ollama")
 
-    monkeypatch.setattr("research_assistant.api.answer", raise_error)
+    monkeypatch.setattr("ask_the_docs.api.answer", raise_error)
 
     response = TestClient(app).post("/v1/ask", json={"query": "hi"})
 
@@ -148,7 +148,7 @@ def test_ask_returns_503_when_ollama_unavailable(monkeypatch):
 
 
 def test_evaluate_returns_results(monkeypatch):
-    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
     results = [
         EvalResult(
             question="Q1",
@@ -163,7 +163,7 @@ def test_evaluate_returns_results(monkeypatch):
         ),
         EvalResult(question="Q2", score=None, error="boom"),
     ]
-    monkeypatch.setattr("research_assistant.api.run_evaluation", lambda settings, path: results)
+    monkeypatch.setattr("ask_the_docs.api.run_evaluation", lambda settings, path: results)
 
     response = TestClient(app).post("/v1/evaluate", json={})
 
@@ -177,14 +177,14 @@ def test_evaluate_returns_results(monkeypatch):
 
 
 def test_evaluate_overrides_embeddings_backend(monkeypatch):
-    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
     captured = {}
 
     def fake_run_evaluation(settings, path):
         captured["backend"] = settings.embeddings_backend
         return []
 
-    monkeypatch.setattr("research_assistant.api.run_evaluation", fake_run_evaluation)
+    monkeypatch.setattr("ask_the_docs.api.run_evaluation", fake_run_evaluation)
 
     response = TestClient(app).post("/v1/evaluate", json={"embeddings": "huggingface"})
 
@@ -198,14 +198,14 @@ def test_evaluate_rejects_invalid_embeddings_value():
 
 
 def test_evaluate_overrides_hybrid_alpha(monkeypatch):
-    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
     captured = {}
 
     def fake_run_evaluation(settings, path):
         captured["alpha"] = settings.hybrid_alpha
         return []
 
-    monkeypatch.setattr("research_assistant.api.run_evaluation", fake_run_evaluation)
+    monkeypatch.setattr("ask_the_docs.api.run_evaluation", fake_run_evaluation)
 
     response = TestClient(app).post("/v1/evaluate", json={"hybrid_alpha": 0.8})
 
@@ -214,14 +214,14 @@ def test_evaluate_overrides_hybrid_alpha(monkeypatch):
 
 
 def test_evaluate_overrides_rerank_enabled(monkeypatch):
-    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
     captured = {}
 
     def fake_run_evaluation(settings, path):
         captured["rerank"] = settings.rerank_enabled
         return []
 
-    monkeypatch.setattr("research_assistant.api.run_evaluation", fake_run_evaluation)
+    monkeypatch.setattr("ask_the_docs.api.run_evaluation", fake_run_evaluation)
 
     response = TestClient(app).post("/v1/evaluate", json={"rerank_enabled": False})
 
@@ -230,14 +230,14 @@ def test_evaluate_overrides_rerank_enabled(monkeypatch):
 
 
 def test_evaluate_overrides_query_rewrite_enabled(monkeypatch):
-    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
     captured = {}
 
     def fake_run_evaluation(settings, path):
         captured["rewrite"] = settings.query_rewrite_enabled
         return []
 
-    monkeypatch.setattr("research_assistant.api.run_evaluation", fake_run_evaluation)
+    monkeypatch.setattr("ask_the_docs.api.run_evaluation", fake_run_evaluation)
 
     response = TestClient(app).post("/v1/evaluate", json={"query_rewrite_enabled": False})
 
@@ -251,10 +251,10 @@ def test_evaluate_rejects_hybrid_alpha_out_of_range():
 
 
 def test_evaluate_accepts_hybrid_alpha_boundary_values(monkeypatch):
-    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
     captured = []
     monkeypatch.setattr(
-        "research_assistant.api.run_evaluation",
+        "ask_the_docs.api.run_evaluation",
         lambda settings, path: captured.append(settings.hybrid_alpha) or [],
     )
 
@@ -266,7 +266,7 @@ def test_evaluate_accepts_hybrid_alpha_boundary_values(monkeypatch):
 
 
 def test_evaluate_combines_multiple_overrides_in_one_call(monkeypatch):
-    monkeypatch.setattr("research_assistant.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
     captured = {}
 
     def fake_run_evaluation(settings, path):
@@ -276,7 +276,7 @@ def test_evaluate_combines_multiple_overrides_in_one_call(monkeypatch):
         captured["rewrite"] = settings.query_rewrite_enabled
         return []
 
-    monkeypatch.setattr("research_assistant.api.run_evaluation", fake_run_evaluation)
+    monkeypatch.setattr("ask_the_docs.api.run_evaluation", fake_run_evaluation)
 
     response = TestClient(app).post(
         "/v1/evaluate",
@@ -293,9 +293,9 @@ def test_evaluate_combines_multiple_overrides_in_one_call(monkeypatch):
 
 
 def test_package_logger_configured_for_info_with_a_handler():
-    """Importing api.py must configure the research_assistant logger so
+    """Importing api.py must configure the ask_the_docs logger so
     INFO-level messages (e.g. seed.py's progress logs) actually reach
     console output -- uvicorn only configures its own loggers, not ours."""
-    package_logger = logging.getLogger("research_assistant")
+    package_logger = logging.getLogger("ask_the_docs")
     assert package_logger.getEffectiveLevel() <= logging.INFO
     assert len(package_logger.handlers) >= 1

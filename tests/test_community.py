@@ -2,9 +2,9 @@ import logging
 
 from neo4j.exceptions import ClientError, ServiceUnavailable
 
-from research_assistant.community import run_community_detection, summarize_communities
-from research_assistant.config import ProviderConfig, Settings
-from research_assistant.llm import OllamaUnavailableError
+from ask_the_docs.community import run_community_detection, summarize_communities
+from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.llm import OllamaUnavailableError
 
 
 class FakeResult:
@@ -261,7 +261,7 @@ class FakeDriverWithCommunities:
 def test_summarize_communities_writes_summary_per_community(monkeypatch):
     driver = FakeDriverWithCommunities({0: ["Transformer", "attention"], 1: ["BM25", "TF-IDF"]})
     fake_client = FakeClient("a summary")
-    monkeypatch.setattr("research_assistant.community.get_llm_client", lambda cfg: fake_client)
+    monkeypatch.setattr("ask_the_docs.community.get_llm_client", lambda cfg: fake_client)
 
     summarize_communities(driver, make_settings())
 
@@ -313,7 +313,7 @@ def test_summarize_communities_degrades_when_write_consume_fails(monkeypatch, ca
         def session(self):
             return self.session_obj
 
-    monkeypatch.setattr("research_assistant.community.get_llm_client", lambda cfg: FakeClient("a summary"))
+    monkeypatch.setattr("ask_the_docs.community.get_llm_client", lambda cfg: FakeClient("a summary"))
 
     driver = DriverWriteConsumeFails()
     with caplog.at_level(logging.WARNING):
@@ -337,7 +337,7 @@ def test_summarize_communities_continues_past_llm_failure_for_one_community(monk
                 raise OllamaUnavailableError("down")
             return "a summary"
 
-    monkeypatch.setattr("research_assistant.community.get_llm_client", lambda cfg: FlakyClient())
+    monkeypatch.setattr("ask_the_docs.community.get_llm_client", lambda cfg: FlakyClient())
 
     with caplog.at_level(logging.WARNING):
         summarize_communities(driver, make_settings())  # must not raise
@@ -373,7 +373,7 @@ def test_run_community_detection_degrades_on_neo4j_client_error(caplog):
 def test_summarize_communities_deletes_previous_communities_before_writing(monkeypatch):
     """Leiden IDs aren't stable across runs, so a previous run's communities must not linger."""
     driver = FakeDriverWithCommunities({0: ["Transformer"]})
-    monkeypatch.setattr("research_assistant.community.get_llm_client", lambda cfg: FakeClient("a summary"))
+    monkeypatch.setattr("ask_the_docs.community.get_llm_client", lambda cfg: FakeClient("a summary"))
 
     summarize_communities(driver, make_settings())
 

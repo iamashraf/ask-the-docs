@@ -7,9 +7,9 @@ from pathlib import Path
 
 import yaml
 
-from research_assistant.config import Settings
-from research_assistant.index import build_index
-from research_assistant.ingest import dispatch
+from ask_the_docs.config import Settings
+from ask_the_docs.index import build_index
+from ask_the_docs.ingest import dispatch
 
 SEED_SOURCES_PATH = Path("seed_sources.yaml")
 

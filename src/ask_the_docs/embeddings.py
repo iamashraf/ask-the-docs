@@ -8,7 +8,7 @@ import requests
 from langchain_core.embeddings import Embeddings
 from sentence_transformers import SentenceTransformer
 
-from research_assistant.config import Settings
+from ask_the_docs.config import Settings
 
 OLLAMA_EMBED_TIMEOUT_SECONDS = 30
 

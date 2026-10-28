@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 import requests
 from langchain_core.documents import Document
 
-from research_assistant.config import get_settings
+from ask_the_docs.config import get_settings
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 ALLOWED_URL_SCHEMES = {"http", "https"}

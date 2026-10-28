@@ -1,4 +1,4 @@
-from research_assistant.ingest import load_pdf, load_text
+from ask_the_docs.ingest import load_pdf, load_text
 
 
 class FakePage:

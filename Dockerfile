@@ -41,4 +41,4 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 USER appuser
 
-ENTRYPOINT ["research-assistant"]
+ENTRYPOINT ["ask-the-docs"]

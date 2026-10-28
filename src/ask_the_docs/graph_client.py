@@ -2,7 +2,7 @@ from functools import lru_cache
 
 import neo4j
 
-from research_assistant.config import Settings
+from ask_the_docs.config import Settings
 
 
 @lru_cache

@@ -5,9 +5,9 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from neo4j.exceptions import Neo4jError, ServiceUnavailable
 
-from research_assistant.config import ProviderConfig, Settings
-from research_assistant.graph_extract import Triplet
-from research_assistant.index import (
+from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.graph_extract import Triplet
+from ask_the_docs.index import (
     CHUNK_SIZE,
     build_graph,
     build_index,
@@ -18,7 +18,7 @@ from research_assistant.index import (
     get_collection_name,
     load_index,
 )
-from research_assistant.llm import OllamaUnavailableError
+from ask_the_docs.llm import OllamaUnavailableError
 
 
 def make_settings(tmp_path, embeddings_backend: str = "ollama", graph_enabled: bool = False) -> Settings:
@@ -88,7 +88,7 @@ def test_get_collection_name_differs_by_backend(tmp_path):
 
 
 def test_build_index_then_load_index_round_trips(tmp_path, monkeypatch):
-    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
     settings = make_settings(tmp_path)
     doc = Document(
         page_content="Attention is all you need for this transformer paper.",
@@ -104,7 +104,7 @@ def test_build_index_then_load_index_round_trips(tmp_path, monkeypatch):
 
 
 def test_get_all_chunks_returns_every_indexed_chunk(tmp_path, monkeypatch):
-    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
     settings = make_settings(tmp_path)
     docs = [
         Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"}),
@@ -120,7 +120,7 @@ def test_get_all_chunks_returns_every_indexed_chunk(tmp_path, monkeypatch):
 
 
 def _build_two_doc_index(tmp_path, monkeypatch):
-    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
     settings = make_settings(tmp_path)
     docs = [
         Document(page_content="alpha " * 200, metadata={"source": "a.pdf", "source_doc_id": "docA"}),
@@ -163,13 +163,13 @@ def test_get_chunks_by_refs_returns_empty_list_for_no_refs(tmp_path, monkeypatch
     def no_fetch(settings):
         raise AssertionError("no refs must not touch Chroma")
 
-    monkeypatch.setattr("research_assistant.index.load_index", no_fetch)
+    monkeypatch.setattr("ask_the_docs.index.load_index", no_fetch)
 
     assert get_chunks_by_refs(make_settings(tmp_path), []) == []
 
 
 def test_get_chunk_count_matches_number_of_chunks_built(tmp_path, monkeypatch):
-    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
     settings = make_settings(tmp_path)
     doc = Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
 
@@ -181,7 +181,7 @@ def test_get_chunk_count_matches_number_of_chunks_built(tmp_path, monkeypatch):
 
 def test_build_graph_skipped_when_graph_disabled(tmp_path, monkeypatch):
     called = []
-    monkeypatch.setattr("research_assistant.index.extract_triplets", lambda *a, **k: called.append(1) or [])
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", lambda *a, **k: called.append(1) or [])
     settings = make_settings(tmp_path, graph_enabled=False)
 
     build_graph([make_chunk("doc1", 0, "text")], settings)
@@ -190,20 +190,20 @@ def test_build_graph_skipped_when_graph_disabled(tmp_path, monkeypatch):
 
 
 def test_build_graph_degrades_when_graph_client_unreachable(tmp_path, monkeypatch, caplog):
-    monkeypatch.setattr("research_assistant.index.extract_triplets", lambda *a, **k: [Triplet("A", "uses", "B")])
-    monkeypatch.setattr("research_assistant.index.resolve_entities", lambda triplets, s: triplets)
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", lambda *a, **k: [Triplet("A", "uses", "B")])
+    monkeypatch.setattr("ask_the_docs.index.resolve_entities", lambda triplets, s: triplets)
 
     def boom(settings):
         raise ServiceUnavailable("down")
 
-    monkeypatch.setattr("research_assistant.index.get_graph_client", boom)
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", boom)
     detect_calls = []
     summarize_calls = []
     monkeypatch.setattr(
-        "research_assistant.index.run_community_detection", lambda d: detect_calls.append(d)
+        "ask_the_docs.index.run_community_detection", lambda d: detect_calls.append(d)
     )
     monkeypatch.setattr(
-        "research_assistant.index.summarize_communities", lambda d, s: summarize_calls.append(d)
+        "ask_the_docs.index.summarize_communities", lambda d, s: summarize_calls.append(d)
     )
     settings = make_settings(tmp_path, graph_enabled=True)
 
@@ -211,7 +211,7 @@ def test_build_graph_degrades_when_graph_client_unreachable(tmp_path, monkeypatc
         build_graph([make_chunk("doc1", 0, "text")], settings)  # must not raise
 
     assert any(
-        record.name == "research_assistant.index" and "graph" in record.message.lower()
+        record.name == "ask_the_docs.index" and "graph" in record.message.lower()
         for record in caplog.records
     )
     # No driver was ever obtained, so there's nothing to run community
@@ -223,21 +223,21 @@ def test_build_graph_degrades_when_graph_client_unreachable(tmp_path, monkeypatc
 
 
 def test_build_graph_degrades_when_write_graph_raises(tmp_path, monkeypatch, caplog):
-    monkeypatch.setattr("research_assistant.index.extract_triplets", lambda *a, **k: [Triplet("A", "uses", "B")])
-    monkeypatch.setattr("research_assistant.index.resolve_entities", lambda triplets, s: triplets)
-    monkeypatch.setattr("research_assistant.index.get_graph_client", lambda s: "fake-driver")
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", lambda *a, **k: [Triplet("A", "uses", "B")])
+    monkeypatch.setattr("ask_the_docs.index.resolve_entities", lambda triplets, s: triplets)
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "fake-driver")
 
     def boom(driver, chunk_triplets):
         raise Neo4jError("boom")
 
-    monkeypatch.setattr("research_assistant.index.write_graph", boom)
+    monkeypatch.setattr("ask_the_docs.index.write_graph", boom)
     settings = make_settings(tmp_path, graph_enabled=True)
 
     with caplog.at_level(logging.WARNING):
         build_graph([make_chunk("doc1", 0, "text")], settings)  # must not raise
 
     assert any(
-        record.name == "research_assistant.index" and "graph" in record.message.lower()
+        record.name == "ask_the_docs.index" and "graph" in record.message.lower()
         for record in caplog.records
     )
 
@@ -249,14 +249,14 @@ def test_build_graph_degrades_when_extract_triplets_raises(tmp_path, monkeypatch
     def boom(chunk_text, settings):
         raise OllamaUnavailableError("ollama is down")
 
-    monkeypatch.setattr("research_assistant.index.extract_triplets", boom)
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", boom)
     settings = make_settings(tmp_path, graph_enabled=True)
 
     with caplog.at_level(logging.WARNING):
         build_graph([make_chunk("doc1", 0, "text")], settings)  # must not raise
 
     assert any(
-        record.name == "research_assistant.index" and "graph" in record.message.lower()
+        record.name == "ask_the_docs.index" and "graph" in record.message.lower()
         for record in caplog.records
     )
 
@@ -272,14 +272,14 @@ def test_build_graph_continues_past_extraction_failure_for_one_chunk(tmp_path, m
         ]
 
     written = {}
-    monkeypatch.setattr("research_assistant.index.extract_triplets", flaky_extract)
-    monkeypatch.setattr("research_assistant.index.resolve_entities", lambda triplets, s: triplets)
-    monkeypatch.setattr("research_assistant.index.get_graph_client", lambda s: "fake-driver")
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", flaky_extract)
+    monkeypatch.setattr("ask_the_docs.index.resolve_entities", lambda triplets, s: triplets)
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "fake-driver")
     monkeypatch.setattr(
-        "research_assistant.index.write_graph", lambda driver, chunk_triplets: written.update(ct=chunk_triplets)
+        "ask_the_docs.index.write_graph", lambda driver, chunk_triplets: written.update(ct=chunk_triplets)
     )
-    monkeypatch.setattr("research_assistant.index.run_community_detection", lambda driver: None)
-    monkeypatch.setattr("research_assistant.index.summarize_communities", lambda driver, s: None)
+    monkeypatch.setattr("ask_the_docs.index.run_community_detection", lambda driver: None)
+    monkeypatch.setattr("ask_the_docs.index.summarize_communities", lambda driver, s: None)
 
     chunks = [
         make_chunk("doc1", 0, "doc1 text"),
@@ -316,10 +316,10 @@ def test_build_graph_pairs_resolved_triplets_with_correct_chunk_refs(tmp_path, m
         written["chunk_triplets"] = chunk_triplets
         written["driver"] = driver
 
-    monkeypatch.setattr("research_assistant.index.extract_triplets", fake_extract)
-    monkeypatch.setattr("research_assistant.index.resolve_entities", fake_resolve)
-    monkeypatch.setattr("research_assistant.index.get_graph_client", lambda s: "fake-driver")
-    monkeypatch.setattr("research_assistant.index.write_graph", fake_write_graph)
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", fake_extract)
+    monkeypatch.setattr("ask_the_docs.index.resolve_entities", fake_resolve)
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "fake-driver")
+    monkeypatch.setattr("ask_the_docs.index.write_graph", fake_write_graph)
 
     chunks = [
         make_chunk("doc1", 0, "doc1 text"),
@@ -350,15 +350,15 @@ def test_build_graph_noop_safe_with_empty_chunks_list(tmp_path, monkeypatch):
     resolve_calls = []
     get_client_calls = []
     write_calls = []
-    monkeypatch.setattr("research_assistant.index.extract_triplets", lambda *a, **k: extract_calls.append(1) or [])
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", lambda *a, **k: extract_calls.append(1) or [])
     monkeypatch.setattr(
-        "research_assistant.index.resolve_entities", lambda triplets, s: resolve_calls.append(1) or triplets
+        "ask_the_docs.index.resolve_entities", lambda triplets, s: resolve_calls.append(1) or triplets
     )
     monkeypatch.setattr(
-        "research_assistant.index.get_graph_client", lambda s: get_client_calls.append(1) or "fake-driver"
+        "ask_the_docs.index.get_graph_client", lambda s: get_client_calls.append(1) or "fake-driver"
     )
     monkeypatch.setattr(
-        "research_assistant.index.write_graph", lambda driver, chunk_triplets: write_calls.append(chunk_triplets)
+        "ask_the_docs.index.write_graph", lambda driver, chunk_triplets: write_calls.append(chunk_triplets)
     )
     settings = make_settings(tmp_path, graph_enabled=True)
 
@@ -377,12 +377,12 @@ def test_build_graph_noop_safe_when_every_chunk_extracts_zero_triplets(tmp_path,
     # fences, so extract_triplets degrades every chunk to [] (Task 3).
     resolve_calls = []
     get_client_calls = []
-    monkeypatch.setattr("research_assistant.index.extract_triplets", lambda *a, **k: [])
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", lambda *a, **k: [])
     monkeypatch.setattr(
-        "research_assistant.index.resolve_entities", lambda triplets, s: resolve_calls.append(1) or triplets
+        "ask_the_docs.index.resolve_entities", lambda triplets, s: resolve_calls.append(1) or triplets
     )
     monkeypatch.setattr(
-        "research_assistant.index.get_graph_client", lambda s: get_client_calls.append(1) or "fake-driver"
+        "ask_the_docs.index.get_graph_client", lambda s: get_client_calls.append(1) or "fake-driver"
     )
     settings = make_settings(tmp_path, graph_enabled=True)
 
@@ -394,17 +394,17 @@ def test_build_graph_noop_safe_when_every_chunk_extracts_zero_triplets(tmp_path,
 
 def test_build_graph_runs_community_detection_and_summarization_after_write(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr("research_assistant.index.extract_triplets", lambda *a, **k: [Triplet("A", "uses", "B")])
-    monkeypatch.setattr("research_assistant.index.resolve_entities", lambda triplets, s: triplets)
-    monkeypatch.setattr("research_assistant.index.get_graph_client", lambda s: "fake-driver")
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", lambda *a, **k: [Triplet("A", "uses", "B")])
+    monkeypatch.setattr("ask_the_docs.index.resolve_entities", lambda triplets, s: triplets)
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "fake-driver")
     monkeypatch.setattr(
-        "research_assistant.index.write_graph", lambda *a, **k: calls.append(("write", a[0]))
+        "ask_the_docs.index.write_graph", lambda *a, **k: calls.append(("write", a[0]))
     )
     monkeypatch.setattr(
-        "research_assistant.index.run_community_detection", lambda d: calls.append(("detect", d))
+        "ask_the_docs.index.run_community_detection", lambda d: calls.append(("detect", d))
     )
     monkeypatch.setattr(
-        "research_assistant.index.summarize_communities", lambda d, s: calls.append(("summarize", d, s))
+        "ask_the_docs.index.summarize_communities", lambda d, s: calls.append(("summarize", d, s))
     )
     settings = make_settings(tmp_path, graph_enabled=True)
 
@@ -420,10 +420,10 @@ def test_build_graph_runs_community_detection_and_summarization_after_write(tmp_
 
 
 def test_build_index_calls_build_graph_with_its_chunks(tmp_path, monkeypatch):
-    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
     captured = {}
     monkeypatch.setattr(
-        "research_assistant.index.build_graph",
+        "ask_the_docs.index.build_graph",
         lambda chunks, settings: captured.update(chunks=chunks, settings=settings),
     )
     settings = make_settings(tmp_path, graph_enabled=True)
@@ -436,14 +436,14 @@ def test_build_index_calls_build_graph_with_its_chunks(tmp_path, monkeypatch):
 
 
 def test_build_index_completes_vector_indexing_when_graph_build_degrades(tmp_path, monkeypatch):
-    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
-    monkeypatch.setattr("research_assistant.index.extract_triplets", lambda *a, **k: [Triplet("A", "uses", "B")])
-    monkeypatch.setattr("research_assistant.index.resolve_entities", lambda triplets, s: triplets)
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", lambda *a, **k: [Triplet("A", "uses", "B")])
+    monkeypatch.setattr("ask_the_docs.index.resolve_entities", lambda triplets, s: triplets)
 
     def boom(settings):
         raise ServiceUnavailable("down")
 
-    monkeypatch.setattr("research_assistant.index.get_graph_client", boom)
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", boom)
     settings = make_settings(tmp_path, graph_enabled=True)
     doc = Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
 
@@ -453,12 +453,12 @@ def test_build_index_completes_vector_indexing_when_graph_build_degrades(tmp_pat
 
 
 def test_build_index_completes_vector_indexing_when_graph_extraction_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
 
     def boom(chunk_text, settings):
         raise OllamaUnavailableError("ollama is down")
 
-    monkeypatch.setattr("research_assistant.index.extract_triplets", boom)
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", boom)
     settings = make_settings(tmp_path, graph_enabled=True)
     doc = Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
 

@@ -1,11 +1,11 @@
-# CLAUDE.md (research-assistant)
+# CLAUDE.md (ask-the-docs)
 
 ## Project
 
-A local-first, containerized RAG research assistant over configurable
-document sources (white papers, markdown, text, docx, URLs). Educational
-build: implement incrementally, in small reviewed slices, not generated
-wholesale.
+A local-first, containerized RAG system over configurable document
+sources (white papers, markdown, text, docx, URLs) — general-purpose,
+not limited to research papers. Educational build: implement
+incrementally, in small reviewed slices, not generated wholesale.
 
 Scope: vector + hybrid (BM25) RAG with cross-encoder reranking and
 LLM-based query rewriting (sub-project 1-2); Graph RAG — LLM-based

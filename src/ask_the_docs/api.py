@@ -9,24 +9,24 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from research_assistant.answer import answer
-from research_assistant.config import get_settings
-from research_assistant.evaluate import run_evaluation
-from research_assistant.index import build_index
-from research_assistant.ingest import (
+from ask_the_docs.answer import answer
+from ask_the_docs.config import get_settings
+from ask_the_docs.evaluate import run_evaluation
+from ask_the_docs.index import build_index
+from ask_the_docs.ingest import (
     PathSecurityError,
     UnsupportedFileTypeError,
     UrlSecurityError,
     discover_sources,
     dispatch,
 )
-from research_assistant.llm import OllamaUnavailableError
-from research_assistant.seed import seed_if_needed
+from ask_the_docs.llm import OllamaUnavailableError
+from ask_the_docs.seed import seed_if_needed
 
 # uvicorn only configures its own loggers (uvicorn, uvicorn.access), never
 # arbitrary app loggers -- without this, seed.py's INFO-level progress logs
 # are silently dropped by the default root logger (WARNING threshold).
-_package_logger = logging.getLogger("research_assistant")
+_package_logger = logging.getLogger("ask_the_docs")
 if not _package_logger.handlers:
     _handler = logging.StreamHandler()
     _handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI):
 
 GOLDEN_QUESTIONS_PATH = Path("evals/golden_questions.yaml")
 
-app = FastAPI(title="research-assistant", lifespan=lifespan)
+app = FastAPI(title="ask-the-docs", lifespan=lifespan)
 
 
 @app.exception_handler(PathSecurityError)

@@ -11,7 +11,7 @@ export async function proxyToBackend(path: string, init: RequestInit): Promise<R
     backendResponse = await fetch(`${BACKEND_URL}${path}`, init);
   } catch {
     return Response.json(
-      { error: "Couldn't reach the research-assistant backend." },
+      { error: "Couldn't reach the ask-the-docs backend." },
       { status: 502 },
     );
   }

@@ -1,5 +1,5 @@
 [project]
-name = "research-assistant"
+name = "ask-the-docs"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.scripts]
-research-assistant = "research_assistant.cli:main"
+ask-the-docs = "ask_the_docs.cli:main"
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

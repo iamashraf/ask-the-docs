@@ -1,9 +1,9 @@
 import json
 from unittest.mock import Mock
 
-from research_assistant.answer import AnswerResult
-from research_assistant.config import REFUSAL_MESSAGE, ProviderConfig, Settings
-from research_assistant.evaluate import GoldenQuestion, JudgeScore, judge, load_golden_questions, run_evaluation
+from ask_the_docs.answer import AnswerResult
+from ask_the_docs.config import REFUSAL_MESSAGE, ProviderConfig, Settings
+from ask_the_docs.evaluate import GoldenQuestion, JudgeScore, judge, load_golden_questions, run_evaluation
 
 
 def make_settings() -> Settings:
@@ -79,11 +79,11 @@ def test_run_evaluation_skips_judge_for_expected_refusal_question_that_correctly
     questions_path.write_text('- question: "Q1"\n  expected_refusal: true\n')
 
     monkeypatch.setattr(
-        "research_assistant.evaluate.answer",
+        "ask_the_docs.evaluate.answer",
         lambda query, settings: AnswerResult(text=REFUSAL_MESSAGE, citations=[], context=""),
     )
     mock_get_llm_client = Mock()
-    monkeypatch.setattr("research_assistant.evaluate.get_llm_client", mock_get_llm_client)
+    monkeypatch.setattr("ask_the_docs.evaluate.get_llm_client", mock_get_llm_client)
 
     results = run_evaluation(make_settings(), questions_path)
 
@@ -97,7 +97,7 @@ def test_run_evaluation_flags_error_when_expected_refusal_question_gets_an_answe
     questions_path.write_text('- question: "Q1"\n  expected_refusal: true\n')
 
     monkeypatch.setattr(
-        "research_assistant.evaluate.answer",
+        "ask_the_docs.evaluate.answer",
         lambda query, settings: AnswerResult(
             text="a confident but wrong answer", citations=["a.pdf"], context="ctx"
         ),
@@ -114,7 +114,7 @@ def test_run_evaluation_marks_error_and_continues(tmp_path, monkeypatch):
     questions_path.write_text('- question: "Q1"\n- question: "Q2"\n')
 
     monkeypatch.setattr(
-        "research_assistant.evaluate.answer",
+        "ask_the_docs.evaluate.answer",
         lambda query, settings: AnswerResult(text="some answer", citations=["a.pdf"], context="ctx"),
     )
 
@@ -134,7 +134,7 @@ def test_run_evaluation_marks_error_and_continues(tmp_path, monkeypatch):
     )
     fake_client = Mock()
     fake_client.generate.side_effect = lambda prompt: next(responses)
-    monkeypatch.setattr("research_assistant.evaluate.get_llm_client", lambda config: fake_client)
+    monkeypatch.setattr("ask_the_docs.evaluate.get_llm_client", lambda config: fake_client)
 
     results = run_evaluation(make_settings(), questions_path)
 

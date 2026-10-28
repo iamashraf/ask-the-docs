@@ -1,3 +1,5 @@
+name: ask-the-docs
+
 services:
   ollama:
     image: ollama/ollama
@@ -52,7 +54,7 @@ services:
       retries: 30
 
   app:
-    image: localhost/research-assistant-app
+    image: localhost/ask-the-docs-app
     build: .
     command: ["serve"]
     depends_on:
@@ -79,7 +81,7 @@ services:
         max-file: "3"
 
   web:
-    image: localhost/research-assistant-web
+    image: localhost/ask-the-docs-web
     build: ./web
     environment:
       - BACKEND_URL=http://app:8000

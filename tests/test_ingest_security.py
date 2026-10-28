@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from research_assistant.ingest import (
+from ask_the_docs.ingest import (
     PathSecurityError,
     UnsupportedFileTypeError,
     UrlSecurityError,
@@ -16,7 +16,7 @@ from research_assistant.ingest import (
 
 def _patch_settings(monkeypatch, max_file_size_mb: int = 25) -> None:
     monkeypatch.setattr(
-        "research_assistant.ingest.get_settings",
+        "ask_the_docs.ingest.get_settings",
         lambda: SimpleNamespace(max_file_size_mb=max_file_size_mb),
     )
 

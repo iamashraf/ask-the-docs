@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from research_assistant.config import REFUSAL_MESSAGE, ProviderConfig, Settings
+from ask_the_docs.config import REFUSAL_MESSAGE, ProviderConfig, Settings
 
 
 def test_settings_defaults():

@@ -4,7 +4,7 @@ import logging
 
 import neo4j
 
-from research_assistant.graph_extract import Triplet
+from ask_the_docs.graph_extract import Triplet
 
 logger = logging.getLogger(__name__)
 
