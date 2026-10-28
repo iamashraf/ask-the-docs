@@ -7,6 +7,7 @@ import pytest
 from langchain_core.documents import Document
 
 from ask_the_docs.answer import (
+    MAX_GENERATION_ATTEMPTS,
     AnswerResult,
     answer,
     build_prompt,
@@ -144,14 +145,40 @@ def test_answer_dedupes_citations_preserving_order(monkeypatch):
 def test_answer_returns_refusal_message_when_guardrail_fails(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    fake_generate = Mock(return_value="an answer with no citation markers")
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
-        lambda config: Mock(generate=Mock(return_value="an answer with no citation markers")),
+        lambda config: Mock(generate=fake_generate),
     )
 
     result = answer("some question", make_settings())
 
     assert result == AnswerResult(text=REFUSAL_MESSAGE, citations=[])
+    # Every attempt failed the guardrail, so the retry loop must have
+    # exhausted MAX_GENERATION_ATTEMPTS before falling back to refusal --
+    # not just tried once.
+    assert fake_generate.call_count == MAX_GENERATION_ATTEMPTS
+
+
+def test_answer_retries_once_when_first_attempt_fails_the_guardrail(monkeypatch):
+    """A local LLM's citation formatting is non-deterministic -- a single
+    malformed/uncited response must not immediately refuse a genuinely
+    answerable question; one retry should recover it."""
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    fake_generate = Mock(
+        side_effect=["an answer with no citation markers", "a grounded answer [1]"]
+    )
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(generate=fake_generate),
+    )
+
+    result = answer("some question", make_settings())
+
+    assert result.text == "a grounded answer [1]"
+    assert result.citations == ["a.pdf"]
+    assert fake_generate.call_count == 2
 
 
 def test_answer_logs_prompt_at_debug_level(monkeypatch, caplog):
