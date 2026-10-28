@@ -119,14 +119,35 @@ def build_graph(chunks: list[Document], settings: Settings) -> None:
         logger.warning("Graph build failed; continuing without updating the graph.", exc_info=True)
 
 
+def _group_by_source(chunks: list[Document]) -> dict[str, list[Document]]:
+    grouped: dict[str, list[Document]] = {}
+    for chunk in chunks:
+        grouped.setdefault(chunk.metadata["source_doc_id"], []).append(chunk)
+    return grouped
+
+
 def build_index(docs: list[Document], settings: Settings) -> Chroma:
+    """Idempotent: a source whose existing chunks already match its fresh
+    content hash and count is skipped entirely (no re-embed, no re-insert);
+    any other source (new, changed, or a stale partial-write leftover) has
+    its existing chunks deleted and replaced."""
     chunks = chunk_documents(docs, embedding_model=_embedding_model_name(settings))
-    index = Chroma.from_documents(
-        chunks,
-        embedding=get_embeddings(settings),
-        collection_name=get_collection_name(settings),
-        persist_directory=str(settings.index_dir),
-    )
+    index = load_index(settings)
+
+    to_insert: list[Document] = []
+    for source_doc_id, source_chunks in _group_by_source(chunks).items():
+        existing = index.get(where={"source_doc_id": source_doc_id}, include=["metadatas"])
+        if existing["ids"]:
+            existing_hashes = {m["content_hash"] for m in existing["metadatas"]}
+            if existing_hashes == {source_chunks[0].metadata["content_hash"]} and len(existing["ids"]) == len(
+                source_chunks
+            ):
+                continue
+            index.delete(ids=existing["ids"])
+        to_insert.extend(source_chunks)
+
+    if to_insert:
+        index.add_documents(to_insert)
     build_graph(chunks, settings)
     return index
 

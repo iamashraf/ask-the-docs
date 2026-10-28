@@ -48,6 +48,20 @@ class FakeEmbeddings(Embeddings):
         return _vector(text)
 
 
+class CountingEmbeddings(Embeddings):
+    """Wraps FakeEmbeddings to prove a skipped source is never re-embedded, not just never re-inserted."""
+
+    def __init__(self):
+        self.embed_documents_call_count = 0
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.embed_documents_call_count += 1
+        return [_vector(t) for t in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return _vector(text)
+
+
 def test_chunk_documents_respects_chunk_size():
     doc = Document(page_content="word " * 400, metadata={"source": "paper.pdf", "source_doc_id": "doc1"})
 
@@ -138,6 +152,87 @@ def test_build_index_then_load_index_round_trips(tmp_path, monkeypatch):
 
     assert len(results) == 1
     assert "Attention is all you need" in results[0].page_content
+
+
+def test_build_index_reingesting_unchanged_doc_is_a_noop(tmp_path, monkeypatch):
+    counting = CountingEmbeddings()
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: counting)
+    settings = make_settings(tmp_path)
+    doc = Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    build_index([doc], settings)
+    first_count = get_chunk_count(settings)
+    calls_after_first = counting.embed_documents_call_count
+
+    build_index([doc], settings)
+
+    assert get_chunk_count(settings) == first_count
+    assert counting.embed_documents_call_count == calls_after_first
+
+
+def test_build_index_reingesting_changed_doc_replaces_old_chunks(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    doc_v1 = Document(page_content="alpha " * 200, metadata={"source": "a.pdf", "source_doc_id": "docA"})
+    doc_v2 = Document(page_content="omega " * 200, metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    build_index([doc_v1], settings)
+    build_index([doc_v2], settings)
+
+    chunks = get_all_chunks(settings)
+    assert all("alpha" not in c.page_content for c in chunks)
+    assert all("omega" in c.page_content for c in chunks)
+    assert len(chunks) == len(chunk_documents([doc_v2], embedding_model="m"))
+
+
+def test_build_index_mixed_batch_only_replaces_the_changed_source(tmp_path, monkeypatch):
+    counting = CountingEmbeddings()
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: counting)
+    settings = make_settings(tmp_path)
+    doc_a = Document(page_content="alpha " * 200, metadata={"source": "a.pdf", "source_doc_id": "docA"})
+    doc_b_v1 = Document(page_content="beta " * 200, metadata={"source": "b.pdf", "source_doc_id": "docB"})
+    doc_b_v2 = Document(page_content="gamma " * 200, metadata={"source": "b.pdf", "source_doc_id": "docB"})
+
+    build_index([doc_a, doc_b_v1], settings)
+    calls_after_first = counting.embed_documents_call_count
+
+    build_index([doc_a, doc_b_v2], settings)
+
+    assert counting.embed_documents_call_count == calls_after_first + 1
+    chunks = get_all_chunks(settings)
+    a_chunks = [c for c in chunks if c.metadata["source_doc_id"] == "docA"]
+    b_chunks = [c for c in chunks if c.metadata["source_doc_id"] == "docB"]
+    assert all("alpha" in c.page_content for c in a_chunks)
+    assert all("gamma" in c.page_content for c in b_chunks)
+
+
+def test_build_index_treats_a_stale_partial_write_as_changed(tmp_path, monkeypatch):
+    """Simulates a prior crash: a leftover chunk set whose content_hash
+    doesn't match what the current input would produce. Must be replaced,
+    not left in place alongside the fresh chunks."""
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    stale_chunk = Document(
+        page_content="leftover from a crashed ingest",
+        metadata={"source_doc_id": "docA", "chunk_index": 0, "content_hash": "stale-hash"},
+    )
+    load_index(settings).add_documents([stale_chunk])
+    doc = Document(page_content="fresh content", metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    build_index([doc], settings)
+
+    chunks = get_all_chunks(settings)
+    assert all("leftover" not in c.page_content for c in chunks)
+    assert all("fresh content" in c.page_content for c in chunks)
+
+
+def test_build_index_with_empty_docs_list_is_a_noop(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+
+    build_index([], settings)  # must not raise
+
+    assert get_chunk_count(settings) == 0
 
 
 def test_get_all_chunks_returns_every_indexed_chunk(tmp_path, monkeypatch):
