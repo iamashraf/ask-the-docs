@@ -34,8 +34,19 @@ configure.
 - **Security-hardened ingestion** — path-traversal and SSRF guards on
   every local file and URL before anything is read.
 
-> See `docs/ARCHITECTURE.md` and `docs/CONCEPTS.md` for how retrieval,
-> reranking, and Graph RAG fit together.
+## Architecture
+
+Ingestion and query paths sharing Chroma, Redis, and Neo4j. Solid
+borders are on the critical path; dashed borders are optional, toggled
+off by default (Graph RAG, Neo4j). Built incrementally, one slice at a
+time — see `docs/ARCHITECTURE.md` for the detailed flow and current
+implementation notes as each piece lands.
+
+![AskTheDocs RAG architecture: ingestion and query paths sharing Chroma, Redis, and Neo4j, with solid borders on the critical path and dashed borders marking optional components like Graph RAG and Neo4j that are off by default](docs/architecture-diagram.png)
+
+See `docs/ARCHITECTURE.md` for the full query/ingest flow and the tech
+stack's rationale, and `docs/CONCEPTS.md` for the concepts (vector
+search, BM25, reranking, Graph RAG, ...) behind each stage.
 
 ## Quickstart
 
