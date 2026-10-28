@@ -1,5 +1,5 @@
-from research_assistant.config import ProviderConfig, Settings
-from research_assistant.query_analyzer import (
+from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.query_analyzer import (
     QueryClassification,
     _strip_code_fence,
     classify_query,
@@ -25,7 +25,7 @@ class FakeLLMClient:
 
 def test_rewrite_query_returns_stripped_result(monkeypatch):
     fake_client = FakeLLMClient()
-    monkeypatch.setattr("research_assistant.query_analyzer.get_llm_client", lambda _: fake_client)
+    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda _: fake_client)
 
     result = rewrite_query("what is attention?", make_settings())
 
@@ -34,7 +34,7 @@ def test_rewrite_query_returns_stripped_result(monkeypatch):
 
 def test_rewrite_query_includes_original_query_in_prompt(monkeypatch):
     fake_client = FakeLLMClient()
-    monkeypatch.setattr("research_assistant.query_analyzer.get_llm_client", lambda _: fake_client)
+    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda _: fake_client)
 
     rewrite_query("what is attention?", make_settings())
 
@@ -46,7 +46,7 @@ def test_classify_query_parses_local_with_entities(monkeypatch):
         def generate(self, prompt, system=None):
             return '{"label": "local", "entities": ["BM25", "vector search"]}'
 
-    monkeypatch.setattr("research_assistant.query_analyzer.get_llm_client", lambda cfg: FakeClient())
+    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda cfg: FakeClient())
 
     result = classify_query("how does BM25 relate to vector search?", make_settings())
 
@@ -58,7 +58,7 @@ def test_classify_query_parses_global_with_no_entities(monkeypatch):
         def generate(self, prompt, system=None):
             return '{"label": "global", "entities": []}'
 
-    monkeypatch.setattr("research_assistant.query_analyzer.get_llm_client", lambda cfg: FakeClient())
+    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda cfg: FakeClient())
 
     result = classify_query("what are the main themes of this corpus?", make_settings())
 
@@ -70,7 +70,7 @@ def test_classify_query_parses_fenced_json(monkeypatch):
         def generate(self, prompt, system=None):
             return '```json\n{"label": "global", "entities": []}\n```'
 
-    monkeypatch.setattr("research_assistant.query_analyzer.get_llm_client", lambda cfg: FakeClient())
+    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda cfg: FakeClient())
 
     result = classify_query("what are the main themes of this corpus?", make_settings())
 
@@ -82,7 +82,7 @@ def test_classify_query_parses_bare_fenced_json(monkeypatch):
         def generate(self, prompt, system=None):
             return '```\n{"label": "global", "entities": []}\n```'
 
-    monkeypatch.setattr("research_assistant.query_analyzer.get_llm_client", lambda cfg: FakeClient())
+    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda cfg: FakeClient())
 
     result = classify_query("what are the main themes of this corpus?", make_settings())
 
@@ -94,7 +94,7 @@ def test_classify_query_defaults_to_local_on_malformed_output(monkeypatch):
         def generate(self, prompt, system=None):
             return "not json"
 
-    monkeypatch.setattr("research_assistant.query_analyzer.get_llm_client", lambda cfg: FakeClient())
+    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda cfg: FakeClient())
 
     result = classify_query("anything", make_settings())
 
@@ -106,7 +106,7 @@ def test_classify_query_defaults_to_local_on_invalid_label(monkeypatch):
         def generate(self, prompt, system=None):
             return '{"label": "sideways", "entities": []}'
 
-    monkeypatch.setattr("research_assistant.query_analyzer.get_llm_client", lambda cfg: FakeClient())
+    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda cfg: FakeClient())
 
     result = classify_query("anything", make_settings())
 
@@ -118,7 +118,7 @@ def test_classify_query_defaults_to_local_when_entities_not_a_list(monkeypatch):
         def generate(self, prompt, system=None):
             return '{"label": "local", "entities": "BM25"}'
 
-    monkeypatch.setattr("research_assistant.query_analyzer.get_llm_client", lambda cfg: FakeClient())
+    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda cfg: FakeClient())
 
     result = classify_query("anything", make_settings())
 
@@ -146,7 +146,7 @@ def test_classify_query_defaults_to_local_on_non_str_output(monkeypatch):
         def generate(self, prompt, system=None):
             return None
 
-    monkeypatch.setattr("research_assistant.query_analyzer.get_llm_client", lambda cfg: FakeClient())
+    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda cfg: FakeClient())
 
     result = classify_query("anything", make_settings())
 
@@ -161,7 +161,7 @@ def test_classify_query_includes_query_in_prompt(monkeypatch):
             captured["prompt"] = prompt
             return '{"label": "local", "entities": []}'
 
-    monkeypatch.setattr("research_assistant.query_analyzer.get_llm_client", lambda cfg: FakeClient())
+    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda cfg: FakeClient())
 
     classify_query("how does BM25 relate to vector search?", make_settings())
 

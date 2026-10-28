@@ -8,13 +8,13 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from research_assistant.community import run_community_detection, summarize_communities
-from research_assistant.config import Settings
-from research_assistant.embeddings import get_embeddings
-from research_assistant.entity_resolution import resolve_entities
-from research_assistant.graph_client import get_graph_client
-from research_assistant.graph_extract import extract_triplets
-from research_assistant.graph_store import write_graph
+from ask_the_docs.community import run_community_detection, summarize_communities
+from ask_the_docs.config import Settings
+from ask_the_docs.embeddings import get_embeddings
+from ask_the_docs.entity_resolution import resolve_entities
+from ask_the_docs.graph_client import get_graph_client
+from ask_the_docs.graph_extract import extract_triplets
+from ask_the_docs.graph_store import write_graph
 
 logger = logging.getLogger(__name__)
 

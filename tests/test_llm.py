@@ -3,8 +3,8 @@ from types import SimpleNamespace
 import pytest
 import requests
 
-from research_assistant.config import ProviderConfig
-from research_assistant.llm import (
+from ask_the_docs.config import ProviderConfig
+from ask_the_docs.llm import (
     AnthropicLLMClient,
     OllamaLLMClient,
     OllamaUnavailableError,
@@ -96,7 +96,7 @@ def test_anthropic_client_generate_calls_sdk(monkeypatch):
         def __init__(self, api_key):
             self.messages = FakeMessages()
 
-    monkeypatch.setattr("research_assistant.llm.Anthropic", FakeAnthropic)
+    monkeypatch.setattr("ask_the_docs.llm.Anthropic", FakeAnthropic)
 
     client = AnthropicLLMClient(model="claude-sonnet-5-5", api_key="x")
     assert client.generate("hi") == "hello from claude"
@@ -115,7 +115,7 @@ def test_anthropic_client_generate_passes_system_kwarg_when_given(monkeypatch):
         def __init__(self, api_key):
             self.messages = FakeMessages()
 
-    monkeypatch.setattr("research_assistant.llm.Anthropic", FakeAnthropic)
+    monkeypatch.setattr("ask_the_docs.llm.Anthropic", FakeAnthropic)
 
     client = AnthropicLLMClient(model="claude-sonnet-5-5", api_key="x")
     client.generate("hi", system="be terse")
@@ -141,7 +141,7 @@ def test_openai_client_generate_calls_sdk(monkeypatch):
         def __init__(self, api_key):
             self.chat = FakeChat()
 
-    monkeypatch.setattr("research_assistant.llm.OpenAI", FakeOpenAI)
+    monkeypatch.setattr("ask_the_docs.llm.OpenAI", FakeOpenAI)
 
     client = OpenAILLMClient(model="gpt-4o-mini", api_key="x")
     assert client.generate("hi") == "hello from gpt"
@@ -166,7 +166,7 @@ def test_openai_client_generate_prepends_system_message_when_given(monkeypatch):
         def __init__(self, api_key):
             self.chat = FakeChat()
 
-    monkeypatch.setattr("research_assistant.llm.OpenAI", FakeOpenAI)
+    monkeypatch.setattr("ask_the_docs.llm.OpenAI", FakeOpenAI)
 
     client = OpenAILLMClient(model="gpt-4o-mini", api_key="x")
     client.generate("hi", system="be terse")

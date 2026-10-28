@@ -8,10 +8,10 @@ import re
 import neo4j
 from langchain_core.documents import Document
 
-from research_assistant.config import Settings
-from research_assistant.graph_client import get_graph_client
-from research_assistant.index import get_chunks_by_refs
-from research_assistant.llm import get_llm_client
+from ask_the_docs.config import Settings
+from ask_the_docs.graph_client import get_graph_client
+from ask_the_docs.index import get_chunks_by_refs
+from ask_the_docs.llm import get_llm_client
 
 logger = logging.getLogger(__name__)
 

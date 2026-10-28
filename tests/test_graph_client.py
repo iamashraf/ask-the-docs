@@ -1,7 +1,7 @@
 import neo4j
 
-from research_assistant.config import ProviderConfig, Settings
-from research_assistant.graph_client import _get_graph_client_cached, get_graph_client
+from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.graph_client import _get_graph_client_cached, get_graph_client
 
 
 def make_settings(**overrides) -> Settings:

@@ -3,9 +3,9 @@
 import math
 from dataclasses import replace
 
-from research_assistant.config import Settings
-from research_assistant.embeddings import get_embeddings
-from research_assistant.graph_extract import Triplet
+from ask_the_docs.config import Settings
+from ask_the_docs.embeddings import get_embeddings
+from ask_the_docs.graph_extract import Triplet
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:

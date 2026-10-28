@@ -6,15 +6,15 @@ from unittest.mock import Mock
 import pytest
 from langchain_core.documents import Document
 
-from research_assistant.answer import (
+from ask_the_docs.answer import (
     AnswerResult,
     answer,
     build_prompt,
     citation_guardrail_passes,
     format_context,
 )
-from research_assistant.cache import make_cache_key
-from research_assistant.config import REFUSAL_MESSAGE, ProviderConfig, Settings
+from ask_the_docs.cache import make_cache_key
+from ask_the_docs.config import REFUSAL_MESSAGE, ProviderConfig, Settings
 
 
 def make_settings() -> Settings:
@@ -65,8 +65,8 @@ def _no_real_cache_or_index(monkeypatch):
     every test in this file would hit a real Chroma dir and a real Valkey
     connection. A fresh, empty FakeCacheClient per test means every call
     here is a cache miss by default unless a test wires up its own."""
-    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: 0)
-    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: FakeCacheClient())
+    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: 0)
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: FakeCacheClient())
 
 
 def test_citation_guardrail_fails_on_zero_citations():
@@ -89,9 +89,9 @@ def test_citation_guardrail_fails_gracefully_on_absurdly_large_citation_number()
 
 
 def test_answer_returns_refusal_message_without_calling_llm(monkeypatch):
-    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: [])
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: [])
     mock_get_llm_client = Mock()
-    monkeypatch.setattr("research_assistant.answer.get_llm_client", mock_get_llm_client)
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", mock_get_llm_client)
 
     result = answer("anything", make_settings())
 
@@ -104,7 +104,7 @@ def test_answer_calls_generator_with_context_and_returns_citations(monkeypatch):
         Document(page_content="chunk one", metadata={"source": "a.pdf"}),
         Document(page_content="chunk two", metadata={"source": "b.pdf"}),
     ]
-    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
 
     captured_prompts = []
 
@@ -113,7 +113,7 @@ def test_answer_calls_generator_with_context_and_returns_citations(monkeypatch):
             captured_prompts.append(prompt)
             return "the answer [1][2]"
 
-    monkeypatch.setattr("research_assistant.answer.get_llm_client", lambda config: FakeClient())
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
 
     result = answer("What is X?", make_settings())
 
@@ -130,9 +130,9 @@ def test_answer_dedupes_citations_preserving_order(monkeypatch):
         Document(page_content="chunk two", metadata={"source": "b.pdf"}),
         Document(page_content="chunk three", metadata={"source": "a.pdf"}),
     ]
-    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
     monkeypatch.setattr(
-        "research_assistant.answer.get_llm_client",
+        "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(generate=Mock(return_value="the answer [1][2][3]")),
     )
 
@@ -143,9 +143,9 @@ def test_answer_dedupes_citations_preserving_order(monkeypatch):
 
 def test_answer_returns_refusal_message_when_guardrail_fails(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
     monkeypatch.setattr(
-        "research_assistant.answer.get_llm_client",
+        "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(generate=Mock(return_value="an answer with no citation markers")),
     )
 
@@ -156,22 +156,22 @@ def test_answer_returns_refusal_message_when_guardrail_fails(monkeypatch):
 
 def test_answer_logs_prompt_at_debug_level(monkeypatch, caplog):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
     monkeypatch.setattr(
-        "research_assistant.answer.get_llm_client",
+        "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(generate=Mock(return_value="the answer [1]")),
     )
 
-    with caplog.at_level(logging.DEBUG, logger="research_assistant.answer"):
+    with caplog.at_level(logging.DEBUG, logger="ask_the_docs.answer"):
         answer("What is X?", make_settings())
 
     assert any("What is X?" in record.message for record in caplog.records)
 
 
 def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
-    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: 1)
+    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: 1)
     fake_cache = FakeCacheClient()
-    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: fake_cache)
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: fake_cache)
     settings = make_settings()
 
     cached_result = AnswerResult(text="cached answer [1]", citations=["a.pdf"], context="ctx")
@@ -194,9 +194,9 @@ def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
     fake_cache.set(key, json.dumps(dataclasses.asdict(cached_result)).encode())
 
     mock_retrieve = Mock()
-    monkeypatch.setattr("research_assistant.answer.retrieve", mock_retrieve)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", mock_retrieve)
     mock_get_llm_client = Mock()
-    monkeypatch.setattr("research_assistant.answer.get_llm_client", mock_get_llm_client)
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", mock_get_llm_client)
 
     result = answer("What is X?", settings, k=5)
 
@@ -207,9 +207,9 @@ def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
 
 def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
     monkeypatch.setattr(
-        "research_assistant.answer.get_llm_client",
+        "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(generate=Mock(return_value="the answer [1]")),
     )
 
@@ -232,7 +232,7 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
         0,
     )
     fake_cache.set(key, b"not valid json")
-    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: fake_cache)
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: fake_cache)
 
     result = answer("What is X?", make_settings(), k=5)
 
@@ -241,10 +241,10 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
 
 def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
-    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: 1)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: 1)
     shared_cache = FakeCacheClient()
-    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: shared_cache)
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
 
     calls = {"count": 0}
 
@@ -253,7 +253,7 @@ def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
             calls["count"] += 1
             return "the answer [1]"
 
-    monkeypatch.setattr("research_assistant.answer.get_llm_client", lambda config: FakeClient())
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
     settings = make_settings()
 
     answer("What is X?", settings, k=5)
@@ -264,10 +264,10 @@ def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
 
 def test_answer_cache_key_changes_when_system_prompt_template_changes(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
-    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: 1)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: 1)
     shared_cache = FakeCacheClient()
-    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: shared_cache)
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
 
     calls = {"count": 0}
 
@@ -276,7 +276,7 @@ def test_answer_cache_key_changes_when_system_prompt_template_changes(monkeypatc
             calls["count"] += 1
             return "the answer [1]"
 
-    monkeypatch.setattr("research_assistant.answer.get_llm_client", lambda config: FakeClient())
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
 
     settings_a = make_settings().model_copy(update={"system_prompt_template": "be terse"})
     settings_b = make_settings().model_copy(update={"system_prompt_template": "be verbose"})
@@ -289,10 +289,10 @@ def test_answer_cache_key_changes_when_system_prompt_template_changes(monkeypatc
 
 def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
-    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: 1)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: 1)
     shared_cache = FakeCacheClient()
-    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: shared_cache)
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
 
     calls = {"count": 0}
 
@@ -301,7 +301,7 @@ def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
             calls["count"] += 1
             return "the answer [1]"
 
-    monkeypatch.setattr("research_assistant.answer.get_llm_client", lambda config: FakeClient())
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
 
     settings_a = make_settings().model_copy(update={"candidate_pool_size": 20})
     settings_b = make_settings().model_copy(update={"candidate_pool_size": 50})
@@ -322,10 +322,10 @@ def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
 )
 def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field, value_a, value_b):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
-    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: 1)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: 1)
     shared_cache = FakeCacheClient()
-    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: shared_cache)
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
 
     calls = {"count": 0}
 
@@ -334,7 +334,7 @@ def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field,
             calls["count"] += 1
             return "the answer [1]"
 
-    monkeypatch.setattr("research_assistant.answer.get_llm_client", lambda config: FakeClient())
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
 
     settings_a = make_settings().model_copy(update={field: value_a})
     settings_b = make_settings().model_copy(update={field: value_b})
@@ -347,12 +347,12 @@ def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field,
 
 def test_answer_cache_key_changes_when_chunk_count_changes(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
 
     counts = [2, 3]
-    monkeypatch.setattr("research_assistant.answer.get_chunk_count", lambda settings: counts.pop(0))
+    monkeypatch.setattr("ask_the_docs.answer.get_chunk_count", lambda settings: counts.pop(0))
     shared_cache = FakeCacheClient()
-    monkeypatch.setattr("research_assistant.answer.get_cache_client", lambda settings: shared_cache)
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
 
     calls = {"count": 0}
 
@@ -361,7 +361,7 @@ def test_answer_cache_key_changes_when_chunk_count_changes(monkeypatch):
             calls["count"] += 1
             return "the answer [1]"
 
-    monkeypatch.setattr("research_assistant.answer.get_llm_client", lambda config: FakeClient())
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
     settings = make_settings()
 
     answer("What is X?", settings, k=5)
@@ -372,7 +372,7 @@ def test_answer_cache_key_changes_when_chunk_count_changes(monkeypatch):
 
 def test_answer_passes_system_prompt_to_generate(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("research_assistant.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
 
     captured = {}
 
@@ -381,7 +381,7 @@ def test_answer_passes_system_prompt_to_generate(monkeypatch):
             captured["system"] = system
             return "the answer [1]"
 
-    monkeypatch.setattr("research_assistant.answer.get_llm_client", lambda config: FakeClient())
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
     settings = make_settings()
 
     answer("q", settings)

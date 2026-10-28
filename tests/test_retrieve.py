@@ -3,10 +3,10 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from neo4j.exceptions import SessionExpired
 
-from research_assistant.config import ProviderConfig, Settings
-from research_assistant.index import build_index
-from research_assistant.query_analyzer import QueryClassification
-from research_assistant.retrieve import hybrid_merge, retrieve
+from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.index import build_index
+from ask_the_docs.query_analyzer import QueryClassification
+from ask_the_docs.retrieve import hybrid_merge, retrieve
 
 
 def make_settings(tmp_path) -> Settings:
@@ -65,16 +65,16 @@ class FakeEmbeddings(Embeddings):
 
 
 def test_retrieve_returns_empty_list_when_index_not_built(tmp_path, monkeypatch):
-    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
-    monkeypatch.setattr("research_assistant.bm25_index.get_cache_client", lambda settings: FakeCache())
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda settings: FakeCache())
     settings = make_settings(tmp_path)
 
     assert retrieve("apples are red fruit", settings) == []
 
 
 def test_retrieve_returns_top_k_ordered_by_relevance(tmp_path, monkeypatch):
-    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
-    monkeypatch.setattr("research_assistant.bm25_index.get_cache_client", lambda settings: FakeCache())
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda settings: FakeCache())
     settings = make_settings(tmp_path)
 
     docs = [
@@ -151,9 +151,9 @@ def test_retrieve_truncates_merged_candidates_to_pool_size_before_rerank(tmp_pat
         def similarity_search_with_score(self, query, k):
             return [(doc, 0.1 * (i + 1)) for i, doc in enumerate(vector_docs)]
 
-    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
     monkeypatch.setattr(
-        "research_assistant.retrieve.bm25_score",
+        "ask_the_docs.retrieve.bm25_score",
         lambda query, settings: [(doc, 1.0) for doc in bm25_docs],
     )
 
@@ -164,7 +164,7 @@ def test_retrieve_truncates_merged_candidates_to_pool_size_before_rerank(tmp_pat
             captured["candidates"] = candidates
             return candidates[:k]
 
-    monkeypatch.setattr("research_assistant.retrieve.get_reranker", lambda model_name: CapturingReranker())
+    monkeypatch.setattr("ask_the_docs.retrieve.get_reranker", lambda model_name: CapturingReranker())
 
     settings = make_settings(tmp_path).model_copy(update={"rerank_enabled": True, "candidate_pool_size": 2})
     retrieve("anything", settings, k=2)
@@ -185,9 +185,9 @@ def test_retrieve_excludes_zero_score_bm25_hits_from_merge(tmp_path, monkeypatch
         def similarity_search_with_score(self, query, k):
             return [(doc_v1, 0.1), (doc_v2, 0.2)]
 
-    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
     monkeypatch.setattr(
-        "research_assistant.retrieve.bm25_score",
+        "ask_the_docs.retrieve.bm25_score",
         lambda query, settings: [(noise1, 0.0), (noise2, 0.0), (noise3, 0.0)],
     )
 
@@ -199,13 +199,13 @@ def test_retrieve_excludes_zero_score_bm25_hits_from_merge(tmp_path, monkeypatch
 
 
 def test_retrieve_falls_back_to_raw_query_when_rewrite_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr("research_assistant.index.get_embeddings", lambda settings: FakeEmbeddings())
-    monkeypatch.setattr("research_assistant.bm25_index.get_cache_client", lambda settings: FakeCache())
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda settings: FakeCache())
 
     def failing_rewrite(query, settings):
         raise RuntimeError("ollama unreachable")
 
-    monkeypatch.setattr("research_assistant.retrieve.rewrite_query", failing_rewrite)
+    monkeypatch.setattr("ask_the_docs.retrieve.rewrite_query", failing_rewrite)
 
     settings = Settings(
         generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
@@ -225,7 +225,7 @@ def test_retrieve_falls_back_to_raw_query_when_rewrite_fails(tmp_path, monkeypat
 
 def test_retrieve_skips_classification_when_graph_disabled(tmp_path, monkeypatch):
     called = []
-    monkeypatch.setattr("research_assistant.retrieve.classify_query", lambda *a, **k: called.append(1))
+    monkeypatch.setattr("ask_the_docs.retrieve.classify_query", lambda *a, **k: called.append(1))
 
     doc = _doc("a")
 
@@ -233,8 +233,8 @@ def test_retrieve_skips_classification_when_graph_disabled(tmp_path, monkeypatch
         def similarity_search_with_score(self, query, k):
             return [(doc, 0.1)]
 
-    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("research_assistant.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": False})
     retrieve("a query", settings)
@@ -244,14 +244,14 @@ def test_retrieve_skips_classification_when_graph_disabled(tmp_path, monkeypatch
 
 def test_retrieve_returns_global_search_results_directly(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "research_assistant.retrieve.classify_query",
+        "ask_the_docs.retrieve.classify_query",
         lambda q, s: QueryClassification(label="global", entities=[]),
     )
     fake_docs = [make_chunk("community-0", 0, "a theme summary")]
-    monkeypatch.setattr("research_assistant.retrieve.global_search", lambda q, s: fake_docs)
+    monkeypatch.setattr("ask_the_docs.retrieve.global_search", lambda q, s: fake_docs)
     # hybrid must never be reached when global search succeeds
     monkeypatch.setattr(
-        "research_assistant.retrieve.load_index",
+        "ask_the_docs.retrieve.load_index",
         lambda settings: pytest.fail("hybrid path must be bypassed when global search succeeds"),
     )
 
@@ -263,18 +263,18 @@ def test_retrieve_returns_global_search_results_directly(tmp_path, monkeypatch):
 
 def test_retrieve_merges_local_search_into_candidate_pool(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "research_assistant.retrieve.classify_query",
+        "ask_the_docs.retrieve.classify_query",
         lambda q, s: QueryClassification(label="local", entities=["BM25"]),
     )
     graph_only_doc = make_chunk("doc9", 0, "only found via graph traversal")
-    monkeypatch.setattr("research_assistant.retrieve.local_search", lambda entities, s: [graph_only_doc])
+    monkeypatch.setattr("ask_the_docs.retrieve.local_search", lambda entities, s: [graph_only_doc])
 
     class EmptyIndex:
         def similarity_search_with_score(self, query, k):
             return []
 
-    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: EmptyIndex())
-    monkeypatch.setattr("research_assistant.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: EmptyIndex())
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
     result = retrieve("how does BM25 relate to vectors?", settings, k=5)
@@ -284,10 +284,10 @@ def test_retrieve_merges_local_search_into_candidate_pool(tmp_path, monkeypatch)
 
 def test_retrieve_falls_back_to_hybrid_when_global_search_finds_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "research_assistant.retrieve.classify_query",
+        "ask_the_docs.retrieve.classify_query",
         lambda q, s: QueryClassification(label="global", entities=[]),
     )
-    monkeypatch.setattr("research_assistant.retrieve.global_search", lambda q, s: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.global_search", lambda q, s: [])
 
     hybrid_doc = _doc("hybrid-hit")
 
@@ -295,8 +295,8 @@ def test_retrieve_falls_back_to_hybrid_when_global_search_finds_nothing(tmp_path
         def similarity_search_with_score(self, query, k):
             return [(hybrid_doc, 0.1)]
 
-    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("research_assistant.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
     result = retrieve("what are the themes?", settings, k=5)
@@ -306,14 +306,14 @@ def test_retrieve_falls_back_to_hybrid_when_global_search_finds_nothing(tmp_path
 
 def test_retrieve_falls_back_to_hybrid_when_global_search_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "research_assistant.retrieve.classify_query",
+        "ask_the_docs.retrieve.classify_query",
         lambda q, s: QueryClassification(label="global", entities=[]),
     )
 
     def failing_global_search(query, settings):
         raise RuntimeError("neo4j unreachable")
 
-    monkeypatch.setattr("research_assistant.retrieve.global_search", failing_global_search)
+    monkeypatch.setattr("ask_the_docs.retrieve.global_search", failing_global_search)
 
     hybrid_doc = _doc("hybrid-hit")
 
@@ -321,8 +321,8 @@ def test_retrieve_falls_back_to_hybrid_when_global_search_raises(tmp_path, monke
         def similarity_search_with_score(self, query, k):
             return [(hybrid_doc, 0.1)]
 
-    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("research_assistant.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
     # must not propagate -- a crashing global_search must degrade to hybrid, not crash the request
@@ -335,7 +335,7 @@ def test_retrieve_falls_back_to_hybrid_when_classification_raises(tmp_path, monk
     def failing_classify(query, settings):
         raise RuntimeError("ollama unreachable")
 
-    monkeypatch.setattr("research_assistant.retrieve.classify_query", failing_classify)
+    monkeypatch.setattr("ask_the_docs.retrieve.classify_query", failing_classify)
 
     hybrid_doc = _doc("hybrid-hit")
 
@@ -343,8 +343,8 @@ def test_retrieve_falls_back_to_hybrid_when_classification_raises(tmp_path, monk
         def similarity_search_with_score(self, query, k):
             return [(hybrid_doc, 0.1)]
 
-    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("research_assistant.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
     result = retrieve("anything", settings, k=5)
@@ -356,17 +356,17 @@ def test_retrieve_dedupes_local_search_against_existing_hybrid_candidate(tmp_pat
     shared_doc = _doc("shared")
 
     monkeypatch.setattr(
-        "research_assistant.retrieve.classify_query",
+        "ask_the_docs.retrieve.classify_query",
         lambda q, s: QueryClassification(label="local", entities=["BM25"]),
     )
-    monkeypatch.setattr("research_assistant.retrieve.local_search", lambda entities, s: [shared_doc])
+    monkeypatch.setattr("ask_the_docs.retrieve.local_search", lambda entities, s: [shared_doc])
 
     class FakeIndex:
         def similarity_search_with_score(self, query, k):
             return [(shared_doc, 0.1)]
 
-    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("research_assistant.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
     result = retrieve("how does BM25 relate to vectors?", settings, k=5)
@@ -383,17 +383,17 @@ def test_retrieve_keeps_local_search_match_when_hybrid_pool_is_already_full(tmp_
     graph_only_doc = make_chunk("doc9", 0, "only found via graph traversal")
 
     monkeypatch.setattr(
-        "research_assistant.retrieve.classify_query",
+        "ask_the_docs.retrieve.classify_query",
         lambda q, s: QueryClassification(label="local", entities=["BM25"]),
     )
-    monkeypatch.setattr("research_assistant.retrieve.local_search", lambda entities, s: [graph_only_doc])
+    monkeypatch.setattr("ask_the_docs.retrieve.local_search", lambda entities, s: [graph_only_doc])
 
     class FakeIndex:
         def similarity_search_with_score(self, query, k):
             return [(doc, 0.1 * (i + 1)) for i, doc in enumerate(hybrid_docs)]
 
-    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("research_assistant.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True, "candidate_pool_size": pool_size})
     result = retrieve("how does BM25 relate to vectors?", settings, k=10)
@@ -403,14 +403,14 @@ def test_retrieve_keeps_local_search_match_when_hybrid_pool_is_already_full(tmp_
 
 def test_retrieve_falls_back_to_hybrid_when_local_search_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "research_assistant.retrieve.classify_query",
+        "ask_the_docs.retrieve.classify_query",
         lambda q, s: QueryClassification(label="local", entities=["BM25"]),
     )
 
     def failing_local_search(entities, settings):
         raise SessionExpired("connection dropped mid-session")
 
-    monkeypatch.setattr("research_assistant.retrieve.local_search", failing_local_search)
+    monkeypatch.setattr("ask_the_docs.retrieve.local_search", failing_local_search)
 
     hybrid_doc = _doc("hybrid-hit")
 
@@ -418,8 +418,8 @@ def test_retrieve_falls_back_to_hybrid_when_local_search_raises(tmp_path, monkey
         def similarity_search_with_score(self, query, k):
             return [(hybrid_doc, 0.1)]
 
-    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("research_assistant.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
     # must not propagate -- a crashing local_search must degrade to hybrid, not crash the request
@@ -436,17 +436,17 @@ def test_retrieve_keeps_local_search_match_in_top_k_when_rerank_disabled(tmp_pat
     graph_only_doc = make_chunk("doc9", 0, "only found via graph traversal")
 
     monkeypatch.setattr(
-        "research_assistant.retrieve.classify_query",
+        "ask_the_docs.retrieve.classify_query",
         lambda q, s: QueryClassification(label="local", entities=["BM25"]),
     )
-    monkeypatch.setattr("research_assistant.retrieve.local_search", lambda entities, s: [graph_only_doc])
+    monkeypatch.setattr("ask_the_docs.retrieve.local_search", lambda entities, s: [graph_only_doc])
 
     class FakeIndex:
         def similarity_search_with_score(self, query, k):
             return [(doc, 0.1 * (i + 1)) for i, doc in enumerate(hybrid_docs)]
 
-    monkeypatch.setattr("research_assistant.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("research_assistant.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
 
     settings = make_settings(tmp_path).model_copy(
         update={"graph_enabled": True, "rerank_enabled": False, "candidate_pool_size": 5}

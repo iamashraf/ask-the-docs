@@ -8,9 +8,9 @@ import re
 from langchain_core.documents import Document
 from rank_bm25 import BM25Okapi
 
-from research_assistant.cache import cache_get, cache_set, get_cache_client, make_cache_key
-from research_assistant.config import Settings
-from research_assistant.index import get_all_chunks, get_chunk_count, get_collection_name
+from ask_the_docs.cache import cache_get, cache_set, get_cache_client, make_cache_key
+from ask_the_docs.config import Settings
+from ask_the_docs.index import get_all_chunks, get_chunk_count, get_collection_name
 
 BM25_CACHE_TTL_SECONDS = 86400
 

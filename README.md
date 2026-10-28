@@ -1,9 +1,10 @@
-# research-assistant
+# AskTheDocs
 
-A local-first RAG (Retrieval-Augmented Generation) research assistant.
-Point it at PDFs, Word docs, markdown/text files, or URLs, then ask
-questions grounded in that content with cited sources — no data leaves
-your machine except the LLM calls you explicitly configure.
+A local-first RAG (Retrieval-Augmented Generation) system. Point it at
+PDFs, Word docs, markdown/text files, or URLs — any documents, not just
+research papers — then ask questions grounded in that content with cited
+sources. No data leaves your machine except the LLM calls you explicitly
+configure.
 
 ![Ingesting a document, asking grounded questions about it, then asking something outside its scope and getting a clean refusal](docs/demo.gif)
 
@@ -39,7 +40,7 @@ your machine except the LLM calls you explicitly configure.
 ## Quickstart
 
 ```bash
-git clone <this-repo> && cd research-assistant
+git clone <this-repo> && cd ask-the-docs
 cp .env.example .env.local        # reference copy -> your local config
 podman compose up -d ollama-init  # starts Ollama, pulls the models (first run only)
 podman compose up -d --build app  # builds if missing, rebuilds if stale, then starts it
@@ -70,7 +71,7 @@ conventions.
 
 ## Layout
 
-- `src/research_assistant/` — package: `config`, `llm`, `embeddings`,
+- `src/ask_the_docs/` — package: `config`, `llm`, `embeddings`,
   `ingest`, `index`, `retrieve`, `answer`, `evaluate`, `cli`, `api`
 - `data/documents/` — input documents (git-ignored)
 - `data/index/` — persisted vector store (git-ignored)

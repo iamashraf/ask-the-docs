@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from langchain_core.documents import Document
 
-from research_assistant.seed import load_seed_sources, seed_if_needed, seed_marker_path
+from ask_the_docs.seed import load_seed_sources, seed_if_needed, seed_marker_path
 
 
 def make_settings(tmp_path):
@@ -22,7 +22,7 @@ def test_seed_if_needed_skips_when_marker_exists(tmp_path, monkeypatch):
     seed_marker_path(settings).write_text("seeded\n")
 
     called = []
-    monkeypatch.setattr("research_assistant.seed.dispatch", lambda source: called.append(source))
+    monkeypatch.setattr("ask_the_docs.seed.dispatch", lambda source: called.append(source))
 
     count = seed_if_needed(settings, seed_sources_path=tmp_path / "unused.yaml")
 
@@ -36,15 +36,15 @@ def test_seed_if_needed_ingests_all_sources_and_writes_marker(tmp_path, monkeypa
     seed_path.write_text("- a\n- b\n")
 
     monkeypatch.setattr(
-        "research_assistant.seed.dispatch",
+        "ask_the_docs.seed.dispatch",
         lambda source: [Document(page_content=source, metadata={"source": source})],
     )
     captured = {}
     monkeypatch.setattr(
-        "research_assistant.seed.build_index", lambda docs, s: captured.setdefault("docs", docs)
+        "ask_the_docs.seed.build_index", lambda docs, s: captured.setdefault("docs", docs)
     )
 
-    with caplog.at_level("INFO", logger="research_assistant.seed"):
+    with caplog.at_level("INFO", logger="ask_the_docs.seed"):
         count = seed_if_needed(settings, seed_sources_path=seed_path)
 
     assert count == 2
@@ -67,10 +67,10 @@ def test_seed_if_needed_continues_past_a_failing_source_and_still_writes_marker(
             raise ValueError("network error")
         return [Document(page_content=source, metadata={"source": source})]
 
-    monkeypatch.setattr("research_assistant.seed.dispatch", fake_dispatch)
-    monkeypatch.setattr("research_assistant.seed.build_index", lambda docs, s: None)
+    monkeypatch.setattr("ask_the_docs.seed.dispatch", fake_dispatch)
+    monkeypatch.setattr("ask_the_docs.seed.build_index", lambda docs, s: None)
 
-    with caplog.at_level("INFO", logger="research_assistant.seed"):
+    with caplog.at_level("INFO", logger="ask_the_docs.seed"):
         count = seed_if_needed(settings, seed_sources_path=seed_path)
 
     assert count == 1

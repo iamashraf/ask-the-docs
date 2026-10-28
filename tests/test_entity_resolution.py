@@ -1,6 +1,6 @@
-from research_assistant.config import ProviderConfig, Settings
-from research_assistant.entity_resolution import resolve_entities
-from research_assistant.graph_extract import Triplet
+from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.entity_resolution import resolve_entities
+from ask_the_docs.graph_extract import Triplet
 
 
 def make_settings(threshold: float = 0.85) -> Settings:
@@ -26,7 +26,7 @@ class FakeEmbeddings:
 
 
 def test_resolve_entities_merges_near_duplicate_names(monkeypatch):
-    monkeypatch.setattr("research_assistant.entity_resolution.get_embeddings", lambda s: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.entity_resolution.get_embeddings", lambda s: FakeEmbeddings())
     settings = make_settings()
     triplets = [
         Triplet(subject="Transformer", relation="uses", obj="attention"),
@@ -58,7 +58,7 @@ def test_resolve_entities_merges_transitively_via_bridge_entity(monkeypatch):
         def embed_documents(self, texts):
             return [self.VECTORS[t] for t in texts]
 
-    monkeypatch.setattr("research_assistant.entity_resolution.get_embeddings", lambda s: BridgeFakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.entity_resolution.get_embeddings", lambda s: BridgeFakeEmbeddings())
     settings = make_settings(threshold=0.7)
     triplets = [
         Triplet(subject="X", relation="r1", obj="other"),

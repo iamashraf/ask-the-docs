@@ -8,7 +8,7 @@ import logging
 
 import redis
 
-from research_assistant.config import Settings
+from ask_the_docs.config import Settings
 
 logger = logging.getLogger(__name__)
 

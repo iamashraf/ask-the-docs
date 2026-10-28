@@ -8,11 +8,11 @@ import re
 
 from langchain_core.documents import Document
 
-from research_assistant.cache import cache_get, cache_set, get_cache_client, make_cache_key
-from research_assistant.config import REFUSAL_MESSAGE, Settings
-from research_assistant.index import get_chunk_count
-from research_assistant.llm import get_llm_client
-from research_assistant.retrieve import retrieve
+from ask_the_docs.cache import cache_get, cache_set, get_cache_client, make_cache_key
+from ask_the_docs.config import REFUSAL_MESSAGE, Settings
+from ask_the_docs.index import get_chunk_count
+from ask_the_docs.llm import get_llm_client
+from ask_the_docs.retrieve import retrieve
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import docx as docx_module
 import requests
 
-from research_assistant.ingest import discover_sources, dispatch, load_docx, load_url
+from ask_the_docs.ingest import discover_sources, dispatch, load_docx, load_url
 
 SENTINEL = [object()]
 
@@ -31,7 +31,7 @@ def _allow_public_host(monkeypatch):
 
 def _patch_url_settings(monkeypatch, max_url_fetch_size_mb: int = 10):
     monkeypatch.setattr(
-        "research_assistant.ingest.get_settings",
+        "ask_the_docs.ingest.get_settings",
         lambda: SimpleNamespace(
             max_url_fetch_size_mb=max_url_fetch_size_mb, url_fetch_timeout_seconds=10
         ),
@@ -136,7 +136,7 @@ def test_load_url_rejects_too_many_redirects(monkeypatch):
 
     import pytest
 
-    from research_assistant.ingest import UrlSecurityError
+    from ask_the_docs.ingest import UrlSecurityError
 
     with pytest.raises(UrlSecurityError):
         load_url("http://example.com/start")
@@ -153,25 +153,25 @@ def test_load_url_enforces_size_limit(monkeypatch):
 
     import pytest
 
-    from research_assistant.ingest import UrlSecurityError
+    from ask_the_docs.ingest import UrlSecurityError
 
     with pytest.raises(UrlSecurityError):
         load_url("http://example.com/big")
 
 
 def test_dispatch_routes_http_url_to_load_url(monkeypatch):
-    monkeypatch.setattr("research_assistant.ingest.load_url", lambda url: SENTINEL)
+    monkeypatch.setattr("ask_the_docs.ingest.load_url", lambda url: SENTINEL)
     assert dispatch("http://example.com/paper") == SENTINEL
 
 
 def test_dispatch_routes_local_path_to_load_path(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "research_assistant.ingest.get_settings",
+        "ask_the_docs.ingest.get_settings",
         lambda: SimpleNamespace(docs_dir=tmp_path, max_file_size_mb=25),
     )
     doc_path = tmp_path / "paper.pdf"
     doc_path.write_bytes(b"%PDF fake")
-    monkeypatch.setattr("research_assistant.ingest.load_path", lambda path: SENTINEL)
+    monkeypatch.setattr("ask_the_docs.ingest.load_path", lambda path: SENTINEL)
 
     assert dispatch("paper.pdf") == SENTINEL
 

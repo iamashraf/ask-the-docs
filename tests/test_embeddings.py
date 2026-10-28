@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import requests
 
-from research_assistant.config import ProviderConfig, Settings
-from research_assistant.embeddings import (
+from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.embeddings import (
     HuggingFaceEmbeddings,
     OllamaEmbeddings,
     _get_embeddings_cached,
@@ -24,7 +24,7 @@ def test_get_embeddings_returns_ollama_backend():
 
 
 def test_get_embeddings_returns_huggingface_backend(monkeypatch):
-    monkeypatch.setattr("research_assistant.embeddings.SentenceTransformer", lambda model_name: object())
+    monkeypatch.setattr("ask_the_docs.embeddings.SentenceTransformer", lambda model_name: object())
     assert isinstance(get_embeddings(make_settings("huggingface")), HuggingFaceEmbeddings)
 
 
@@ -35,7 +35,7 @@ def test_get_embeddings_loads_huggingface_model_only_once(monkeypatch):
         def __init__(self, model_name):
             load_count["count"] += 1
 
-    monkeypatch.setattr("research_assistant.embeddings.SentenceTransformer", CountingModel)
+    monkeypatch.setattr("ask_the_docs.embeddings.SentenceTransformer", CountingModel)
     _get_embeddings_cached.cache_clear()
     settings = make_settings("huggingface")
 
@@ -82,7 +82,7 @@ def test_huggingface_embeddings_embed_query_uses_model_encode(monkeypatch):
             return [0.5, 0.25]
 
     monkeypatch.setattr(
-        "research_assistant.embeddings.SentenceTransformer", lambda model_name: FakeModel()
+        "ask_the_docs.embeddings.SentenceTransformer", lambda model_name: FakeModel()
     )
 
     emb = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")
@@ -95,7 +95,7 @@ def test_huggingface_embeddings_embed_documents_uses_model_encode(monkeypatch):
             return [[0.1, 0.2], [0.3, 0.4]]
 
     monkeypatch.setattr(
-        "research_assistant.embeddings.SentenceTransformer", lambda model_name: FakeModel()
+        "ask_the_docs.embeddings.SentenceTransformer", lambda model_name: FakeModel()
     )
 
     emb = HuggingFaceEmbeddings(model_name="BAAI/bge-small-en-v1.5")

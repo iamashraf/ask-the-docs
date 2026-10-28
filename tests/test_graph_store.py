@@ -3,8 +3,8 @@ import re
 
 from neo4j.exceptions import ServiceUnavailable
 
-from research_assistant.graph_extract import Triplet
-from research_assistant.graph_store import write_graph
+from ask_the_docs.graph_extract import Triplet
+from ask_the_docs.graph_store import write_graph
 
 
 class FakeResult:

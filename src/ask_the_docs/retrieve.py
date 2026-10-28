@@ -5,12 +5,12 @@ import logging
 
 from langchain_core.documents import Document
 
-from research_assistant.bm25_index import score as bm25_score
-from research_assistant.config import Settings
-from research_assistant.graph_retrieve import global_search, local_search
-from research_assistant.index import load_index
-from research_assistant.query_analyzer import QueryClassification, classify_query, rewrite_query
-from research_assistant.reranker import DEFAULT_RERANKER_MODEL, get_reranker
+from ask_the_docs.bm25_index import score as bm25_score
+from ask_the_docs.config import Settings
+from ask_the_docs.graph_retrieve import global_search, local_search
+from ask_the_docs.index import load_index
+from ask_the_docs.query_analyzer import QueryClassification, classify_query, rewrite_query
+from ask_the_docs.reranker import DEFAULT_RERANKER_MODEL, get_reranker
 
 logger = logging.getLogger(__name__)
 

@@ -5,12 +5,12 @@ from pathlib import Path
 
 import uvicorn
 
-from research_assistant.answer import answer
-from research_assistant.api import app as api_app
-from research_assistant.config import Settings, get_settings
-from research_assistant.evaluate import run_evaluation
-from research_assistant.index import build_index
-from research_assistant.ingest import dispatch, discover_sources
+from ask_the_docs.answer import answer
+from ask_the_docs.api import app as api_app
+from ask_the_docs.config import Settings, get_settings
+from ask_the_docs.evaluate import run_evaluation
+from ask_the_docs.index import build_index
+from ask_the_docs.ingest import dispatch, discover_sources
 
 GOLDEN_QUESTIONS_PATH = Path("evals/golden_questions.yaml")
 
@@ -81,7 +81,7 @@ def _serve(args: argparse.Namespace, settings) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="research-assistant")
+    parser = argparse.ArgumentParser(prog="ask-the-docs")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     ingest_parser = subparsers.add_parser("ingest", help="Load and index one or more sources (paths or URLs)")

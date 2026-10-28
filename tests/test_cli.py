@@ -1,10 +1,10 @@
 import pytest
 from pydantic import ValidationError
 
-from research_assistant.answer import AnswerResult
-from research_assistant.cli import build_parser
-from research_assistant.config import ProviderConfig, Settings
-from research_assistant.evaluate import EvalResult, JudgeScore
+from ask_the_docs.answer import AnswerResult
+from ask_the_docs.cli import build_parser
+from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.evaluate import EvalResult, JudgeScore
 
 
 def make_settings(**overrides) -> Settings:
@@ -18,10 +18,10 @@ def make_settings(**overrides) -> Settings:
 
 def test_ingest_dispatches_each_source_and_builds_index(monkeypatch):
     docs_by_source = {"a.pdf": ["doc-a"], "b.pdf": ["doc-b"]}
-    monkeypatch.setattr("research_assistant.cli.dispatch", lambda source: docs_by_source[source])
+    monkeypatch.setattr("ask_the_docs.cli.dispatch", lambda source: docs_by_source[source])
     captured = {}
     monkeypatch.setattr(
-        "research_assistant.cli.build_index", lambda docs, settings: captured.setdefault("docs", docs)
+        "ask_the_docs.cli.build_index", lambda docs, settings: captured.setdefault("docs", docs)
     )
 
     parser = build_parser()
@@ -34,13 +34,13 @@ def test_ingest_dispatches_each_source_and_builds_index(monkeypatch):
 def test_index_discovers_docs_dir_and_builds_index(tmp_path, monkeypatch):
     settings = make_settings(docs_dir=tmp_path)
     monkeypatch.setattr(
-        "research_assistant.cli.discover_sources",
+        "ask_the_docs.cli.discover_sources",
         lambda docs_dir: [tmp_path / "a.pdf", tmp_path / "b.pdf"],
     )
-    monkeypatch.setattr("research_assistant.cli.dispatch", lambda source: [f"doc-for-{source}"])
+    monkeypatch.setattr("ask_the_docs.cli.dispatch", lambda source: [f"doc-for-{source}"])
     captured = {}
     monkeypatch.setattr(
-        "research_assistant.cli.build_index", lambda docs, settings: captured.setdefault("docs", docs)
+        "ask_the_docs.cli.build_index", lambda docs, settings: captured.setdefault("docs", docs)
     )
 
     parser = build_parser()
@@ -52,7 +52,7 @@ def test_index_discovers_docs_dir_and_builds_index(tmp_path, monkeypatch):
 
 def test_ask_prints_answer_and_citations(capsys, monkeypatch):
     monkeypatch.setattr(
-        "research_assistant.cli.answer",
+        "ask_the_docs.cli.answer",
         lambda query, settings, k: AnswerResult(text="42", citations=["a.pdf"], context="ctx"),
     )
 
@@ -84,7 +84,7 @@ def test_evaluate_overrides_embeddings_backend_and_prints_results(capsys, monkey
             )
         ]
 
-    monkeypatch.setattr("research_assistant.cli.run_evaluation", fake_run_evaluation)
+    monkeypatch.setattr("ask_the_docs.cli.run_evaluation", fake_run_evaluation)
 
     parser = build_parser()
     args = parser.parse_args(["evaluate", "--embeddings", "huggingface"])
@@ -101,7 +101,7 @@ def test_evaluate_overrides_hybrid_alpha(monkeypatch):
         captured_settings["alpha"] = settings.hybrid_alpha
         return []
 
-    monkeypatch.setattr("research_assistant.cli.run_evaluation", fake_run_evaluation)
+    monkeypatch.setattr("ask_the_docs.cli.run_evaluation", fake_run_evaluation)
 
     parser = build_parser()
     args = parser.parse_args(["evaluate", "--hybrid-alpha", "0.8"])
@@ -117,7 +117,7 @@ def test_evaluate_overrides_rerank_enabled(monkeypatch):
         captured_settings["rerank"] = settings.rerank_enabled
         return []
 
-    monkeypatch.setattr("research_assistant.cli.run_evaluation", fake_run_evaluation)
+    monkeypatch.setattr("ask_the_docs.cli.run_evaluation", fake_run_evaluation)
 
     parser = build_parser()
     args = parser.parse_args(["evaluate", "--rerank", "false"])
@@ -133,7 +133,7 @@ def test_evaluate_overrides_query_rewrite_enabled(monkeypatch):
         captured_settings["rewrite"] = settings.query_rewrite_enabled
         return []
 
-    monkeypatch.setattr("research_assistant.cli.run_evaluation", fake_run_evaluation)
+    monkeypatch.setattr("ask_the_docs.cli.run_evaluation", fake_run_evaluation)
 
     parser = build_parser()
     args = parser.parse_args(["evaluate", "--query-rewrite", "false"])
@@ -149,7 +149,7 @@ def test_evaluate_overrides_graph_enabled(monkeypatch):
         captured_settings["graph"] = settings.graph_enabled
         return []
 
-    monkeypatch.setattr("research_assistant.cli.run_evaluation", fake_run_evaluation)
+    monkeypatch.setattr("ask_the_docs.cli.run_evaluation", fake_run_evaluation)
 
     parser = build_parser()
     args = parser.parse_args(["evaluate", "--graph", "true"])
@@ -159,7 +159,7 @@ def test_evaluate_overrides_graph_enabled(monkeypatch):
 
 
 def test_evaluate_rejects_hybrid_alpha_out_of_range(monkeypatch):
-    monkeypatch.setattr("research_assistant.cli.run_evaluation", lambda settings, path: [])
+    monkeypatch.setattr("ask_the_docs.cli.run_evaluation", lambda settings, path: [])
     parser = build_parser()
     args = parser.parse_args(["evaluate", "--hybrid-alpha", "5.0"])
 
@@ -177,7 +177,7 @@ def test_evaluate_combines_multiple_overrides_in_one_call(monkeypatch):
         captured_settings["rewrite"] = settings.query_rewrite_enabled
         return []
 
-    monkeypatch.setattr("research_assistant.cli.run_evaluation", fake_run_evaluation)
+    monkeypatch.setattr("ask_the_docs.cli.run_evaluation", fake_run_evaluation)
 
     parser = build_parser()
     args = parser.parse_args(
@@ -201,7 +201,7 @@ def test_evaluate_combines_multiple_overrides_in_one_call(monkeypatch):
 def test_serve_starts_uvicorn(monkeypatch):
     captured = {}
     monkeypatch.setattr(
-        "research_assistant.cli.uvicorn.run",
+        "ask_the_docs.cli.uvicorn.run",
         lambda app, host, port, log_level: captured.update(
             app=app, host=host, port=port, log_level=log_level
         ),
@@ -211,7 +211,7 @@ def test_serve_starts_uvicorn(monkeypatch):
     args = parser.parse_args(["serve"])
     args.func(args, make_settings())
 
-    from research_assistant.api import app as api_app
+    from ask_the_docs.api import app as api_app
 
     assert captured["app"] is api_app
     assert captured["host"] == "0.0.0.0"
@@ -220,7 +220,7 @@ def test_serve_starts_uvicorn(monkeypatch):
 
 def test_evaluate_reports_errors(capsys, monkeypatch):
     monkeypatch.setattr(
-        "research_assistant.cli.run_evaluation",
+        "ask_the_docs.cli.run_evaluation",
         lambda settings, questions_path: [EvalResult(question="Q1", score=None, error="boom")],
     )
 
