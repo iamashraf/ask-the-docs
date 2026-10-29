@@ -2,9 +2,10 @@ import socket
 from types import SimpleNamespace
 
 import docx as docx_module
+import pytest
 import requests
 
-from ask_the_docs.ingest import discover_sources, dispatch, load_docx, load_url
+from ask_the_docs.ingest import discover_sources, dispatch, load_docx, load_url, validate_source
 
 SENTINEL = [object()]
 
@@ -174,6 +175,47 @@ def test_dispatch_routes_local_path_to_load_path(tmp_path, monkeypatch):
     monkeypatch.setattr("ask_the_docs.ingest.load_path", lambda path: SENTINEL)
 
     assert dispatch("paper.pdf") == SENTINEL
+
+
+def test_validate_source_checks_url_without_fetching_it(monkeypatch):
+    called = []
+    monkeypatch.setattr("ask_the_docs.ingest.validate_url", lambda url: called.append(url))
+    monkeypatch.setattr("ask_the_docs.ingest.load_url", lambda url: (_ for _ in ()).throw(AssertionError("must not fetch")))
+
+    validate_source("http://example.com/paper")
+
+    assert called == ["http://example.com/paper"]
+
+
+def test_validate_source_checks_local_path_without_loading_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.ingest.get_settings",
+        lambda: SimpleNamespace(docs_dir=tmp_path, max_file_size_mb=25),
+    )
+    doc_path = tmp_path / "paper.pdf"
+    doc_path.write_bytes(b"%PDF fake")
+    monkeypatch.setattr("ask_the_docs.ingest.load_path", lambda path: (_ for _ in ()).throw(AssertionError("must not load")))
+
+    validate_source("paper.pdf")  # must not raise, must not load
+
+
+def test_validate_source_raises_for_an_ssrf_url(monkeypatch):
+    from ask_the_docs.ingest import UrlSecurityError
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))])
+
+    with pytest.raises(UrlSecurityError):
+        validate_source("http://169.254.169.254/latest/meta-data")
+
+
+def test_validate_source_raises_for_a_missing_local_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.ingest.get_settings",
+        lambda: SimpleNamespace(docs_dir=tmp_path, max_file_size_mb=25),
+    )
+
+    with pytest.raises(FileNotFoundError):
+        validate_source("missing.pdf")
 
 
 def test_discover_sources_finds_allowed_extensions_only(tmp_path):
