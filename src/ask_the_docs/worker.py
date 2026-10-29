@@ -8,6 +8,7 @@ import logging
 
 import nats
 from nats.js.api import ConsumerConfig
+from opentelemetry import propagate, trace
 
 from ask_the_docs.config import Settings, get_settings
 from ask_the_docs.index import build_index
@@ -17,6 +18,7 @@ from ask_the_docs.queue import INGEST_JOBS_SUBJECT, ensure_stream
 from ask_the_docs.tracing import configure_tracing
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 DURABLE_CONSUMER_NAME = "ingest-workers"
 # Comfortably above the bulk /v1/index job's own 180s timeout budget (see
@@ -63,8 +65,14 @@ async def _consume_once(settings: Settings, sub) -> None:
         except Exception:
             logger.warning("Dropping an unparseable job message", exc_info=True)
             continue
+        ctx = propagate.extract({"traceparent": payload.get("traceparent")})
         try:
-            await process_job(settings, payload)
+            with tracer.start_as_current_span(
+                "process_job",
+                context=ctx,
+                attributes={"job.id": payload.get("job_id"), "job.kind": payload.get("kind")},
+            ):
+                await process_job(settings, payload)
         except Exception:
             logger.warning(
                 "process_job raised for job %s; leaving unacked for redelivery",
