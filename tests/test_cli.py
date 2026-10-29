@@ -230,6 +230,22 @@ def test_worker_runs_the_worker_loop(monkeypatch):
     settings = make_settings()
     args.func(args, settings)
 
+
+def test_watch_runs_the_watcher_loop(monkeypatch):
+    captured = {}
+
+    async def fake_watch_docs_dir(settings):
+        captured["settings"] = settings
+
+    monkeypatch.setattr("ask_the_docs.watcher.watch_docs_dir", fake_watch_docs_dir)
+
+    parser = build_parser()
+    args = parser.parse_args(["watch"])
+    settings = make_settings()
+    args.func(args, settings)
+
+    assert captured["settings"] is settings
+
     assert captured["settings"] is settings
 
 
