@@ -17,14 +17,14 @@ describe("POST /api/ingest", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ documents_ingested: 3 }), { status: 200 }),
+        new Response(JSON.stringify({ job_id: "job-1", status: "queued" }), { status: 202 }),
       ),
     );
 
     const res = await POST(makeRequest({ source: "https://example.com/paper.pdf" }));
 
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ documents_ingested: 3 });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ job_id: "job-1", status: "queued" });
   });
 
   test("surfaces a backend non-2xx as an error", async () => {

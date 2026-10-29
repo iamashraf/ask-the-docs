@@ -72,6 +72,8 @@ services:
         condition: service_completed_successfully
       valkey:
         condition: service_healthy
+      nats:
+        condition: service_healthy
     volumes:
       - ./data:/app/data
       - ./evals:/app/evals
@@ -84,6 +86,27 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  worker:
+    image: localhost/ask-the-docs-app
+    build: .
+    command: ["worker"]
+    depends_on:
+      ollama-init:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env.local
     logging:
       driver: json-file
       options:
