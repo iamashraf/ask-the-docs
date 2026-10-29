@@ -1,9 +1,12 @@
 import asyncio
 import json
+import logging
+from unittest.mock import Mock
 
 import pytest
 from langchain_core.documents import Document
 
+from ask_the_docs import worker
 from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.worker import WORKER_ACK_WAIT_SECONDS, _consume_once, process_job, run_worker
 
@@ -214,6 +217,7 @@ async def test_consume_once_drops_an_unparseable_message_without_crashing(monkey
 
 async def test_run_worker_subscribes_with_a_generous_ack_wait(monkeypatch):
     monkeypatch.setattr("ask_the_docs.worker.configure_tracing", lambda service_name, settings: None)
+    monkeypatch.setattr(worker, "start_http_server", Mock())
     calls = {}
 
     class FakeJetStream:
@@ -249,6 +253,7 @@ async def test_run_worker_configures_tracing(monkeypatch):
         "ask_the_docs.worker.configure_tracing",
         lambda service_name, settings: captured.setdefault("service_name", service_name),
     )
+    monkeypatch.setattr(worker, "start_http_server", Mock())
 
     class FakeJetStream:
         async def add_stream(self, **kwargs):
@@ -270,3 +275,45 @@ async def test_run_worker_configures_tracing(monkeypatch):
         await run_worker(make_settings())
 
     assert captured["service_name"] == "ask-the-docs-worker"
+
+
+def _stop_run_worker_after_subscribe(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.worker.configure_tracing", lambda service_name, settings: None)
+
+    class FakeJetStream:
+        async def add_stream(self, **kwargs):
+            pass
+
+        async def pull_subscribe(self, subject, durable=None, config=None):
+            raise asyncio.CancelledError()
+
+    class FakeNatsClient:
+        def jetstream(self):
+            return FakeJetStream()
+
+    async def fake_connect(url):
+        return FakeNatsClient()
+
+    monkeypatch.setattr("ask_the_docs.worker.nats.connect", fake_connect)
+
+
+async def test_run_worker_starts_the_metrics_http_server(monkeypatch):
+    start_server = Mock()
+    monkeypatch.setattr(worker, "start_http_server", start_server)
+    _stop_run_worker_after_subscribe(monkeypatch)
+    settings = make_settings()
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_worker(settings)
+
+    start_server.assert_called_once_with(settings.metrics_port)
+
+
+async def test_run_worker_logs_and_continues_if_metrics_port_is_taken(monkeypatch, caplog):
+    monkeypatch.setattr(worker, "start_http_server", Mock(side_effect=OSError("port in use")))
+    _stop_run_worker_after_subscribe(monkeypatch)
+
+    with caplog.at_level(logging.WARNING, logger="ask_the_docs.worker"), pytest.raises(asyncio.CancelledError):
+        await run_worker(make_settings())  # must not raise OSError; loop still reaches subscribe
+
+    assert any("metrics" in r.getMessage().lower() for r in caplog.records if r.levelno == logging.WARNING)
