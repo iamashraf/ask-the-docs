@@ -15,8 +15,6 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.redis import RedisInstrumentor
-from opentelemetry.instrumentation.requests import RequestsInstrumentor
 from pydantic import BaseModel, Field
 
 from ask_the_docs.answer import answer
@@ -58,8 +56,6 @@ GOLDEN_QUESTIONS_PATH = Path("evals/golden_questions.yaml")
 app = FastAPI(title="ask-the-docs", lifespan=lifespan)
 
 FastAPIInstrumentor.instrument_app(app)
-RedisInstrumentor().instrument()
-RequestsInstrumentor().instrument()
 
 
 @app.exception_handler(PathSecurityError)

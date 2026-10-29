@@ -55,6 +55,15 @@ async def test_publish_ingest_job_sends_the_job_payload(monkeypatch):
 
 
 async def test_publish_ingest_job_injects_trace_context(monkeypatch):
+    """A fixed key present with a null value (the no-active-span case,
+    covered separately below) would pass a bare "traceparent" in body
+    check without proving propagate.inject() does anything -- this starts
+    a real span (from a local, unregistered TracerProvider -- no global
+    registration, no span processor, so nothing to leak at process exit)
+    and asserts the published traceparent actually encodes that span's
+    trace id."""
+    from opentelemetry.sdk.trace import TracerProvider
+
     js = FakeJetStream()
     client = FakeNatsClient(js)
 
@@ -63,11 +72,14 @@ async def test_publish_ingest_job_injects_trace_context(monkeypatch):
 
     monkeypatch.setattr("ask_the_docs.queue.nats.connect", fake_connect)
 
-    await publish_ingest_job(make_settings(), "job-1", kind="ingest", source="a.pdf")
+    local_tracer = TracerProvider().get_tracer(__name__)
+    with local_tracer.start_as_current_span("test-span") as span:
+        trace_id = format(span.get_span_context().trace_id, "032x")
+        await publish_ingest_job(make_settings(), "job-1", kind="ingest", source="a.pdf")
 
     _, payload = js.published[0]
     body = json.loads(payload)
-    assert "traceparent" in body
+    assert body["traceparent"].startswith(f"00-{trace_id}-")
 
 
 async def test_publish_ingest_job_with_no_active_span_still_publishes(monkeypatch):

@@ -66,3 +66,26 @@ def test_configure_tracing_is_idempotent(monkeypatch):
     configure_tracing("ask-the-docs-app", make_settings())
 
     assert len(exporter_calls) == 1
+
+
+def test_configure_tracing_instruments_redis_and_requests(monkeypatch):
+    """Review finding: the worker only got Redis/requests spans because
+    cli.py happens to import api.py (which calls instrument() at module
+    level) for every subcommand -- a wiring that works by accident. Both
+    instrument() calls belong here, in the one function every entrypoint
+    (api.py's lifespan, worker.py's run_worker) actually calls."""
+    exporter_calls, provider_calls = [], []
+    _patch_sdk(monkeypatch, exporter_calls, provider_calls)
+    instrumented = []
+    monkeypatch.setattr(
+        "ask_the_docs.tracing.RedisInstrumentor",
+        lambda: type("R", (), {"instrument": lambda self: instrumented.append("redis")})(),
+    )
+    monkeypatch.setattr(
+        "ask_the_docs.tracing.RequestsInstrumentor",
+        lambda: type("Q", (), {"instrument": lambda self: instrumented.append("requests")})(),
+    )
+
+    configure_tracing("ask-the-docs-worker", make_settings())
+
+    assert set(instrumented) == {"redis", "requests"}
