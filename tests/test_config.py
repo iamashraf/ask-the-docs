@@ -16,6 +16,8 @@ def test_settings_defaults():
     assert settings.index_dir == Path("data/index")
     assert settings.docs_dir == Path("data/documents")
     assert settings.max_url_fetch_size_mb == 25
+    assert settings.otel_exporter_endpoint == "http://tempo:4317"
+    assert settings.metrics_port == 9100
 
 
 def test_settings_rejects_missing_api_key_for_anthropic():
