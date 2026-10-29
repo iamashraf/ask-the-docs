@@ -14,6 +14,7 @@ from ask_the_docs.index import build_index
 from ask_the_docs.ingest import dispatch, dispatch_all_under_docs_dir
 from ask_the_docs.jobs import get_async_cache_client, update_job
 from ask_the_docs.queue import INGEST_JOBS_SUBJECT, ensure_stream
+from ask_the_docs.tracing import configure_tracing
 
 logger = logging.getLogger(__name__)
 
@@ -89,4 +90,6 @@ async def run_worker(settings: Settings) -> None:
 
 
 def main() -> None:
-    asyncio.run(run_worker(get_settings()))
+    settings = get_settings()
+    configure_tracing("ask-the-docs-worker", settings)
+    asyncio.run(run_worker(settings))
