@@ -4,6 +4,7 @@ BM25 search merged by a weighted blend, optional cross-encoder rerank."""
 import logging
 
 from langchain_core.documents import Document
+from opentelemetry import trace
 
 from ask_the_docs.bm25_index import score as bm25_score
 from ask_the_docs.config import Settings
@@ -13,6 +14,7 @@ from ask_the_docs.query_analyzer import QueryClassification, classify_query, rew
 from ask_the_docs.reranker import DEFAULT_RERANKER_MODEL, get_reranker
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 
 def _doc_key(doc: Document) -> tuple[str, int]:
@@ -84,46 +86,50 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
             if global_results:
                 return global_results[:k]
 
-    try:
-        index = load_index(settings)
-        # Chroma's distance is "lower = more similar"; negate so that, after
-        # min-max normalization, the closest match ends up near 1.0 like BM25's
-        # "higher = more relevant" scores, instead of inverting the ranking.
-        vector_hits = [
-            (doc, -distance)
-            for doc, distance in index.similarity_search_with_score(search_query, k=settings.candidate_pool_size)
-        ]
-    except Exception:
-        logger.warning("Vector search failed; falling back to BM25-only results.", exc_info=True)
-        vector_hits = []
-    # A score of 0 means "no keyword overlap at all" (e.g. an out-of-vocabulary
-    # query) -- excluding it keeps that chunk from tying every other
-    # zero-score chunk at normalized score 1.0 ("all equal" rule) and
-    # crowding out real vector matches.
-    bm25_hits = [
-        hit
-        for hit in sorted(bm25_score(search_query, settings), key=lambda pair: pair[1], reverse=True)
-        if hit[1] > 0
-    ][: settings.candidate_pool_size]
-
-    candidates = [doc for doc, _ in hybrid_merge(vector_hits, bm25_hits, settings.hybrid_alpha)][
-        : settings.candidate_pool_size
-    ]
-    if classification.entities:
-        # Merged after the pool-size truncation, not before: vector_hits alone
-        # already fills candidate_pool_size on any corpus of that size or larger,
-        # so truncating after the union would silently drop every graph-only
-        # match almost always. Prepended rather than appended so they also
-        # survive candidates[:k] when rerank is off; the reranker scores each
-        # candidate independently, so order doesn't matter to it.
+    with tracer.start_as_current_span("hybrid_retrieve"):
         try:
-            local_results = local_search(classification.entities, settings)
+            index = load_index(settings)
+            # Chroma's distance is "lower = more similar"; negate so that, after
+            # min-max normalization, the closest match ends up near 1.0 like BM25's
+            # "higher = more relevant" scores, instead of inverting the ranking.
+            vector_hits = [
+                (doc, -distance)
+                for doc, distance in index.similarity_search_with_score(
+                    search_query, k=settings.candidate_pool_size
+                )
+            ]
         except Exception:
-            logger.warning("Local search failed; continuing with hybrid candidates only.", exc_info=True)
-            local_results = []
-        seen = {_doc_key(doc) for doc in candidates}
-        candidates = [doc for doc in local_results if _doc_key(doc) not in seen] + candidates
+            logger.warning("Vector search failed; falling back to BM25-only results.", exc_info=True)
+            vector_hits = []
+        # A score of 0 means "no keyword overlap at all" (e.g. an out-of-vocabulary
+        # query) -- excluding it keeps that chunk from tying every other
+        # zero-score chunk at normalized score 1.0 ("all equal" rule) and
+        # crowding out real vector matches.
+        bm25_hits = [
+            hit
+            for hit in sorted(bm25_score(search_query, settings), key=lambda pair: pair[1], reverse=True)
+            if hit[1] > 0
+        ][: settings.candidate_pool_size]
+
+        candidates = [doc for doc, _ in hybrid_merge(vector_hits, bm25_hits, settings.hybrid_alpha)][
+            : settings.candidate_pool_size
+        ]
+        if classification.entities:
+            # Merged after the pool-size truncation, not before: vector_hits alone
+            # already fills candidate_pool_size on any corpus of that size or larger,
+            # so truncating after the union would silently drop every graph-only
+            # match almost always. Prepended rather than appended so they also
+            # survive candidates[:k] when rerank is off; the reranker scores each
+            # candidate independently, so order doesn't matter to it.
+            try:
+                local_results = local_search(classification.entities, settings)
+            except Exception:
+                logger.warning("Local search failed; continuing with hybrid candidates only.", exc_info=True)
+                local_results = []
+            seen = {_doc_key(doc) for doc in candidates}
+            candidates = [doc for doc in local_results if _doc_key(doc) not in seen] + candidates
 
     if settings.rerank_enabled:
-        return get_reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
+        with tracer.start_as_current_span("rerank"):
+            return get_reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
     return candidates[:k]

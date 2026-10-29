@@ -36,6 +36,23 @@ def make_chunk(source_doc_id: str, chunk_index: int, text: str) -> Document:
     return Document(page_content=text, metadata={"source_doc_id": source_doc_id, "chunk_index": chunk_index})
 
 
+class FakeSpan:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+
+class FakeTracer:
+    def __init__(self):
+        self.spans: list[str] = []
+
+    def start_as_current_span(self, name, **kwargs):
+        self.spans.append(name)
+        return FakeSpan()
+
+
 class FakeCache:
     """retrieve() reaches bm25_index.get_bm25_index(), which calls
     get_cache_client() -- without this, these tests would try a real Valkey
@@ -261,6 +278,42 @@ def test_retrieve_returns_global_search_results_directly(tmp_path, monkeypatch):
     result = retrieve("what are the themes?", settings, k=5)
 
     assert result == fake_docs
+
+
+def test_retrieve_opens_a_hybrid_retrieve_span(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda settings: FakeCache())
+    fake_tracer = FakeTracer()
+    monkeypatch.setattr("ask_the_docs.retrieve.tracer", fake_tracer)
+    settings = make_settings(tmp_path)
+    build_index(
+        [Document(page_content="apples are red fruit", metadata={"source": "a.txt", "source_doc_id": "a"})],
+        settings,
+    )
+
+    retrieve("apples are red fruit", settings, k=1)
+
+    assert "hybrid_retrieve" in fake_tracer.spans
+
+
+def test_retrieve_does_not_open_hybrid_retrieve_span_on_the_global_search_short_circuit(tmp_path, monkeypatch):
+    """Review Focus: the early-return graph path must not open spans for
+    code that never runs."""
+    monkeypatch.setattr(
+        "ask_the_docs.retrieve.classify_query",
+        lambda q, s: QueryClassification(label="global", entities=[]),
+    )
+    monkeypatch.setattr(
+        "ask_the_docs.retrieve.global_search", lambda q, s: [make_chunk("community-0", 0, "a theme summary")]
+    )
+    fake_tracer = FakeTracer()
+    monkeypatch.setattr("ask_the_docs.retrieve.tracer", fake_tracer)
+    settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
+
+    retrieve("what are the themes?", settings, k=5)
+
+    assert "hybrid_retrieve" not in fake_tracer.spans
+    assert "rerank" not in fake_tracer.spans
 
 
 def test_retrieve_merges_local_search_into_candidate_pool(tmp_path, monkeypatch):

@@ -7,6 +7,7 @@ import logging
 import re
 
 from langchain_core.documents import Document
+from opentelemetry import trace
 
 from ask_the_docs.cache import cache_get, cache_set, get_cache_client, make_cache_key
 from ask_the_docs.config import REFUSAL_MESSAGE, Settings
@@ -15,6 +16,7 @@ from ask_the_docs.llm import get_llm_client
 from ask_the_docs.retrieve import retrieve
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 CITATION_PATTERN = re.compile(r"\[(\d+)\]")
 ANSWER_CACHE_TTL_SECONDS = 86400
@@ -77,8 +79,11 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
     logger.debug("LLM call -- system=%r, prompt=%r", settings.system_prompt_template, prompt)
 
     for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
-        text = client.generate(prompt, system=settings.system_prompt_template)
-        if citation_guardrail_passes(text, num_chunks=len(chunks)):
+        with tracer.start_as_current_span("generate") as span:
+            text = client.generate(prompt, system=settings.system_prompt_template)
+            passed = citation_guardrail_passes(text, num_chunks=len(chunks))
+            span.set_attribute("citation_guardrail_passed", passed)
+        if passed:
             citations = list(dict.fromkeys(chunk.metadata["source"] for chunk in chunks))
             return AnswerResult(text=text, citations=citations, context=context)
         logger.warning(
