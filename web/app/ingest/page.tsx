@@ -5,6 +5,35 @@ import { useState } from "react";
 
 type Status = { kind: "ok"; text: string } | { kind: "error"; text: string };
 
+const POLL_INTERVAL_MS = 1000;
+const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+
+export async function pollJob(jobId: string): Promise<Status> {
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const res = await fetch(`/api/jobs/${jobId}`);
+    const data = await res.json();
+    if (!res.ok) {
+      return { kind: "error", text: data.error ?? "Job lookup failed." };
+    }
+    if (data.status === "done") {
+      const r = data.result ?? {};
+      return {
+        kind: "ok",
+        text:
+          "files_found" in r
+            ? `${r.documents_ingested} documents ingested, ${r.files_found} files found.`
+            : `${r.documents_ingested} documents ingested.`,
+      };
+    }
+    if (data.status === "failed") {
+      return { kind: "error", text: data.error ?? "Ingestion failed." };
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
+  return { kind: "error", text: "Timed out waiting for ingestion to finish." };
+}
+
 export default function IngestPage() {
   const [source, setSource] = useState("");
   const [loading, setLoading] = useState(false);
@@ -30,8 +59,9 @@ export default function IngestPage() {
       if (!res.ok) {
         setSourceStatus({ kind: "error", text: data.error });
       } else {
-        setSourceStatus({ kind: "ok", text: `${data.documents_ingested} documents ingested.` });
-        setSource("");
+        const result = await pollJob(data.job_id);
+        setSourceStatus(result);
+        if (result.kind === "ok") setSource("");
       }
     } catch {
       setSourceStatus({ kind: "error", text: "Couldn't reach the server — is it running?" });
@@ -49,10 +79,7 @@ export default function IngestPage() {
       if (!res.ok) {
         setReindexStatus({ kind: "error", text: data.error });
       } else {
-        setReindexStatus({
-          kind: "ok",
-          text: `${data.documents_ingested} documents ingested, ${data.files_found} files found.`,
-        });
+        setReindexStatus(await pollJob(data.job_id));
       }
     } catch {
       setReindexStatus({ kind: "error", text: "Couldn't reach the server — is it running?" });
