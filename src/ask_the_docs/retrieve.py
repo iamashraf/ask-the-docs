@@ -2,10 +2,12 @@
 BM25 search merged by a weighted blend, optional cross-encoder rerank."""
 
 import logging
+import time
 
 from langchain_core.documents import Document
 from opentelemetry import trace
 
+from ask_the_docs import metrics
 from ask_the_docs.bm25_index import score as bm25_score
 from ask_the_docs.config import Settings
 from ask_the_docs.graph_retrieve import global_search, local_search
@@ -86,6 +88,7 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
             if global_results:
                 return global_results[:k]
 
+    hybrid_start = time.monotonic()
     with tracer.start_as_current_span("hybrid_retrieve"):
         try:
             index = load_index(settings)
@@ -128,8 +131,16 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
                 local_results = []
             seen = {_doc_key(doc) for doc in candidates}
             candidates = [doc for doc in local_results if _doc_key(doc) not in seen] + candidates
+    metrics.retrieve_latency_seconds.observe(
+        time.monotonic() - hybrid_start, exemplar=metrics.trace_exemplar()
+    )
 
     if settings.rerank_enabled:
+        rerank_start = time.monotonic()
         with tracer.start_as_current_span("rerank"):
-            return get_reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
+            reranked = get_reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
+        metrics.rerank_latency_seconds.observe(
+            time.monotonic() - rerank_start, exemplar=metrics.trace_exemplar()
+        )
+        return reranked
     return candidates[:k]

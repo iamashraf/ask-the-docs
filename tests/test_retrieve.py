@@ -4,6 +4,7 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from neo4j.exceptions import SessionExpired
+from prometheus_client import REGISTRY
 
 from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.index import build_index
@@ -528,3 +529,53 @@ def test_retrieve_falls_back_to_bm25_only_when_vector_search_fails(tmp_path, mon
     assert len(results) == 1
     assert results[0].metadata["source_doc_id"] == "b1"
     assert any("vector search" in record.message.lower() for record in caplog.records)
+
+
+def _sample(name: str) -> float:
+    return REGISTRY.get_sample_value(name) or 0.0
+
+
+def _stub_hybrid_with_one_hit(monkeypatch) -> None:
+    doc = _doc("a")
+
+    class FakeIndex:
+        def similarity_search_with_score(self, query, k):
+            return [(doc, 0.1)]
+
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
+
+
+def test_retrieve_observes_hybrid_retrieve_latency(tmp_path, monkeypatch):
+    _stub_hybrid_with_one_hit(monkeypatch)
+    before = _sample("retrieve_latency_seconds_count")
+
+    retrieve("a query", make_settings(tmp_path), k=1)
+
+    assert _sample("retrieve_latency_seconds_count") - before == 1.0
+
+
+def test_retrieve_does_not_observe_rerank_latency_when_rerank_disabled(tmp_path, monkeypatch):
+    _stub_hybrid_with_one_hit(monkeypatch)
+    before = _sample("rerank_latency_seconds_count")
+
+    retrieve("a query", make_settings(tmp_path).model_copy(update={"rerank_enabled": False}), k=1)
+
+    assert _sample("rerank_latency_seconds_count") - before == 0.0
+
+
+def test_retrieve_observes_rerank_latency_when_rerank_enabled(tmp_path, monkeypatch):
+    _stub_hybrid_with_one_hit(monkeypatch)
+
+    class PassThroughReranker:
+        def rerank(self, query, candidates, k):
+            return candidates[:k]
+
+    monkeypatch.setattr("ask_the_docs.retrieve.get_reranker", lambda model_name: PassThroughReranker())
+    rerank_before = _sample("rerank_latency_seconds_count")
+    retrieve_before = _sample("retrieve_latency_seconds_count")
+
+    retrieve("a query", make_settings(tmp_path).model_copy(update={"rerank_enabled": True}), k=1)
+
+    assert _sample("rerank_latency_seconds_count") - rerank_before == 1.0
+    assert _sample("retrieve_latency_seconds_count") - retrieve_before == 1.0
