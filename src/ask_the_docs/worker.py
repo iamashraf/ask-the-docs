@@ -9,6 +9,7 @@ import logging
 import nats
 from nats.js.api import ConsumerConfig
 from opentelemetry import propagate, trace
+from prometheus_client import start_http_server
 
 from ask_the_docs.config import Settings, get_settings
 from ask_the_docs.index import build_index
@@ -85,6 +86,14 @@ async def _consume_once(settings: Settings, sub) -> None:
 
 async def run_worker(settings: Settings) -> None:
     configure_tracing("ask-the-docs-worker", settings)
+    try:
+        start_http_server(settings.metrics_port)
+    except Exception:
+        logger.warning(
+            "Metrics server failed to start on port %s; continuing without it",
+            settings.metrics_port,
+            exc_info=True,
+        )
     nc = await nats.connect(settings.nats_url)
     js = nc.jetstream()
     await ensure_stream(js)
