@@ -4,6 +4,7 @@ Used twice with independent config -- once as the generator (answer.py)
 and once as the judge (evaluate.py).
 """
 
+import dataclasses
 from typing import Protocol
 
 import requests
@@ -19,10 +20,19 @@ class OllamaUnavailableError(RuntimeError):
     pass
 
 
+@dataclasses.dataclass
+class GenerationResult:
+    text: str
+    input_tokens: int | None
+    output_tokens: int | None
+    response_model: str | None = None
+
+
 class LLMClient(Protocol):
     """Interface every provider-specific client below implements."""
 
     def generate(self, prompt: str, system: str | None = None) -> str: ...
+    def generate_with_usage(self, prompt: str, system: str | None = None) -> GenerationResult: ...
 
 
 class OllamaLLMClient:
@@ -33,6 +43,9 @@ class OllamaLLMClient:
         self.base_url = base_url
 
     def generate(self, prompt: str, system: str | None = None) -> str:
+        return self.generate_with_usage(prompt, system).text
+
+    def generate_with_usage(self, prompt: str, system: str | None = None) -> GenerationResult:
         messages = []
         if system is not None:
             messages.append({"role": "system", "content": system})
@@ -55,7 +68,13 @@ class OllamaLLMClient:
             ) from exc
 
         response.raise_for_status()
-        return response.json()["message"]["content"]
+        body = response.json()
+        return GenerationResult(
+            text=body["message"]["content"],
+            input_tokens=body.get("prompt_eval_count"),
+            output_tokens=body.get("eval_count"),
+            response_model=body.get("model"),
+        )
 
 
 class AnthropicLLMClient:
@@ -66,11 +85,20 @@ class AnthropicLLMClient:
         self._client = Anthropic(api_key=api_key)
 
     def generate(self, prompt: str, system: str | None = None) -> str:
+        return self.generate_with_usage(prompt, system).text
+
+    def generate_with_usage(self, prompt: str, system: str | None = None) -> GenerationResult:
         kwargs = {"model": self.model, "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]}
         if system is not None:
             kwargs["system"] = system
         response = self._client.messages.create(**kwargs)
-        return response.content[0].text
+        usage = getattr(response, "usage", None)
+        return GenerationResult(
+            text=response.content[0].text,
+            input_tokens=getattr(usage, "input_tokens", None),
+            output_tokens=getattr(usage, "output_tokens", None),
+            response_model=getattr(response, "model", None),
+        )
 
 
 class OpenAILLMClient:
@@ -81,13 +109,22 @@ class OpenAILLMClient:
         self._client = OpenAI(api_key=api_key)
 
     def generate(self, prompt: str, system: str | None = None) -> str:
+        return self.generate_with_usage(prompt, system).text
+
+    def generate_with_usage(self, prompt: str, system: str | None = None) -> GenerationResult:
         messages = []
         if system is not None:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
         response = self._client.chat.completions.create(model=self.model, messages=messages)
-        return response.choices[0].message.content
+        usage = getattr(response, "usage", None)
+        return GenerationResult(
+            text=response.choices[0].message.content,
+            input_tokens=getattr(usage, "prompt_tokens", None),
+            output_tokens=getattr(usage, "completion_tokens", None),
+            response_model=getattr(response, "model", None),
+        )
 
 
 def get_llm_client(config: ProviderConfig) -> LLMClient:

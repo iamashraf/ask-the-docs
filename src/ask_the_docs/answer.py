@@ -5,10 +5,12 @@ import dataclasses
 import json
 import logging
 import re
+import time
 
 from langchain_core.documents import Document
 from opentelemetry import trace
 
+from ask_the_docs import metrics
 from ask_the_docs.cache import cache_get, cache_set, get_cache_client, make_cache_key
 from ask_the_docs.config import REFUSAL_MESSAGE, Settings
 from ask_the_docs.index import get_index_generation
@@ -71,6 +73,7 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
     answer isn't actually grounded in what was retrieved."""
     chunks = retrieve(query, settings, k=k)
     if not chunks:
+        metrics.refusal_total.inc()
         return AnswerResult(text=REFUSAL_MESSAGE, citations=[])
 
     context = format_context(chunks)
@@ -80,9 +83,34 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
 
     for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
         with tracer.start_as_current_span("generate") as span:
-            text = client.generate(prompt, system=settings.system_prompt_template)
+            generate_start = time.monotonic()
+            result = client.generate_with_usage(prompt, system=settings.system_prompt_template)
+            duration = time.monotonic() - generate_start
+
+            span.set_attribute("gen_ai.request.model", settings.generator.model)
+            span.set_attribute("gen_ai.response.model", result.response_model or settings.generator.model)
+            exemplar = metrics.trace_exemplar()
+            if result.input_tokens is not None:
+                span.set_attribute("gen_ai.usage.input_tokens", result.input_tokens)
+                metrics.gen_ai_client_token_usage.labels(
+                    gen_ai_token_type="input", gen_ai_request_model=settings.generator.model
+                ).observe(result.input_tokens, exemplar=exemplar)
+            if result.output_tokens is not None:
+                span.set_attribute("gen_ai.usage.output_tokens", result.output_tokens)
+                metrics.gen_ai_client_token_usage.labels(
+                    gen_ai_token_type="output", gen_ai_request_model=settings.generator.model
+                ).observe(result.output_tokens, exemplar=exemplar)
+            metrics.gen_ai_client_operation_duration.labels(
+                gen_ai_operation_name="chat",
+                gen_ai_provider_name=settings.generator.provider,
+                gen_ai_request_model=settings.generator.model,
+            ).observe(duration, exemplar=exemplar)
+            metrics.generate_latency_seconds.observe(duration, exemplar=exemplar)
+
+            text = result.text
             passed = citation_guardrail_passes(text, num_chunks=len(chunks))
             span.set_attribute("citation_guardrail_passed", passed)
+        metrics.citation_guardrail_total.labels(result="pass" if passed else "fail").inc()
         if passed:
             citations = list(dict.fromkeys(chunk.metadata["source"] for chunk in chunks))
             return AnswerResult(text=text, citations=citations, context=context)
@@ -92,6 +120,7 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
             MAX_GENERATION_ATTEMPTS,
         )
 
+    metrics.refusal_total.inc()
     return AnswerResult(text=REFUSAL_MESSAGE, citations=[])
 
 
@@ -123,13 +152,16 @@ def answer(query: str, settings: Settings, k: int = 5) -> AnswerResult:
     cached = cache_get(cache_client, cache_key)
     if cached is not None:
         try:
-            return AnswerResult(**json.loads(cached))
+            result = AnswerResult(**json.loads(cached))
+            metrics.cache_result_total.labels(result="hit").inc()
+            return result
         except (json.JSONDecodeError, TypeError):
             # A corrupted value or a schema mismatch from an older cache
             # entry -- treat it as a miss and recompute, rather than
             # letting a cache problem break the request.
             logger.warning("Cached answer value was unusable; recomputing.", exc_info=True)
 
+    metrics.cache_result_total.labels(result="miss").inc()
     result = _compute_answer(query, settings, k)
     cache_set(cache_client, cache_key, json.dumps(dataclasses.asdict(result)).encode(), ttl_seconds=ANSWER_CACHE_TTL_SECONDS)
     return result
