@@ -23,6 +23,7 @@ def make_settings() -> Settings:
 
 def test_startup_triggers_seeding(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.configure_tracing", lambda service_name, settings: None)
     captured = {}
     monkeypatch.setattr(
         "ask_the_docs.api.seed_if_needed", lambda settings: captured.setdefault("called", True)
@@ -32,6 +33,21 @@ def test_startup_triggers_seeding(monkeypatch):
         pass
 
     assert captured.get("called") is True
+
+
+def test_startup_configures_tracing(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.seed_if_needed", lambda settings: None)
+    captured = {}
+    monkeypatch.setattr(
+        "ask_the_docs.api.configure_tracing",
+        lambda service_name, settings: captured.setdefault("service_name", service_name),
+    )
+
+    with TestClient(app):
+        pass
+
+    assert captured["service_name"] == "ask-the-docs-app"
 
 
 def test_health_returns_ok():

@@ -14,6 +14,9 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.redis import RedisInstrumentor
+from opentelemetry.instrumentation.requests import RequestsInstrumentor
 from pydantic import BaseModel, Field
 
 from ask_the_docs.answer import answer
@@ -29,6 +32,7 @@ from ask_the_docs.jobs import JobStoreError, create_job, get_async_cache_client,
 from ask_the_docs.llm import OllamaUnavailableError
 from ask_the_docs.queue import QueuePublishError, publish_ingest_job
 from ask_the_docs.seed import seed_if_needed
+from ask_the_docs.tracing import configure_tracing
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +49,17 @@ _package_logger.setLevel(logging.INFO)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_tracing("ask-the-docs-app", get_settings())
     seed_if_needed(get_settings())
     yield
 
 GOLDEN_QUESTIONS_PATH = Path("evals/golden_questions.yaml")
 
 app = FastAPI(title="ask-the-docs", lifespan=lifespan)
+
+FastAPIInstrumentor.instrument_app(app)
+RedisInstrumentor().instrument()
+RequestsInstrumentor().instrument()
 
 
 @app.exception_handler(PathSecurityError)
