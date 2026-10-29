@@ -5,7 +5,9 @@ from unittest.mock import Mock
 
 import pytest
 from langchain_core.documents import Document
+from prometheus_client import REGISTRY
 
+from ask_the_docs import metrics
 from ask_the_docs.answer import (
     MAX_GENERATION_ATTEMPTS,
     AnswerResult,
@@ -17,6 +19,7 @@ from ask_the_docs.answer import (
 )
 from ask_the_docs.cache import make_cache_key
 from ask_the_docs.config import REFUSAL_MESSAGE, ProviderConfig, Settings
+from ask_the_docs.llm import GenerationResult
 
 
 def make_settings() -> Settings:
@@ -111,9 +114,9 @@ def test_answer_calls_generator_with_context_and_returns_citations(monkeypatch):
     captured_prompts = []
 
     class FakeClient:
-        def generate(self, prompt, system=None):
+        def generate_with_usage(self, prompt, system=None):
             captured_prompts.append(prompt)
-            return "the answer [1][2]"
+            return GenerationResult(text="the answer [1][2]", input_tokens=None, output_tokens=None)
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
 
@@ -135,7 +138,13 @@ def test_answer_dedupes_citations_preserving_order(monkeypatch):
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
-        lambda config: Mock(generate=Mock(return_value="the answer [1][2][3]")),
+        lambda config: Mock(
+            generate_with_usage=Mock(
+                return_value=GenerationResult(
+                    text="the answer [1][2][3]", input_tokens=None, output_tokens=None
+                )
+            )
+        ),
     )
 
     result = answer("What is X?", make_settings())
@@ -146,10 +155,14 @@ def test_answer_dedupes_citations_preserving_order(monkeypatch):
 def test_answer_returns_refusal_message_when_guardrail_fails(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
-    fake_generate = Mock(return_value="an answer with no citation markers")
+    fake_generate = Mock(
+        return_value=GenerationResult(
+            text="an answer with no citation markers", input_tokens=None, output_tokens=None
+        )
+    )
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
-        lambda config: Mock(generate=fake_generate),
+        lambda config: Mock(generate_with_usage=fake_generate),
     )
 
     result = answer("some question", make_settings())
@@ -168,11 +181,16 @@ def test_answer_retries_once_when_first_attempt_fails_the_guardrail(monkeypatch)
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
     fake_generate = Mock(
-        side_effect=["an answer with no citation markers", "a grounded answer [1]"]
+        side_effect=[
+            GenerationResult(
+                text="an answer with no citation markers", input_tokens=None, output_tokens=None
+            ),
+            GenerationResult(text="a grounded answer [1]", input_tokens=None, output_tokens=None),
+        ]
     )
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
-        lambda config: Mock(generate=fake_generate),
+        lambda config: Mock(generate_with_usage=fake_generate),
     )
 
     result = answer("some question", make_settings())
@@ -211,7 +229,11 @@ def test_compute_answer_records_the_guardrail_result_on_the_generate_span(monkey
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
-        lambda config: Mock(generate=Mock(return_value="the answer [1]")),
+        lambda config: Mock(
+            generate_with_usage=Mock(
+                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            )
+        ),
     )
 
     _compute_answer("What is X?", make_settings(), k=5)
@@ -219,12 +241,223 @@ def test_compute_answer_records_the_guardrail_result_on_the_generate_span(monkey
     assert fake_tracer.spans[0].attrs["citation_guardrail_passed"] is True
 
 
+def test_compute_answer_sets_gen_ai_span_attributes(monkeypatch):
+    class FakeSpan:
+        def __init__(self):
+            self.attrs = {}
+
+        def set_attribute(self, k, v):
+            self.attrs[k] = v
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class FakeTracer:
+        def __init__(self):
+            self.spans: list[FakeSpan] = []
+
+        def start_as_current_span(self, name, **kwargs):
+            span = FakeSpan()
+            self.spans.append(span)
+            return span
+
+    fake_tracer = FakeTracer()
+    monkeypatch.setattr("ask_the_docs.answer.tracer", fake_tracer)
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_with_usage=Mock(
+                return_value=GenerationResult(
+                    text="the answer [1]",
+                    input_tokens=12,
+                    output_tokens=34,
+                    response_model="llama3.1:8b-instruct-q4_K_M",
+                )
+            )
+        ),
+    )
+    settings = make_settings()
+
+    _compute_answer("What is X?", settings, k=5)
+
+    attrs = fake_tracer.spans[0].attrs
+    assert attrs["gen_ai.request.model"] == settings.generator.model
+    assert attrs["gen_ai.response.model"] == "llama3.1:8b-instruct-q4_K_M"
+    assert attrs["gen_ai.usage.input_tokens"] == 12
+    assert attrs["gen_ai.usage.output_tokens"] == 34
+
+
+def test_compute_answer_omits_usage_attributes_when_token_counts_are_none(monkeypatch):
+    """Ollama omits prompt_eval_count/eval_count when a prompt is served
+    from its KV cache -- must not crash or fabricate a count."""
+
+    class FakeSpan:
+        def __init__(self):
+            self.attrs = {}
+
+        def set_attribute(self, k, v):
+            self.attrs[k] = v
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class FakeTracer:
+        def __init__(self):
+            self.spans: list[FakeSpan] = []
+
+        def start_as_current_span(self, name, **kwargs):
+            span = FakeSpan()
+            self.spans.append(span)
+            return span
+
+    fake_tracer = FakeTracer()
+    monkeypatch.setattr("ask_the_docs.answer.tracer", fake_tracer)
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_with_usage=Mock(
+                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            )
+        ),
+    )
+
+    settings = make_settings()
+    result = _compute_answer("What is X?", settings, k=5)
+
+    assert result.text == "the answer [1]"
+    attrs = fake_tracer.spans[0].attrs
+    assert "gen_ai.usage.input_tokens" not in attrs
+    assert "gen_ai.usage.output_tokens" not in attrs
+    # response_model absent on the GenerationResult -- falls back to the requested model.
+    assert attrs["gen_ai.response.model"] == settings.generator.model
+
+
+def test_compute_answer_increments_citation_guardrail_counter(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_with_usage=Mock(
+                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            )
+        ),
+    )
+    before = REGISTRY.get_sample_value("citation_guardrail_total", {"result": "pass"}) or 0
+
+    _compute_answer("What is X?", make_settings(), k=5)
+
+    after = REGISTRY.get_sample_value("citation_guardrail_total", {"result": "pass"})
+    assert after - before == 1.0
+
+
+def test_compute_answer_increments_refusal_counter_when_no_chunks_retrieved(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: [])
+    before = REGISTRY.get_sample_value("refusal_total") or 0
+
+    _compute_answer("anything", make_settings(), k=5)
+
+    after = REGISTRY.get_sample_value("refusal_total")
+    assert after - before == 1.0
+
+
+def test_compute_answer_increments_refusal_counter_when_guardrail_fails_after_retries(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_with_usage=Mock(
+                return_value=GenerationResult(
+                    text="an answer with no citation markers", input_tokens=None, output_tokens=None
+                )
+            )
+        ),
+    )
+    before = REGISTRY.get_sample_value("refusal_total") or 0
+
+    _compute_answer("some question", make_settings(), k=5)
+
+    after = REGISTRY.get_sample_value("refusal_total")
+    assert after - before == 1.0
+
+
+def test_compute_answer_observes_gen_ai_token_usage_and_duration_histograms(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    settings = make_settings()
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_with_usage=Mock(
+                return_value=GenerationResult(text="the answer [1]", input_tokens=12, output_tokens=34)
+            )
+        ),
+    )
+    input_labels = {"gen_ai_token_type": "input", "gen_ai_request_model": settings.generator.model}
+    output_labels = {"gen_ai_token_type": "output", "gen_ai_request_model": settings.generator.model}
+    duration_labels = {
+        "gen_ai_operation_name": "chat",
+        "gen_ai_provider_name": settings.generator.provider,
+        "gen_ai_request_model": settings.generator.model,
+    }
+    before_input = REGISTRY.get_sample_value("gen_ai_client_token_usage_count", input_labels) or 0
+    before_output = REGISTRY.get_sample_value("gen_ai_client_token_usage_count", output_labels) or 0
+    before_duration = REGISTRY.get_sample_value("gen_ai_client_operation_duration_count", duration_labels) or 0
+    before_generate = REGISTRY.get_sample_value("generate_latency_seconds_count") or 0
+
+    _compute_answer("What is X?", settings, k=5)
+
+    assert REGISTRY.get_sample_value("gen_ai_client_token_usage_count", input_labels) - before_input == 1.0
+    assert REGISTRY.get_sample_value("gen_ai_client_token_usage_count", output_labels) - before_output == 1.0
+    assert (
+        REGISTRY.get_sample_value("gen_ai_client_operation_duration_count", duration_labels) - before_duration
+        == 1.0
+    )
+    assert REGISTRY.get_sample_value("generate_latency_seconds_count") - before_generate == 1.0
+
+
+def test_compute_answer_skips_token_usage_histogram_when_tokens_are_none(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    settings = make_settings()
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_with_usage=Mock(
+                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            )
+        ),
+    )
+    input_labels = {"gen_ai_token_type": "input", "gen_ai_request_model": settings.generator.model}
+    before_input = REGISTRY.get_sample_value("gen_ai_client_token_usage_count", input_labels) or 0
+
+    result = _compute_answer("What is X?", settings, k=5)
+
+    assert result.text == "the answer [1]"
+    assert (REGISTRY.get_sample_value("gen_ai_client_token_usage_count", input_labels) or 0) == before_input
+
+
 def test_answer_logs_prompt_at_debug_level(monkeypatch, caplog):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
-        lambda config: Mock(generate=Mock(return_value="the answer [1]")),
+        lambda config: Mock(
+            generate_with_usage=Mock(
+                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            )
+        ),
     )
 
     with caplog.at_level(logging.DEBUG, logger="ask_the_docs.answer"):
@@ -263,11 +496,32 @@ def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
     mock_get_llm_client = Mock()
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", mock_get_llm_client)
 
+    before_hit = REGISTRY.get_sample_value("cache_result_total", {"result": "hit"}) or 0
+
     result = answer("What is X?", settings, k=5)
 
     assert result == cached_result
     mock_retrieve.assert_not_called()
     mock_get_llm_client.assert_not_called()
+    assert (REGISTRY.get_sample_value("cache_result_total", {"result": "hit"}) or 0) - before_hit == 1.0
+
+
+def test_answer_increments_cache_miss_counter_on_cache_miss(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_with_usage=Mock(
+                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            )
+        ),
+    )
+    before_miss = REGISTRY.get_sample_value("cache_result_total", {"result": "miss"}) or 0
+
+    answer("a fresh question", make_settings(), k=5)
+
+    assert (REGISTRY.get_sample_value("cache_result_total", {"result": "miss"}) or 0) - before_miss == 1.0
 
 
 def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
@@ -275,7 +529,11 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
-        lambda config: Mock(generate=Mock(return_value="the answer [1]")),
+        lambda config: Mock(
+            generate_with_usage=Mock(
+                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            )
+        ),
     )
 
     fake_cache = FakeCacheClient()
@@ -298,10 +556,16 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
     )
     fake_cache.set(key, b"not valid json")
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: fake_cache)
+    before_hit = REGISTRY.get_sample_value("cache_result_total", {"result": "hit"}) or 0
+    before_miss = REGISTRY.get_sample_value("cache_result_total", {"result": "miss"}) or 0
 
     result = answer("What is X?", make_settings(), k=5)
 
     assert result.text == "the answer [1]"
+    # A corrupted cache value is treated as a miss, not a hit -- it was
+    # never a usable AnswerResult to begin with.
+    assert (REGISTRY.get_sample_value("cache_result_total", {"result": "hit"}) or 0) - before_hit == 0
+    assert (REGISTRY.get_sample_value("cache_result_total", {"result": "miss"}) or 0) - before_miss == 1.0
 
 
 def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
@@ -314,9 +578,9 @@ def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
     calls = {"count": 0}
 
     class FakeClient:
-        def generate(self, prompt, system=None):
+        def generate_with_usage(self, prompt, system=None):
             calls["count"] += 1
-            return "the answer [1]"
+            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
     settings = make_settings()
@@ -337,9 +601,9 @@ def test_answer_cache_key_changes_when_system_prompt_template_changes(monkeypatc
     calls = {"count": 0}
 
     class FakeClient:
-        def generate(self, prompt, system=None):
+        def generate_with_usage(self, prompt, system=None):
             calls["count"] += 1
-            return "the answer [1]"
+            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
 
@@ -362,9 +626,9 @@ def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
     calls = {"count": 0}
 
     class FakeClient:
-        def generate(self, prompt, system=None):
+        def generate_with_usage(self, prompt, system=None):
             calls["count"] += 1
-            return "the answer [1]"
+            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
 
@@ -395,9 +659,9 @@ def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field,
     calls = {"count": 0}
 
     class FakeClient:
-        def generate(self, prompt, system=None):
+        def generate_with_usage(self, prompt, system=None):
             calls["count"] += 1
-            return "the answer [1]"
+            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
 
@@ -422,9 +686,9 @@ def test_answer_cache_key_changes_when_index_generation_changes(monkeypatch):
     calls = {"count": 0}
 
     class FakeClient:
-        def generate(self, prompt, system=None):
+        def generate_with_usage(self, prompt, system=None):
             calls["count"] += 1
-            return "the answer [1]"
+            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
     settings = make_settings()
@@ -442,9 +706,9 @@ def test_answer_passes_system_prompt_to_generate(monkeypatch):
     captured = {}
 
     class FakeClient:
-        def generate(self, prompt, system=None):
+        def generate_with_usage(self, prompt, system=None):
             captured["system"] = system
-            return "the answer [1]"
+            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
     settings = make_settings()

@@ -6,6 +6,7 @@ import requests
 from ask_the_docs.config import ProviderConfig
 from ask_the_docs.llm import (
     AnthropicLLMClient,
+    GenerationResult,
     OllamaLLMClient,
     OllamaUnavailableError,
     OpenAILLMClient,
@@ -146,6 +147,145 @@ def test_openai_client_generate_calls_sdk(monkeypatch):
     client = OpenAILLMClient(model="gpt-4o-mini", api_key="x")
     assert client.generate("hi") == "hello from gpt"
     assert captured["messages"] == [{"role": "user", "content": "hi"}]
+
+
+def test_ollama_generate_with_usage_reads_token_counts(monkeypatch):
+    def fake_post(url, json, timeout):
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {
+                "message": {"content": "answer"},
+                "prompt_eval_count": 12,
+                "eval_count": 34,
+                "model": "llama3.1:8b-instruct-q4_K_M",
+            },
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    result = client.generate_with_usage("prompt")
+
+    assert result == GenerationResult(
+        text="answer",
+        input_tokens=12,
+        output_tokens=34,
+        response_model="llama3.1:8b-instruct-q4_K_M",
+    )
+
+
+def test_ollama_generate_with_usage_defaults_to_none_when_counts_absent(monkeypatch):
+    def fake_post(url, json, timeout):
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"message": {"content": "answer"}},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    result = client.generate_with_usage("prompt")
+
+    assert result.input_tokens is None and result.output_tokens is None
+    assert result.response_model is None
+
+
+def test_anthropic_generate_with_usage_reads_token_counts(monkeypatch):
+    class FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                content=[SimpleNamespace(text="hello from claude")],
+                usage=SimpleNamespace(input_tokens=10, output_tokens=20),
+                model="claude-sonnet-5-5-20260101",
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr("ask_the_docs.llm.Anthropic", FakeAnthropic)
+
+    client = AnthropicLLMClient(model="claude-sonnet-5-5", api_key="x")
+    result = client.generate_with_usage("hi")
+
+    assert result == GenerationResult(
+        text="hello from claude",
+        input_tokens=10,
+        output_tokens=20,
+        response_model="claude-sonnet-5-5-20260101",
+    )
+
+
+def test_anthropic_generate_with_usage_missing_usage_field_returns_none(monkeypatch):
+    class FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(content=[SimpleNamespace(text="hello from claude")])
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr("ask_the_docs.llm.Anthropic", FakeAnthropic)
+
+    client = AnthropicLLMClient(model="claude-sonnet-5-5", api_key="x")
+    result = client.generate_with_usage("hi")
+
+    assert result.input_tokens is None and result.output_tokens is None
+    assert result.response_model is None
+
+
+def test_openai_generate_with_usage_reads_token_counts(monkeypatch):
+    class FakeCompletions:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="hello from gpt"))],
+                usage=SimpleNamespace(prompt_tokens=5, completion_tokens=7),
+                model="gpt-4o-mini-2024-07-18",
+            )
+
+    class FakeChat:
+        def __init__(self):
+            self.completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.chat = FakeChat()
+
+    monkeypatch.setattr("ask_the_docs.llm.OpenAI", FakeOpenAI)
+
+    client = OpenAILLMClient(model="gpt-4o-mini", api_key="x")
+    result = client.generate_with_usage("hi")
+
+    assert result == GenerationResult(
+        text="hello from gpt",
+        input_tokens=5,
+        output_tokens=7,
+        response_model="gpt-4o-mini-2024-07-18",
+    )
+
+
+def test_openai_generate_with_usage_missing_usage_field_returns_none(monkeypatch):
+    class FakeCompletions:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="hello from gpt"))]
+            )
+
+    class FakeChat:
+        def __init__(self):
+            self.completions = FakeCompletions()
+
+    class FakeOpenAI:
+        def __init__(self, api_key):
+            self.chat = FakeChat()
+
+    monkeypatch.setattr("ask_the_docs.llm.OpenAI", FakeOpenAI)
+
+    client = OpenAILLMClient(model="gpt-4o-mini", api_key="x")
+    result = client.generate_with_usage("hi")
+
+    assert result.input_tokens is None and result.output_tokens is None
+    assert result.response_model is None
 
 
 def test_openai_client_generate_prepends_system_message_when_given(monkeypatch):
