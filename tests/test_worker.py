@@ -5,7 +5,7 @@ import pytest
 from langchain_core.documents import Document
 
 from ask_the_docs.config import ProviderConfig, Settings
-from ask_the_docs.worker import WORKER_ACK_WAIT_SECONDS, _consume_once, process_job, run_worker
+from ask_the_docs.worker import WORKER_ACK_WAIT_SECONDS, _consume_once, main, process_job, run_worker
 
 
 def make_settings() -> Settings:
@@ -196,3 +196,17 @@ async def test_run_worker_subscribes_with_a_generous_ack_wait(monkeypatch):
         await run_worker(make_settings())
 
     assert calls["config"].ack_wait == WORKER_ACK_WAIT_SECONDS
+
+
+def test_main_configures_tracing(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "ask_the_docs.worker.configure_tracing",
+        lambda service_name, settings: captured.setdefault("service_name", service_name),
+    )
+    monkeypatch.setattr("ask_the_docs.worker.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.worker.asyncio.run", lambda coro: coro.close())
+
+    main()
+
+    assert captured["service_name"] == "ask-the-docs-worker"
