@@ -72,3 +72,12 @@ def test_load_text_returns_empty_list_for_blank_file(tmp_path):
     txt_path.write_text("   \n  ")
 
     assert load_text(txt_path) == []
+
+
+def test_load_text_cleans_messy_whitespace(tmp_path):
+    txt_path = tmp_path / "messy.txt"
+    txt_path.write_text("Para one.   \n\n\n\n\nPara   two.")
+
+    docs = load_text(txt_path)
+
+    assert docs[0].page_content == "Para one.\n\nPara two."
