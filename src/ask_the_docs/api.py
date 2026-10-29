@@ -6,20 +6,25 @@ as before) then enqueue a job and return 202 -- the real dispatch/
 build_index work happens in the separate worker process (worker.py),
 never during a request."""
 
+import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Request
+import requests
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from prometheus_client import REGISTRY
+from prometheus_client.exposition import choose_encoder
 from pydantic import BaseModel, Field
 
 from ask_the_docs.answer import answer
 from ask_the_docs.config import get_settings
 from ask_the_docs.evaluate import run_evaluation
+from ask_the_docs.index import load_index
 from ask_the_docs.ingest import (
     PathSecurityError,
     UnsupportedFileTypeError,
@@ -33,6 +38,8 @@ from ask_the_docs.seed import seed_if_needed
 from ask_the_docs.tracing import configure_tracing
 
 logger = logging.getLogger(__name__)
+
+READY_OLLAMA_TIMEOUT_SECONDS = 5
 
 # uvicorn only configures its own loggers (uvicorn, uvicorn.access), never
 # arbitrary app loggers -- without this, seed.py's INFO-level progress logs
@@ -81,6 +88,45 @@ def health() -> dict[str, str]:
     """No dependency on Settings/Ollama/anything external -- the compose
     healthcheck gates on this, so it must reflect only "is the process up"."""
     return {"status": "ok"}
+
+
+@app.get("/metrics")
+def metrics(request: Request) -> Response:
+    encoder, content_type = choose_encoder(request.headers.get("accept", ""))
+    return Response(content=encoder(REGISTRY), media_type=content_type)
+
+
+@app.get("/ready")
+async def ready() -> JSONResponse:
+    """Checks each dependency independently so a 503 body says which one is down."""
+    settings = get_settings()
+    dependencies = {}
+
+    try:
+        load_index(settings)
+        dependencies["chroma"] = "ok"
+    except Exception:
+        dependencies["chroma"] = "unreachable"
+
+    try:
+        await get_async_cache_client(settings).ping()
+        dependencies["redis"] = "ok"
+    except Exception:
+        dependencies["redis"] = "unreachable"
+
+    try:
+        response = await asyncio.to_thread(
+            requests.get,
+            f"{settings.ollama_base_url}/api/tags",
+            timeout=READY_OLLAMA_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        dependencies["ollama"] = "ok"
+    except Exception:
+        dependencies["ollama"] = "unreachable"
+
+    status_code = 200 if all(status == "ok" for status in dependencies.values()) else 503
+    return JSONResponse(status_code=status_code, content=dependencies)
 
 
 class IngestRequest(BaseModel):

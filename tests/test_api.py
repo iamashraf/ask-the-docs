@@ -2,6 +2,7 @@ import logging
 import uuid
 
 import pytest
+import requests
 from fastapi.testclient import TestClient
 
 from ask_the_docs.answer import AnswerResult
@@ -407,3 +408,72 @@ def test_package_logger_configured_for_info_with_a_handler():
     package_logger = logging.getLogger("ask_the_docs")
     assert package_logger.getEffectiveLevel() <= logging.INFO
     assert len(package_logger.handlers) >= 1
+
+
+def test_metrics_endpoint_returns_prometheus_text():
+    response = TestClient(app).get("/metrics")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+
+
+def test_metrics_endpoint_returns_openmetrics_with_exemplar_when_requested():
+    from ask_the_docs.metrics import generate_latency_seconds
+
+    generate_latency_seconds.observe(1.0, exemplar={"trace_id": "deadbeefdeadbeefdeadbeefdeadbeef"})
+
+    response = TestClient(app).get(
+        "/metrics",
+        headers={"Accept": "application/openmetrics-text; version=1.0.0; charset=utf-8"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/openmetrics-text")
+    assert "deadbeefdeadbeefdeadbeefdeadbeef" in response.text
+
+
+class _FakeAsyncRedisClient:
+    async def ping(self):
+        return True
+
+
+def test_ready_reports_each_dependency_independently(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+
+    def failing_load_index(settings):
+        raise RuntimeError("chroma down")
+
+    monkeypatch.setattr("ask_the_docs.api.load_index", failing_load_index)
+    monkeypatch.setattr(
+        "ask_the_docs.api.get_async_cache_client", lambda settings: _FakeAsyncRedisClient()
+    )
+
+    def fake_get(url, timeout):
+        return type("FakeResponse", (), {"raise_for_status": lambda self: None})()
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    response = TestClient(app).get("/ready")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["chroma"] == "unreachable"
+    assert body["redis"] == "ok"
+    assert body["ollama"] == "ok"
+
+
+def test_ready_returns_200_when_all_dependencies_are_reachable(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.load_index", lambda settings: object())
+    monkeypatch.setattr(
+        "ask_the_docs.api.get_async_cache_client", lambda settings: _FakeAsyncRedisClient()
+    )
+
+    def fake_get(url, timeout):
+        return type("FakeResponse", (), {"raise_for_status": lambda self: None})()
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    response = TestClient(app).get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"chroma": "ok", "redis": "ok", "ollama": "ok"}
