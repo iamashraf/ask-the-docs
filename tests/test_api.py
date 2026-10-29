@@ -416,6 +416,21 @@ def test_metrics_endpoint_returns_prometheus_text():
     assert response.headers["content-type"].startswith("text/plain")
 
 
+def test_metrics_endpoint_returns_openmetrics_with_exemplar_when_requested():
+    from ask_the_docs.metrics import generate_latency_seconds
+
+    generate_latency_seconds.observe(1.0, exemplar={"trace_id": "deadbeefdeadbeefdeadbeefdeadbeef"})
+
+    response = TestClient(app).get(
+        "/metrics",
+        headers={"Accept": "application/openmetrics-text; version=1.0.0; charset=utf-8"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/openmetrics-text")
+    assert "deadbeefdeadbeefdeadbeefdeadbeef" in response.text
+
+
 class _FakeAsyncRedisClient:
     async def ping(self):
         return True
