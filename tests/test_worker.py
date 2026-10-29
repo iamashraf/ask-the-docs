@@ -161,6 +161,30 @@ async def test_consume_once_leaves_a_message_unacked_and_does_not_raise_when_pro
     assert msg.acked is False
 
 
+async def test_consume_once_parents_process_job_on_the_extracted_trace_context(monkeypatch):
+    """Proves the extracted traceparent actually becomes process_job's
+    parent context -- not just that extraction doesn't crash (that's the
+    separate no-key test below)."""
+    from opentelemetry import trace as trace_api
+
+    known_trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
+    traceparent = f"00-{known_trace_id}-00f067aa0ba902b7-01"
+    msg = FakeMsg(
+        json.dumps({"job_id": "job-1", "kind": "ingest", "source": "a.pdf", "traceparent": traceparent}).encode()
+    )
+    sub = FakeSub([[msg]])
+    captured = {}
+
+    async def fake_process_job(settings, payload):
+        captured["trace_id"] = format(trace_api.get_current_span().get_span_context().trace_id, "032x")
+
+    monkeypatch.setattr("ask_the_docs.worker.process_job", fake_process_job)
+
+    await _consume_once(make_settings(), sub)
+
+    assert captured["trace_id"] == known_trace_id
+
+
 async def test_consume_once_extracts_trace_context_without_a_traceparent_key(monkeypatch):
     """Review Focus: a message with no "traceparent" key at all (e.g. from
     an older publisher) must not crash extraction."""
