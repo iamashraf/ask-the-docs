@@ -34,10 +34,9 @@ def test_ingest_dispatches_each_source_and_builds_index(monkeypatch):
 def test_index_discovers_docs_dir_and_builds_index(tmp_path, monkeypatch):
     settings = make_settings(docs_dir=tmp_path)
     monkeypatch.setattr(
-        "ask_the_docs.cli.discover_sources",
-        lambda docs_dir: [tmp_path / "a.pdf", tmp_path / "b.pdf"],
+        "ask_the_docs.cli.dispatch_all_under_docs_dir",
+        lambda s: (["doc-for-a.pdf", "doc-for-b.pdf"], 2),
     )
-    monkeypatch.setattr("ask_the_docs.cli.dispatch", lambda source: [f"doc-for-{source}"])
     captured = {}
     monkeypatch.setattr(
         "ask_the_docs.cli.build_index", lambda docs, settings: captured.setdefault("docs", docs)
@@ -216,6 +215,22 @@ def test_serve_starts_uvicorn(monkeypatch):
     assert captured["app"] is api_app
     assert captured["host"] == "0.0.0.0"
     assert captured["port"] == 8000
+
+
+def test_worker_runs_the_worker_loop(monkeypatch):
+    captured = {}
+
+    async def fake_run_worker(settings):
+        captured["settings"] = settings
+
+    monkeypatch.setattr("ask_the_docs.worker.run_worker", fake_run_worker)
+
+    parser = build_parser()
+    args = parser.parse_args(["worker"])
+    settings = make_settings()
+    args.func(args, settings)
+
+    assert captured["settings"] is settings
 
 
 def test_evaluate_reports_errors(capsys, monkeypatch):

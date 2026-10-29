@@ -5,7 +5,14 @@ import docx as docx_module
 import pytest
 import requests
 
-from ask_the_docs.ingest import discover_sources, dispatch, load_docx, load_url, validate_source
+from ask_the_docs.ingest import (
+    discover_sources,
+    dispatch,
+    dispatch_all_under_docs_dir,
+    load_docx,
+    load_url,
+    validate_source,
+)
 
 SENTINEL = [object()]
 
@@ -216,6 +223,21 @@ def test_validate_source_raises_for_a_missing_local_file(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError):
         validate_source("missing.pdf")
+
+
+def test_dispatch_all_under_docs_dir_returns_docs_and_file_count(tmp_path, monkeypatch):
+    (tmp_path / "a.txt").write_text("hello")
+    (tmp_path / "b.txt").write_text("world")
+    monkeypatch.setattr(
+        "ask_the_docs.ingest.get_settings",
+        lambda: SimpleNamespace(docs_dir=tmp_path, max_file_size_mb=25),
+    )
+    settings = SimpleNamespace(docs_dir=tmp_path)
+
+    docs, file_count = dispatch_all_under_docs_dir(settings)
+
+    assert file_count == 2
+    assert len(docs) == 2
 
 
 def test_discover_sources_finds_allowed_extensions_only(tmp_path):
