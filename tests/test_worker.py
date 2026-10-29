@@ -1,8 +1,11 @@
+import asyncio
+import json
+
 import pytest
 from langchain_core.documents import Document
 
 from ask_the_docs.config import ProviderConfig, Settings
-from ask_the_docs.worker import process_job
+from ask_the_docs.worker import WORKER_ACK_WAIT_SECONDS, _consume_once, process_job, run_worker
 
 
 def make_settings() -> Settings:
@@ -104,3 +107,92 @@ async def test_process_job_is_safe_to_run_twice_for_the_same_job_id(monkeypatch)
 
     assert len(build_calls) == 2
     assert updates[-1] == ("job-4", "done", {"documents_ingested": 1}, None)
+
+
+class FakeMsg:
+    def __init__(self, data: bytes):
+        self.data = data
+        self.acked = False
+
+    async def ack(self):
+        self.acked = True
+
+
+class FakeSub:
+    def __init__(self, batches):
+        self._batches = list(batches)
+
+    async def fetch(self, n, timeout):
+        if not self._batches:
+            raise TimeoutError()
+        return self._batches.pop(0)
+
+
+async def test_consume_once_acks_a_successfully_processed_message(monkeypatch):
+    msg = FakeMsg(json.dumps({"job_id": "job-1", "kind": "ingest", "source": "a.pdf"}).encode())
+    sub = FakeSub([[msg]])
+    processed = []
+
+    async def fake_process_job(settings, payload):
+        processed.append(payload)
+
+    monkeypatch.setattr("ask_the_docs.worker.process_job", fake_process_job)
+
+    await _consume_once(make_settings(), sub)
+
+    assert processed == [{"job_id": "job-1", "kind": "ingest", "source": "a.pdf"}]
+    assert msg.acked is True
+
+
+async def test_consume_once_leaves_a_message_unacked_and_does_not_raise_when_process_job_raises(monkeypatch):
+    """Review Focus: a worker crash mid-job must not take the whole worker
+    down -- the message stays unacked so NATS redelivers it, and the next
+    message still gets a chance to run."""
+    msg = FakeMsg(json.dumps({"job_id": "job-1", "kind": "ingest", "source": "a.pdf"}).encode())
+    sub = FakeSub([[msg]])
+
+    async def failing_process_job(settings, payload):
+        raise ConnectionError("redis down mid-job")
+
+    monkeypatch.setattr("ask_the_docs.worker.process_job", failing_process_job)
+
+    await _consume_once(make_settings(), sub)  # must not raise
+
+    assert msg.acked is False
+
+
+async def test_consume_once_drops_an_unparseable_message_without_crashing(monkeypatch):
+    msg = FakeMsg(b"not valid json")
+    sub = FakeSub([[msg]])
+    called = []
+    monkeypatch.setattr("ask_the_docs.worker.process_job", lambda *a: called.append(a))
+
+    await _consume_once(make_settings(), sub)  # must not raise
+
+    assert called == []
+
+
+async def test_run_worker_subscribes_with_a_generous_ack_wait(monkeypatch):
+    calls = {}
+
+    class FakeJetStream:
+        async def add_stream(self, **kwargs):
+            pass
+
+        async def pull_subscribe(self, subject, durable=None, config=None):
+            calls["config"] = config
+            raise asyncio.CancelledError()
+
+    class FakeNatsClient:
+        def jetstream(self):
+            return FakeJetStream()
+
+    async def fake_connect(url):
+        return FakeNatsClient()
+
+    monkeypatch.setattr("ask_the_docs.worker.nats.connect", fake_connect)
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_worker(make_settings())
+
+    assert calls["config"].ack_wait == WORKER_ACK_WAIT_SECONDS
