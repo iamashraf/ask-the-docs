@@ -267,7 +267,20 @@ uv run pytest -v
 The suite mocks every network/SDK/model-loading boundary (no real Ollama,
 Anthropic, or HuggingFace calls) — it verifies the code's logic, not that
 a live model gives good answers. The worked example above is what proves
-the end-to-end pipeline against a real model.
+the end-to-end pipeline against a real model; the suite below automates it.
+
+### Python e2e tests (`e2e/`)
+
+```bash
+uv run pytest e2e/   # real stack must already be running
+```
+
+Drives the real HTTP API (`podman compose up -d --build app`, plus
+whatever else is already running) against real Ollama/Chroma/Redis —
+idempotent re-ingest, large-batch ingest, cache invalidation on content
+change, grounded/cited answers, and refusals. Not part of `uv run
+pytest`'s default run (see `pyproject.toml`'s `testpaths`), same split as
+the Chat UI tests below.
 
 ### Chat UI tests (`web/`)
 
