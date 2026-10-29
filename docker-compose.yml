@@ -35,12 +35,22 @@ services:
       timeout: 5s
       retries: 10
 
+  nats:
+    image: nats:2-alpine
+    command: ["-js", "-m", "8222"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   neo4j:
     image: neo4j:5
     env_file:
       - .env.local
     environment:
       - NEO4J_PLUGINS=["graph-data-science"]
+      - NEO4J_server_config_strict__validation_enabled=false
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs

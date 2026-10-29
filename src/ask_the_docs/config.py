@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     candidate_pool_size: int = Field(default=50, ge=1)
     system_prompt_template: str = DEFAULT_SYSTEM_PROMPT_TEMPLATE
     cache_url: str = "redis://localhost:6379/0"
+    nats_url: str = "nats://localhost:4222"
 
     graph_enabled: bool = False
     neo4j_uri: str = "bolt://localhost:7687"
