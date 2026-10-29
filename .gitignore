@@ -21,3 +21,4 @@ data/documents/*
 
 # superpowers execution scratch (ledgers/briefs, not project artifacts)
 .superpowers/
+.worktrees/
