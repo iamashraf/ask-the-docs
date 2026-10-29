@@ -5,12 +5,19 @@ import requests
 
 def test_bulk_index_ingests_a_large_number_of_chunks_without_timing_out(base_url, docs_dir):
     marker = uuid.uuid4().hex[:8]
+
+    # Baseline first: docs_dir may already hold real content (it does on
+    # this stack), so an exact-delta assertion needs a known starting
+    # point, not an absolute "at least N" that a silently-empty fixture
+    # could still satisfy via pre-existing files.
+    baseline = requests.post(f"{base_url}/v1/index", timeout=180).json()
+
     fixture_paths = []
-    # 30 distinct small docs -- well past INDEX_WRITE_BATCH_SIZE (64 chunks
-    # total across sources; each doc here is short enough to be its own
-    # single chunk, so 30 files ~= 30 chunks, enough to force at least one
-    # real batched embed call without needing one giant document).
-    for i in range(30):
+    # 150 distinct one-chunk docs -- well past INDEX_WRITE_BATCH_SIZE (64),
+    # forcing 3 real sub-batches (64 + 64 + 22) against live Ollama, not
+    # just 1. A smaller count (e.g. 30) stays under the batch size and
+    # never actually exercises the batching/timeout-scaling fix.
+    for i in range(150):
         path = docs_dir / f"e2e-batch-{marker}-{i}.txt"
         path.write_text(f"Fictional fact {marker}-{i}: the moon of Vezrai-{i} orbits every {100 + i} days.")
         fixture_paths.append(path)
@@ -19,8 +26,11 @@ def test_bulk_index_ingests_a_large_number_of_chunks_without_timing_out(base_url
         response = requests.post(f"{base_url}/v1/index", timeout=180)
         assert response.status_code == 200
         body = response.json()
-        assert body["documents_ingested"] >= 30
-        assert body["files_found"] >= 30
+        # Exact deltas, not "at least 150": a fixture that silently loads
+        # as zero documents must be visible here, not hidden by whatever
+        # else is already in docs_dir.
+        assert body["documents_ingested"] == baseline["documents_ingested"] + 150
+        assert body["files_found"] == baseline["files_found"] + 150
     finally:
         for path in fixture_paths:
             path.unlink(missing_ok=True)

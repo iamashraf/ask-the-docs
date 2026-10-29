@@ -282,6 +282,16 @@ change, grounded/cited answers, and refusals. Not part of `uv run
 pytest`'s default run (see `pyproject.toml`'s `testpaths`), same split as
 the Chat UI tests below.
 
+**Leaves fictional chunks in your real index.** Fixture files are deleted
+after each run, but there's no delete/prune endpoint, so the chunks
+`build_index` already wrote for them stay in Chroma/BM25 permanently —
+each full run adds on the order of 150-200 orphaned chunks. Harmless to
+correctness (nothing else references them), but they do dilute real
+retrieval and `evaluate` scores over repeated runs. Rebuild a clean index
+by removing `data/index/` and re-running `podman compose up -d app` (the
+startup reseed will repopulate it from `seed_sources.yaml`) if this
+suite has been run enough times to matter.
+
 ### Chat UI tests (`web/`)
 
 ```bash
