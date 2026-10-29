@@ -34,6 +34,9 @@ dependencies = [
 [project.scripts]
 ask-the-docs = "ask_the_docs.cli:main"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
