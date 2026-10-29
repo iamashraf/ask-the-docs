@@ -1,14 +1,23 @@
 import asyncio
 import json
 import logging
+from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
 from langchain_core.documents import Document
+from prometheus_client import REGISTRY
 
 from ask_the_docs import worker
 from ask_the_docs.config import ProviderConfig, Settings
-from ask_the_docs.worker import WORKER_ACK_WAIT_SECONDS, _consume_once, process_job, run_worker
+from ask_the_docs.worker import (
+    DURABLE_CONSUMER_NAME,
+    WORKER_ACK_WAIT_SECONDS,
+    _consume_once,
+    _sample_queue_depth,
+    process_job,
+    run_worker,
+)
 
 
 def make_settings() -> Settings:
@@ -110,6 +119,108 @@ async def test_process_job_is_safe_to_run_twice_for_the_same_job_id(monkeypatch)
 
     assert len(build_calls) == 2
     assert updates[-1] == ("job-4", "done", {"documents_ingested": 1}, None)
+
+
+async def test_process_job_increments_ingest_job_total_on_success(monkeypatch):
+    docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
+    monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: None)
+    monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    before = REGISTRY.get_sample_value("ingest_job_total", {"status": "success"}) or 0
+
+    await process_job(make_settings(), {"job_id": "job-5", "kind": "ingest", "source": "a.pdf"})
+
+    after = REGISTRY.get_sample_value("ingest_job_total", {"status": "success"})
+    assert after - before == 1.0
+
+
+async def test_process_job_increments_ingest_job_total_on_failure(monkeypatch):
+    def boom(source):
+        raise RuntimeError("load failed")
+
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", boom)
+    monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    before = REGISTRY.get_sample_value("ingest_job_total", {"status": "failure"}) or 0
+
+    await process_job(make_settings(), {"job_id": "job-6", "kind": "ingest", "source": "bad.pdf"})
+
+    after = REGISTRY.get_sample_value("ingest_job_total", {"status": "failure"})
+    assert after - before == 1.0
+
+
+async def test_process_job_observes_build_index_latency(monkeypatch):
+    docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
+    monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: None)
+    monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    before = REGISTRY.get_sample_value("build_index_latency_seconds_count") or 0
+
+    await process_job(make_settings(), {"job_id": "job-7", "kind": "ingest", "source": "a.pdf"})
+
+    after = REGISTRY.get_sample_value("build_index_latency_seconds_count")
+    assert after - before == 1.0
+
+
+async def test_process_job_skips_latency_observation_when_enqueued_at_missing(monkeypatch):
+    """Review Focus: a payload from an older publisher (or any caller that
+    never set enqueued_at) must not crash process_job."""
+    docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
+    monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: None)
+    monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    before = REGISTRY.get_sample_value("worker_job_latency_seconds_count") or 0
+
+    payload = {"job_id": "job-8", "kind": "ingest", "source": "a.pdf"}
+    assert "enqueued_at" not in payload
+    await process_job(make_settings(), payload)  # must not raise
+
+    after = REGISTRY.get_sample_value("worker_job_latency_seconds_count")
+    assert after == before
+
+
+async def test_process_job_skips_latency_observation_when_enqueued_at_unparsable(monkeypatch):
+    docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
+    monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: None)
+    monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    before = REGISTRY.get_sample_value("worker_job_latency_seconds_count") or 0
+
+    payload = {"job_id": "job-9", "kind": "ingest", "source": "a.pdf", "enqueued_at": "not-a-timestamp"}
+    await process_job(make_settings(), payload)  # must not raise
+
+    after = REGISTRY.get_sample_value("worker_job_latency_seconds_count")
+    assert after == before
+
+
+async def test_process_job_observes_worker_job_latency_when_enqueued_at_present(monkeypatch):
+    docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
+    monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: None)
+    monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    before = REGISTRY.get_sample_value("worker_job_latency_seconds_count") or 0
+
+    payload = {
+        "job_id": "job-10",
+        "kind": "ingest",
+        "source": "a.pdf",
+        "enqueued_at": datetime.now(UTC).isoformat(),
+    }
+    await process_job(make_settings(), payload)
+
+    after = REGISTRY.get_sample_value("worker_job_latency_seconds_count")
+    assert after - before == 1.0
 
 
 class FakeMsg:
@@ -307,6 +418,39 @@ async def test_run_worker_starts_the_metrics_http_server(monkeypatch):
         await run_worker(settings)
 
     start_server.assert_called_once_with(settings.metrics_port)
+
+
+class FakeJetStreamWithConsumerInfo:
+    def __init__(self, num_pending=None, raises=None):
+        self._num_pending = num_pending
+        self._raises = raises
+        self.calls = []
+
+    async def consumer_info(self, stream, durable):
+        self.calls.append((stream, durable))
+        if self._raises is not None:
+            raise self._raises
+        return Mock(num_pending=self._num_pending)
+
+
+async def test_sample_queue_depth_sets_gauge_from_consumer_info(monkeypatch):
+    js = FakeJetStreamWithConsumerInfo(num_pending=7)
+
+    await _sample_queue_depth(js)
+
+    assert REGISTRY.get_sample_value("job_queue_depth") == 7
+    assert js.calls == [(worker.INGEST_JOBS_STREAM, DURABLE_CONSUMER_NAME)]
+
+
+async def test_sample_queue_depth_logs_and_continues_on_consumer_info_failure(monkeypatch, caplog):
+    """Review Focus: a failed NATS admin call (e.g. consumer not found yet)
+    must not take the worker loop down -- it's logged and skipped."""
+    js = FakeJetStreamWithConsumerInfo(raises=RuntimeError("consumer not found"))
+
+    with caplog.at_level(logging.WARNING, logger="ask_the_docs.worker"):
+        await _sample_queue_depth(js)  # must not raise
+
+    assert any("queue depth" in r.getMessage().lower() for r in caplog.records if r.levelno == logging.WARNING)
 
 
 async def test_run_worker_logs_and_continues_if_metrics_port_is_taken(monkeypatch, caplog):
