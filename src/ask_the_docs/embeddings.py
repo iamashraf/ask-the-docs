@@ -11,6 +11,12 @@ from sentence_transformers import SentenceTransformer
 from ask_the_docs.config import Settings
 
 OLLAMA_EMBED_TIMEOUT_SECONDS = 30
+# embed_documents sends every text in the batch as one request, so a flat
+# per-call timeout sized for one text isn't enough -- found against a real
+# Ollama server, where a 12-text batch took 28.41s. Base covers connection
+# + per-request overhead; per-text covers the actual embedding work.
+OLLAMA_EMBED_BATCH_BASE_TIMEOUT_SECONDS = 15
+OLLAMA_EMBED_BATCH_PER_TEXT_TIMEOUT_SECONDS = 5
 
 
 class OllamaEmbeddings(Embeddings):
@@ -33,10 +39,11 @@ class OllamaEmbeddings(Embeddings):
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
+        timeout = OLLAMA_EMBED_BATCH_BASE_TIMEOUT_SECONDS + OLLAMA_EMBED_BATCH_PER_TEXT_TIMEOUT_SECONDS * len(texts)
         response = requests.post(
             f"{self.base_url}/api/embed",
             json={"model": self.model, "input": texts},
-            timeout=OLLAMA_EMBED_TIMEOUT_SECONDS,
+            timeout=timeout,
         )
         response.raise_for_status()
         return response.json()["embeddings"]
