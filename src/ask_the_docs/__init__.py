@@ -1,1 +1,1 @@
-"""Research assistant: RAG over agentic AI research papers."""
+"""ask-the-docs: a local-first RAG system over configurable document sources."""
