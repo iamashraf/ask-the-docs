@@ -12,9 +12,8 @@ LLM-based query rewriting (sub-project 1-2); Graph RAG — LLM-based
 triplet extraction, embedding-similarity entity resolution, Neo4j GDS
 Leiden community detection/summarization, and local/global query
 routing (sub-project 3) — built, off by default (`graph_enabled`), see
-`docs/ARCHITECTURE.md`/`docs/CONCEPTS.md`. A chatbot/UI consuming the
-existing HTTP API (sub-project 4) is the next planned sub-project, not
-built yet. Don't add it speculatively.
+`docs/ARCHITECTURE.md`/`docs/CONCEPTS.md`. A chatbot/UI (Next.js) consuming
+the existing HTTP API (sub-project 4) is built.
 
 
 ## Conventions
