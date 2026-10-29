@@ -44,6 +44,18 @@ services:
       timeout: 5s
       retries: 10
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:16686"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   neo4j:
     image: neo4j:5
     env_file:
@@ -74,6 +86,8 @@ services:
         condition: service_healthy
       nats:
         condition: service_healthy
+      jaeger:
+        condition: service_healthy
     volumes:
       - ./data:/app/data
       - ./evals:/app/evals
@@ -102,6 +116,8 @@ services:
       valkey:
         condition: service_healthy
       nats:
+        condition: service_healthy
+      jaeger:
         condition: service_healthy
     volumes:
       - ./data:/app/data
