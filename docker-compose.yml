@@ -132,8 +132,12 @@ services:
   web:
     image: localhost/ask-the-docs-web
     build: ./web
+    depends_on:
+      jaeger:
+        condition: service_healthy
     environment:
       - BACKEND_URL=http://app:8000
+      - OTEL_EXPORTER_ENDPOINT=http://jaeger:4318/v1/traces
     ports:
       - "3000:3000"
     logging:
