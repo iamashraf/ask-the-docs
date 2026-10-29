@@ -1,27 +1,36 @@
-"""Long-running HTTP API: thin routes over the existing ingest/index/answer/evaluate functions."""
+"""Long-running HTTP API: thin routes over the existing ingest/index/answer/evaluate functions.
+
+Ingestion is async: /v1/ingest and /v1/index validate the source
+synchronously (so a bad request still gets an immediate 400/404, exactly
+as before) then enqueue a job and return 202 -- the real dispatch/
+build_index work happens in the separate worker process (worker.py),
+never during a request."""
 
 import logging
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from ask_the_docs.answer import answer
 from ask_the_docs.config import get_settings
 from ask_the_docs.evaluate import run_evaluation
-from ask_the_docs.index import IndexWriteError, build_index
 from ask_the_docs.ingest import (
     PathSecurityError,
     UnsupportedFileTypeError,
     UrlSecurityError,
-    discover_sources,
-    dispatch,
+    validate_source,
 )
+from ask_the_docs.jobs import JobStoreError, create_job, get_async_cache_client, get_job, update_job
 from ask_the_docs.llm import OllamaUnavailableError
+from ask_the_docs.queue import QueuePublishError, publish_ingest_job
 from ask_the_docs.seed import seed_if_needed
+
+logger = logging.getLogger(__name__)
 
 # uvicorn only configures its own loggers (uvicorn, uvicorn.access), never
 # arbitrary app loggers -- without this, seed.py's INFO-level progress logs
@@ -56,7 +65,7 @@ def _not_found_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=404, content={"detail": str(exc)})
 
 
-@app.exception_handler(IndexWriteError)
+@app.exception_handler(JobStoreError)
 @app.exception_handler(OllamaUnavailableError)
 def _service_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=503, content={"detail": str(exc)})
@@ -73,35 +82,56 @@ class IngestRequest(BaseModel):
     source: str = Field(min_length=1)
 
 
-class IngestResponse(BaseModel):
-    documents_ingested: int
+class JobAcceptedResponse(BaseModel):
+    job_id: str
+    status: str
 
 
-@app.post("/v1/ingest")
-def ingest(request: IngestRequest) -> IngestResponse:
-    docs = dispatch(request.source)
-    if docs:
-        build_index(docs, get_settings())
-    return IngestResponse(documents_ingested=len(docs))
+class JobStatusResponse(BaseModel):
+    job_id: str
+    kind: str
+    source: str | None
+    status: str
+    result: dict | None
+    error: str | None
 
 
-class IndexResponse(BaseModel):
-    documents_ingested: int
-    files_found: int
+async def _create_and_publish_job(settings, kind: str, source: str | None) -> JobAcceptedResponse:
+    job_id = str(uuid.uuid4())
+    client = get_async_cache_client(settings)
+    await create_job(client, job_id, kind=kind, source=source)
+    try:
+        await publish_ingest_job(settings, job_id, kind=kind, source=source)
+    except QueuePublishError as exc:
+        try:
+            await update_job(client, job_id, status="failed", error=str(exc))
+        except Exception:
+            logger.warning("Failed to mark job %s failed after a publish error", job_id, exc_info=True)
+    return JobAcceptedResponse(job_id=job_id, status="queued")
 
 
-@app.post("/v1/index")
-def index() -> IndexResponse:
-    """Bulk re-index everything under docs_dir. Running this repeatedly on
-    unchanged files duplicates their chunks (no dedup yet)."""
+@app.post("/v1/ingest", status_code=202)
+async def ingest(request: IngestRequest) -> JobAcceptedResponse:
     settings = get_settings()
-    paths = discover_sources(settings.docs_dir)
-    docs = []
-    for path in paths:
-        docs.extend(dispatch(str(path.relative_to(settings.docs_dir))))
-    if docs:
-        build_index(docs, settings)
-    return IndexResponse(documents_ingested=len(docs), files_found=len(paths))
+    validate_source(request.source)
+    return await _create_and_publish_job(settings, kind="ingest", source=request.source)
+
+
+@app.post("/v1/index", status_code=202)
+async def index() -> JobAcceptedResponse:
+    """Enqueues a bulk re-index of everything under docs_dir; the worker
+    discovers and dispatches the files."""
+    return await _create_and_publish_job(get_settings(), kind="index", source=None)
+
+
+@app.get("/v1/jobs/{job_id}")
+async def get_job_status(job_id: str) -> JobStatusResponse:
+    settings = get_settings()
+    client = get_async_cache_client(settings)
+    job = await get_job(client, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobStatusResponse(**job)
 
 
 class AskRequest(BaseModel):

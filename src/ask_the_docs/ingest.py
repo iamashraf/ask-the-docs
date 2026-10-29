@@ -227,6 +227,19 @@ def discover_sources(docs_dir: Path) -> list[Path]:
     )
 
 
+def validate_source(source: str) -> None:
+    """Runs dispatch()'s security gate without loading any content -- lets
+    a caller reject a bad source synchronously (e.g. before enqueueing an
+    async ingest job) without doing any real I/O."""
+    parts = urlsplit(source)
+    if parts.scheme in ALLOWED_URL_SCHEMES:
+        validate_url(source)
+        return
+
+    settings = get_settings()
+    validate_local_path(Path(source), settings.docs_dir)
+
+
 def dispatch(source: str) -> list[Document]:
     """Routes a user-supplied source string to the right loader, applying
     the relevant security gate first."""

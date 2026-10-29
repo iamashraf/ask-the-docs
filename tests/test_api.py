@@ -1,17 +1,17 @@
 import logging
-from types import SimpleNamespace
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.documents import Document
 
 from ask_the_docs.answer import AnswerResult
 from ask_the_docs.api import app
 from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.evaluate import EvalResult, JudgeScore
-from ask_the_docs.index import IndexWriteError
 from ask_the_docs.ingest import PathSecurityError, UnsupportedFileTypeError, UrlSecurityError
+from ask_the_docs.jobs import JobStoreError
 from ask_the_docs.llm import OllamaUnavailableError
+from ask_the_docs.queue import QueuePublishError
 
 
 def make_settings() -> Settings:
@@ -41,20 +41,73 @@ def test_health_returns_ok():
     assert response.json() == {"status": "ok"}
 
 
-def test_ingest_calls_dispatch_and_build_index(monkeypatch):
-    docs = [Document(page_content="x", metadata={"source": "a.pdf", "source_doc_id": "1"})]
-    monkeypatch.setattr("ask_the_docs.api.dispatch", lambda source: docs)
+def test_ingest_returns_202_with_a_job_id(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    monkeypatch.setattr("ask_the_docs.api.validate_source", lambda source: None)
     captured = {}
-    monkeypatch.setattr(
-        "ask_the_docs.api.build_index", lambda d, settings: captured.setdefault("docs", d)
-    )
+
+    async def fake_create_job(client, job_id, kind, source):
+        captured["create"] = (job_id, kind, source)
+
+    async def fake_publish(settings, job_id, kind, source):
+        captured["publish"] = (job_id, kind, source)
+
+    monkeypatch.setattr("ask_the_docs.api.create_job", fake_create_job)
+    monkeypatch.setattr("ask_the_docs.api.publish_ingest_job", fake_publish)
+    monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
 
     response = TestClient(app).post("/v1/ingest", json={"source": "a.pdf"})
 
-    assert response.status_code == 200
-    assert response.json() == {"documents_ingested": 1}
-    assert captured["docs"] == docs
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "queued"
+    job_id = body["job_id"]
+    uuid.UUID(job_id)  # raises if not a valid uuid
+    assert captured["create"] == (job_id, "ingest", "a.pdf")
+    assert captured["publish"] == (job_id, "ingest", "a.pdf")
+
+
+def test_ingest_marks_the_job_failed_but_still_returns_202_when_publish_fails(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    monkeypatch.setattr("ask_the_docs.api.validate_source", lambda source: None)
+
+    async def fake_create_job(client, job_id, kind, source):
+        pass
+
+    async def failing_publish(settings, job_id, kind, source):
+        raise QueuePublishError("nats down")
+
+    updated = {}
+
+    async def fake_update_job(client, job_id, *, status, result=None, error=None):
+        updated["call"] = (job_id, status, error)
+
+    monkeypatch.setattr("ask_the_docs.api.create_job", fake_create_job)
+    monkeypatch.setattr("ask_the_docs.api.publish_ingest_job", failing_publish)
+    monkeypatch.setattr("ask_the_docs.api.update_job", fake_update_job)
+    monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
+
+    response = TestClient(app).post("/v1/ingest", json={"source": "a.pdf"})
+
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    assert updated["call"][0] == job_id
+    assert updated["call"][1] == "failed"
+
+
+def test_ingest_returns_503_when_job_store_write_fails(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    monkeypatch.setattr("ask_the_docs.api.validate_source", lambda source: None)
+
+    async def failing_create_job(client, job_id, kind, source):
+        raise JobStoreError("redis down")
+
+    monkeypatch.setattr("ask_the_docs.api.create_job", failing_create_job)
+    monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
+
+    response = TestClient(app).post("/v1/ingest", json={"source": "a.pdf"})
+
+    assert response.status_code == 503
 
 
 def test_ingest_rejects_empty_source():
@@ -64,10 +117,12 @@ def test_ingest_rejects_empty_source():
 
 @pytest.mark.parametrize("exc_class", [PathSecurityError, UrlSecurityError, UnsupportedFileTypeError])
 def test_ingest_returns_400_for_security_and_type_errors(monkeypatch, exc_class):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+
     def raise_error(source):
         raise exc_class("bad source")
 
-    monkeypatch.setattr("ask_the_docs.api.dispatch", raise_error)
+    monkeypatch.setattr("ask_the_docs.api.validate_source", raise_error)
 
     response = TestClient(app).post("/v1/ingest", json={"source": "bad"})
 
@@ -75,54 +130,71 @@ def test_ingest_returns_400_for_security_and_type_errors(monkeypatch, exc_class)
 
 
 def test_ingest_returns_404_for_missing_file(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+
     def raise_error(source):
         raise FileNotFoundError(source)
 
-    monkeypatch.setattr("ask_the_docs.api.dispatch", raise_error)
+    monkeypatch.setattr("ask_the_docs.api.validate_source", raise_error)
 
     response = TestClient(app).post("/v1/ingest", json={"source": "missing.pdf"})
 
     assert response.status_code == 404
 
 
-def test_index_discovers_docs_dir_and_builds_index(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "ask_the_docs.api.get_settings", lambda: SimpleNamespace(docs_dir=tmp_path)
-    )
-    monkeypatch.setattr(
-        "ask_the_docs.api.discover_sources",
-        lambda docs_dir: [tmp_path / "a.pdf", tmp_path / "b.pdf"],
-    )
-    monkeypatch.setattr("ask_the_docs.api.dispatch", lambda source: [f"doc-for-{source}"])
+def test_index_returns_202_with_a_job_id(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
     captured = {}
-    monkeypatch.setattr(
-        "ask_the_docs.api.build_index", lambda d, s: captured.setdefault("docs", d)
-    )
+
+    async def fake_create_job(client, job_id, kind, source):
+        captured["create"] = (job_id, kind, source)
+
+    async def fake_publish(settings, job_id, kind, source):
+        captured["publish"] = (job_id, kind, source)
+
+    monkeypatch.setattr("ask_the_docs.api.create_job", fake_create_job)
+    monkeypatch.setattr("ask_the_docs.api.publish_ingest_job", fake_publish)
+    monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
 
     response = TestClient(app).post("/v1/index")
+
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    assert captured["create"] == (job_id, "index", None)
+    assert captured["publish"] == (job_id, "index", None)
+
+
+def test_get_job_status_returns_the_job_record(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    record = {
+        "job_id": "job-1", "kind": "ingest", "source": "a.pdf", "status": "done",
+        "result": {"documents_ingested": 1}, "error": None,
+    }
+
+    async def fake_get_job(client, job_id):
+        return record if job_id == "job-1" else None
+
+    monkeypatch.setattr("ask_the_docs.api.get_job", fake_get_job)
+    monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
+
+    response = TestClient(app).get("/v1/jobs/job-1")
 
     assert response.status_code == 200
-    assert response.json() == {"documents_ingested": 2, "files_found": 2}
-    assert captured["docs"] == ["doc-for-a.pdf", "doc-for-b.pdf"]
+    assert response.json()["status"] == "done"
 
 
-def test_index_endpoint_returns_503_on_index_write_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "ask_the_docs.api.get_settings", lambda: SimpleNamespace(docs_dir=tmp_path)
-    )
-    monkeypatch.setattr(
-        "ask_the_docs.api.discover_sources", lambda docs_dir: [tmp_path / "a.pdf"]
-    )
-    monkeypatch.setattr("ask_the_docs.api.dispatch", lambda source: [f"doc-for-{source}"])
+def test_get_job_status_returns_404_for_an_unknown_job(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
 
-    def boom(docs, settings):
-        raise IndexWriteError("disk full")
+    async def fake_get_job(client, job_id):
+        return None
 
-    monkeypatch.setattr("ask_the_docs.api.build_index", boom)
+    monkeypatch.setattr("ask_the_docs.api.get_job", fake_get_job)
+    monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
 
-    response = TestClient(app).post("/v1/index")
+    response = TestClient(app).get("/v1/jobs/nope")
 
-    assert response.status_code == 503
+    assert response.status_code == 404
 
 
 def test_ask_returns_answer_and_citations(monkeypatch):
