@@ -83,6 +83,14 @@ def _worker(args: argparse.Namespace, settings) -> None:
     asyncio.run(run_worker(settings))
 
 
+def _watch(args: argparse.Namespace, settings) -> None:
+    import asyncio
+
+    from ask_the_docs.watcher import watch_docs_dir
+
+    asyncio.run(watch_docs_dir(settings))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ask-the-docs")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -114,6 +122,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     worker_parser = subparsers.add_parser("worker", help="Run the async ingestion worker, consuming jobs from NATS")
     worker_parser.set_defaults(func=_worker)
+
+    watch_parser = subparsers.add_parser(
+        "watch", help="Watch docs_dir and enqueue an ingest job for each new/changed file"
+    )
+    watch_parser.set_defaults(func=_watch)
 
     return parser
 
