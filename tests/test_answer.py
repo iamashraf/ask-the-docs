@@ -9,6 +9,7 @@ from langchain_core.documents import Document
 from ask_the_docs.answer import (
     MAX_GENERATION_ATTEMPTS,
     AnswerResult,
+    _compute_answer,
     answer,
     build_prompt,
     citation_guardrail_passes,
@@ -179,6 +180,43 @@ def test_answer_retries_once_when_first_attempt_fails_the_guardrail(monkeypatch)
     assert result.text == "a grounded answer [1]"
     assert result.citations == ["a.pdf"]
     assert fake_generate.call_count == 2
+
+
+def test_compute_answer_records_the_guardrail_result_on_the_generate_span(monkeypatch):
+    class FakeSpan:
+        def __init__(self):
+            self.attrs = {}
+
+        def set_attribute(self, k, v):
+            self.attrs[k] = v
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class FakeTracer:
+        def __init__(self):
+            self.spans: list[FakeSpan] = []
+
+        def start_as_current_span(self, name, **kwargs):
+            span = FakeSpan()
+            self.spans.append(span)
+            return span
+
+    fake_tracer = FakeTracer()
+    monkeypatch.setattr("ask_the_docs.answer.tracer", fake_tracer)
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(generate=Mock(return_value="the answer [1]")),
+    )
+
+    _compute_answer("What is X?", make_settings(), k=5)
+
+    assert fake_tracer.spans[0].attrs["citation_guardrail_passed"] is True
 
 
 def test_answer_logs_prompt_at_debug_level(monkeypatch, caplog):
