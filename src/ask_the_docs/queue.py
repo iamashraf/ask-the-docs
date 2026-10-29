@@ -1,6 +1,7 @@
 """NATS JetStream client: publishes ingestion jobs for the worker to consume."""
 
 import json
+from datetime import UTC, datetime
 
 import nats
 from opentelemetry import propagate
@@ -22,7 +23,13 @@ async def ensure_stream(js) -> None:
 async def publish_ingest_job(settings: Settings, job_id: str, kind: str, source: str | None) -> None:
     carrier: dict[str, str] = {}
     propagate.inject(carrier)
-    payload = {"job_id": job_id, "kind": kind, "source": source, "traceparent": carrier.get("traceparent")}
+    payload = {
+        "job_id": job_id,
+        "kind": kind,
+        "source": source,
+        "traceparent": carrier.get("traceparent"),
+        "enqueued_at": datetime.now(UTC).isoformat(),
+    }
     try:
         nc = await nats.connect(settings.nats_url)
         try:

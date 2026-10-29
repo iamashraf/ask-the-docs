@@ -98,6 +98,22 @@ async def test_publish_ingest_job_with_no_active_span_still_publishes(monkeypatc
     assert len(js.published) == 1
 
 
+async def test_publish_ingest_job_includes_enqueued_at(monkeypatch):
+    js = FakeJetStream()
+    client = FakeNatsClient(js)
+
+    async def fake_connect(url):
+        return client
+
+    monkeypatch.setattr("ask_the_docs.queue.nats.connect", fake_connect)
+
+    await publish_ingest_job(make_settings(), "job-1", kind="ingest", source="a.pdf")
+
+    _, payload = js.published[0]
+    body = json.loads(payload)
+    assert "enqueued_at" in body
+
+
 async def test_publish_ingest_job_wraps_connection_failures(monkeypatch):
     async def failing_connect(url):
         raise OSError("connection refused")

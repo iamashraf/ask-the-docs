@@ -5,17 +5,20 @@ module, so a job is exactly as idempotent/fail-open as a direct CLI call."""
 import asyncio
 import json
 import logging
+import time
+from datetime import UTC, datetime
 
 import nats
 from nats.js.api import ConsumerConfig
 from opentelemetry import propagate, trace
 from prometheus_client import start_http_server
 
+from ask_the_docs import metrics
 from ask_the_docs.config import Settings, get_settings
 from ask_the_docs.index import build_index
 from ask_the_docs.ingest import dispatch, dispatch_all_under_docs_dir
 from ask_the_docs.jobs import get_async_cache_client, update_job
-from ask_the_docs.queue import INGEST_JOBS_SUBJECT, ensure_stream
+from ask_the_docs.queue import INGEST_JOBS_STREAM, INGEST_JOBS_SUBJECT, ensure_stream
 from ask_the_docs.tracing import configure_tracing
 
 logger = logging.getLogger(__name__)
@@ -26,6 +29,21 @@ DURABLE_CONSUMER_NAME = "ingest-workers"
 # e2e/test_ingest_batch_e2e.py) so a long-running job's ack doesn't become
 # eligible for redelivery while it is still in progress.
 WORKER_ACK_WAIT_SECONDS = 300
+
+
+def _observe_worker_job_latency(payload: dict) -> None:
+    """Best-effort job latency from enqueue to completion -- a missing or
+    unparsable enqueued_at (e.g. an older publisher) just skips the sample."""
+    enqueued_at = payload.get("enqueued_at")
+    if enqueued_at is None:
+        return
+    try:
+        enqueued_dt = datetime.fromisoformat(enqueued_at)
+    except (TypeError, ValueError):
+        return
+    metrics.worker_job_latency_seconds.observe(
+        (datetime.now(UTC) - enqueued_dt).total_seconds(), exemplar=metrics.trace_exemplar()
+    )
 
 
 async def process_job(settings: Settings, payload: dict) -> None:
@@ -41,14 +59,22 @@ async def process_job(settings: Settings, payload: dict) -> None:
         else:
             docs, file_count = dispatch_all_under_docs_dir(settings)
         if docs:
+            build_start = time.monotonic()
             build_index(docs, settings)
+            metrics.build_index_latency_seconds.observe(
+                time.monotonic() - build_start, exemplar=metrics.trace_exemplar()
+            )
         result = {"documents_ingested": len(docs)}
         if kind == "index":
             result["files_found"] = file_count
         await update_job(client, job_id, status="done", result=result)
+        metrics.ingest_job_total.labels(status="success").inc()
     except Exception as exc:
         logger.warning("Job %s failed: %s", job_id, exc, exc_info=True)
         await update_job(client, job_id, status="failed", error=str(exc))
+        metrics.ingest_job_total.labels(status="failure").inc()
+    finally:
+        _observe_worker_job_latency(payload)
 
 
 async def _consume_once(settings: Settings, sub) -> None:
@@ -84,6 +110,16 @@ async def _consume_once(settings: Settings, sub) -> None:
         await msg.ack()
 
 
+async def _sample_queue_depth(js) -> None:
+    """Best-effort consumer backlog sample -- a failed NATS admin call must
+    not take the worker loop down."""
+    try:
+        info = await js.consumer_info(INGEST_JOBS_STREAM, DURABLE_CONSUMER_NAME)
+        metrics.job_queue_depth.set(info.num_pending)
+    except Exception:
+        logger.warning("Failed to sample job queue depth", exc_info=True)
+
+
 async def run_worker(settings: Settings) -> None:
     configure_tracing("ask-the-docs-worker", settings)
     try:
@@ -104,6 +140,7 @@ async def run_worker(settings: Settings) -> None:
     )
     logger.info("Worker started, consuming %s", INGEST_JOBS_SUBJECT)
     while True:
+        await _sample_queue_depth(js)
         await _consume_once(settings, sub)
 
 
