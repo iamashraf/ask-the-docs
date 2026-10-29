@@ -10,7 +10,7 @@ from ask_the_docs.api import app as api_app
 from ask_the_docs.config import Settings, get_settings
 from ask_the_docs.evaluate import run_evaluation
 from ask_the_docs.index import build_index
-from ask_the_docs.ingest import dispatch, discover_sources
+from ask_the_docs.ingest import dispatch, dispatch_all_under_docs_dir
 
 GOLDEN_QUESTIONS_PATH = Path("evals/golden_questions.yaml")
 
@@ -25,16 +25,11 @@ def _ingest(args: argparse.Namespace, settings) -> None:
 
 
 def _index(args: argparse.Namespace, settings) -> None:
-    """Bulk re-index everything already under docs_dir. Running this twice on
-    unchanged files will duplicate their chunks (document-update/dedup is not
-    built yet)."""
-    paths = discover_sources(settings.docs_dir)
-    docs = []
-    for path in paths:
-        docs.extend(dispatch(str(path.relative_to(settings.docs_dir))))
+    """Bulk re-index everything already under docs_dir; idempotent."""
+    docs, file_count = dispatch_all_under_docs_dir(settings)
     if docs:
         build_index(docs, settings)
-    print(f"Indexed {len(docs)} document(s) from {len(paths)} file(s) under {settings.docs_dir}.")
+    print(f"Indexed {len(docs)} document(s) from {file_count} file(s) under {settings.docs_dir}.")
 
 
 def _ask(args: argparse.Namespace, settings) -> None:
@@ -80,6 +75,14 @@ def _serve(args: argparse.Namespace, settings) -> None:
     uvicorn.run(api_app, host="0.0.0.0", port=8000, log_level="info")
 
 
+def _worker(args: argparse.Namespace, settings) -> None:
+    import asyncio
+
+    from ask_the_docs.worker import run_worker
+
+    asyncio.run(run_worker(settings))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ask-the-docs")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -89,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser.set_defaults(func=_ingest)
 
     index_parser = subparsers.add_parser(
-        "index", help="Bulk re-index everything under docs_dir (may duplicate already-indexed files)"
+        "index", help="Bulk re-index everything under docs_dir (idempotent)"
     )
     index_parser.set_defaults(func=_index)
 
@@ -108,6 +111,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve_parser = subparsers.add_parser("serve", help="Run the long-running HTTP API server")
     serve_parser.set_defaults(func=_serve)
+
+    worker_parser = subparsers.add_parser("worker", help="Run the async ingestion worker, consuming jobs from NATS")
+    worker_parser.set_defaults(func=_worker)
 
     return parser
 

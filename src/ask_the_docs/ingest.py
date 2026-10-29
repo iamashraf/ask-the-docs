@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 import requests
 from langchain_core.documents import Document
 
-from ask_the_docs.config import get_settings
+from ask_the_docs.config import Settings, get_settings
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 ALLOWED_URL_SCHEMES = {"http", "https"}
@@ -250,3 +250,13 @@ def dispatch(source: str) -> list[Document]:
     settings = get_settings()
     resolved = validate_local_path(Path(source), settings.docs_dir)
     return load_path(resolved)
+
+
+def dispatch_all_under_docs_dir(settings: Settings) -> tuple[list[Document], int]:
+    """Discovers and dispatches every source under docs_dir; shared by the
+    CLI's bulk `index` command and the async worker's "index" job kind."""
+    paths = discover_sources(settings.docs_dir)
+    docs: list[Document] = []
+    for path in paths:
+        docs.extend(dispatch(str(path.relative_to(settings.docs_dir))))
+    return docs, len(paths)
