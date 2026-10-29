@@ -7,7 +7,9 @@ validate_local_path (path traversal / extension / size) and validate_url
 
 import hashlib
 import ipaddress
+import re
 import socket
+import unicodedata
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -19,6 +21,21 @@ from ask_the_docs.config import Settings, get_settings
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 ALLOWED_URL_SCHEMES = {"http", "https"}
 MAX_REDIRECTS = 3
+
+_HORIZONTAL_WHITESPACE_RE = re.compile(r"[ \t]+")
+_EXCESS_BLANK_LINES_RE = re.compile(r"\n{3,}")
+
+
+def clean_text(text: str) -> str:
+    """Normalizes whitespace and unicode artifacts in loaded text before
+    chunking. Does not attempt boilerplate/nav removal (e.g. leftover site
+    chrome from URL loads) -- too fragile to do reliably; known limitation."""
+    text = "\n".join(text.splitlines())
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(c for c in text if c in "\n\t" or not unicodedata.category(c).startswith("C"))
+    lines = [_HORIZONTAL_WHITESPACE_RE.sub(" ", line).strip() for line in text.split("\n")]
+    text = _EXCESS_BLANK_LINES_RE.sub("\n\n", "\n".join(lines))
+    return text.strip()
 
 
 class UnsupportedFileTypeError(ValueError):
@@ -107,7 +124,7 @@ def _extract_pdf_pages(reader, source: str) -> list[Document]:
     source_doc_id = make_source_doc_id(source)
     docs = []
     for i, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
+        text = clean_text(page.extract_text() or "")
         if not text.strip():
             continue
         docs.append(
@@ -128,7 +145,7 @@ def load_pdf(path: Path) -> list[Document]:
 def load_text(path: Path) -> list[Document]:
     """Loads a .txt/.md file as a single Document; empty/whitespace-only
     files produce no Document."""
-    text = path.read_text(encoding="utf-8")
+    text = clean_text(path.read_text(encoding="utf-8"))
     if not text.strip():
         return []
     return [
@@ -144,7 +161,7 @@ def load_docx(path: Path) -> list[Document]:
     import docx
 
     document = docx.Document(str(path))
-    text = "\n".join(p.text for p in document.paragraphs)
+    text = clean_text("\n".join(p.text for p in document.paragraphs))
     if not text.strip():
         return []
     return [
@@ -198,7 +215,7 @@ def load_url(url: str, _redirects_followed: int = 0) -> list[Document]:
     html = content.decode(response.encoding or "utf-8", errors="replace")
     soup = BeautifulSoup(html, "html.parser")
     title = soup.title.string.strip() if soup.title and soup.title.string else url
-    text = soup.get_text(separator="\n", strip=True)
+    text = clean_text(soup.get_text(separator="\n", strip=True))
 
     return [
         Document(
