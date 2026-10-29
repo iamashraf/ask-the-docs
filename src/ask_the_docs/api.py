@@ -17,7 +17,8 @@ import requests
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client import REGISTRY
+from prometheus_client.exposition import choose_encoder
 from pydantic import BaseModel, Field
 
 from ask_the_docs.answer import answer
@@ -90,8 +91,9 @@ def health() -> dict[str, str]:
 
 
 @app.get("/metrics")
-def metrics() -> Response:
-    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+def metrics(request: Request) -> Response:
+    encoder, content_type = choose_encoder(request.headers.get("accept", ""))
+    return Response(content=encoder(REGISTRY), media_type=content_type)
 
 
 @app.get("/ready")
