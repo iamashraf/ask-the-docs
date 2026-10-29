@@ -7,6 +7,7 @@ import json
 import logging
 
 import nats
+from nats.js.api import ConsumerConfig
 
 from ask_the_docs.config import Settings, get_settings
 from ask_the_docs.index import build_index
@@ -17,6 +18,10 @@ from ask_the_docs.queue import INGEST_JOBS_SUBJECT, ensure_stream
 logger = logging.getLogger(__name__)
 
 DURABLE_CONSUMER_NAME = "ingest-workers"
+# Comfortably above the bulk /v1/index job's own 180s timeout budget (see
+# e2e/test_ingest_batch_e2e.py) so a long-running job's ack doesn't become
+# eligible for redelivery while it is still in progress.
+WORKER_ACK_WAIT_SECONDS = 300
 
 
 async def process_job(settings: Settings, payload: dict) -> None:
@@ -42,20 +47,45 @@ async def process_job(settings: Settings, payload: dict) -> None:
         await update_job(client, job_id, status="failed", error=str(exc))
 
 
+async def _consume_once(settings: Settings, sub) -> None:
+    """One fetch-and-process cycle, isolated from run_worker's infinite loop
+    so a single bad message or a transient failure inside process_job can't
+    kill the worker process -- the message is just left unacked for NATS to
+    redeliver, and the loop moves on."""
+    try:
+        msgs = await sub.fetch(1, timeout=30)
+    except TimeoutError:
+        return
+    for msg in msgs:
+        try:
+            payload = json.loads(msg.data)
+        except Exception:
+            logger.warning("Dropping an unparseable job message", exc_info=True)
+            continue
+        try:
+            await process_job(settings, payload)
+        except Exception:
+            logger.warning(
+                "process_job raised for job %s; leaving unacked for redelivery",
+                payload.get("job_id"),
+                exc_info=True,
+            )
+            continue
+        await msg.ack()
+
+
 async def run_worker(settings: Settings) -> None:
     nc = await nats.connect(settings.nats_url)
     js = nc.jetstream()
     await ensure_stream(js)
-    sub = await js.pull_subscribe(INGEST_JOBS_SUBJECT, durable=DURABLE_CONSUMER_NAME)
+    sub = await js.pull_subscribe(
+        INGEST_JOBS_SUBJECT,
+        durable=DURABLE_CONSUMER_NAME,
+        config=ConsumerConfig(ack_wait=WORKER_ACK_WAIT_SECONDS),
+    )
     logger.info("Worker started, consuming %s", INGEST_JOBS_SUBJECT)
     while True:
-        try:
-            msgs = await sub.fetch(1, timeout=30)
-        except TimeoutError:
-            continue
-        for msg in msgs:
-            await process_job(settings, json.loads(msg.data))
-            await msg.ack()
+        await _consume_once(settings, sub)
 
 
 def main() -> None:
