@@ -25,6 +25,29 @@ describe("registerTracing", () => {
 
     expect(startMock).toHaveBeenCalled();
   });
+
+  test("instruments undici so fetch() calls propagate trace context", async () => {
+    // proxyToBackend (web/lib/backend.ts) calls the global fetch(), which
+    // runs on undici in modern Node -- @opentelemetry/instrumentation-http
+    // only patches the legacy http/https modules and never sees these
+    // calls at all, so the traceparent header never reaches FastAPI
+    // without this instrumentation specifically.
+    let capturedConfig: { instrumentations?: unknown[] } = {};
+    vi.doMock("@opentelemetry/sdk-node", () => ({
+      NodeSDK: class {
+        constructor(config: { instrumentations?: unknown[] }) {
+          capturedConfig = config;
+        }
+        start() {}
+      },
+    }));
+
+    const { registerTracing } = await import("../lib/tracing");
+    const { UndiciInstrumentation } = await import("@opentelemetry/instrumentation-undici");
+    registerTracing();
+
+    expect(capturedConfig.instrumentations?.some((i) => i instanceof UndiciInstrumentation)).toBe(true);
+  });
 });
 
 describe("register", () => {
