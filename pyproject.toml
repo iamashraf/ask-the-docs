@@ -24,6 +24,7 @@ dependencies = [
     "opentelemetry-instrumentation-redis>=0.66b1",
     "opentelemetry-instrumentation-requests>=0.66b1",
     "opentelemetry-sdk>=1.45.1",
+    "prometheus-client>=0.26.0",
     "pydantic-settings>=2.16.1",
     "pypdf>=6.21.2",
     "python-docx>=1.2.0",

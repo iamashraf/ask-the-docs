@@ -64,7 +64,8 @@ class Settings(BaseSettings):
     system_prompt_template: str = DEFAULT_SYSTEM_PROMPT_TEMPLATE
     cache_url: str = "redis://localhost:6379/0"
     nats_url: str = "nats://localhost:4222"
-    otel_exporter_endpoint: str = "http://jaeger:4317"
+    otel_exporter_endpoint: str = "http://tempo:4317"
+    metrics_port: int = 9100
 
     graph_enabled: bool = False
     neo4j_uri: str = "bolt://localhost:7687"

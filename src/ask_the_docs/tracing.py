@@ -1,5 +1,5 @@
 """OpenTelemetry SDK setup -- one TracerProvider per process, exporting to
-Jaeger over OTLP; mirrors the module-level singleton pattern jobs.py/
+Tempo over OTLP; mirrors the module-level singleton pattern jobs.py/
 queue.py use for their own connection config."""
 
 from opentelemetry import trace
