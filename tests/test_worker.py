@@ -5,7 +5,7 @@ import pytest
 from langchain_core.documents import Document
 
 from ask_the_docs.config import ProviderConfig, Settings
-from ask_the_docs.worker import WORKER_ACK_WAIT_SECONDS, _consume_once, main, process_job, run_worker
+from ask_the_docs.worker import WORKER_ACK_WAIT_SECONDS, _consume_once, process_job, run_worker
 
 
 def make_settings() -> Settings:
@@ -189,6 +189,7 @@ async def test_consume_once_drops_an_unparseable_message_without_crashing(monkey
 
 
 async def test_run_worker_subscribes_with_a_generous_ack_wait(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.worker.configure_tracing", lambda service_name, settings: None)
     calls = {}
 
     class FakeJetStream:
@@ -214,15 +215,34 @@ async def test_run_worker_subscribes_with_a_generous_ack_wait(monkeypatch):
     assert calls["config"].ack_wait == WORKER_ACK_WAIT_SECONDS
 
 
-def test_main_configures_tracing(monkeypatch):
+async def test_run_worker_configures_tracing(monkeypatch):
+    """The real worker entrypoint is cli.py's _worker, which calls
+    run_worker() directly -- never worker.py's own main(). Tracing must be
+    configured here, not in main(), or the deployed worker never exports a
+    single span (the actual bug this test pins)."""
     captured = {}
     monkeypatch.setattr(
         "ask_the_docs.worker.configure_tracing",
         lambda service_name, settings: captured.setdefault("service_name", service_name),
     )
-    monkeypatch.setattr("ask_the_docs.worker.get_settings", make_settings)
-    monkeypatch.setattr("ask_the_docs.worker.asyncio.run", lambda coro: coro.close())
 
-    main()
+    class FakeJetStream:
+        async def add_stream(self, **kwargs):
+            pass
+
+        async def pull_subscribe(self, subject, durable=None, config=None):
+            raise asyncio.CancelledError()
+
+    class FakeNatsClient:
+        def jetstream(self):
+            return FakeJetStream()
+
+    async def fake_connect(url):
+        return FakeNatsClient()
+
+    monkeypatch.setattr("ask_the_docs.worker.nats.connect", fake_connect)
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_worker(make_settings())
 
     assert captured["service_name"] == "ask-the-docs-worker"

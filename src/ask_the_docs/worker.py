@@ -84,6 +84,7 @@ async def _consume_once(settings: Settings, sub) -> None:
 
 
 async def run_worker(settings: Settings) -> None:
+    configure_tracing("ask-the-docs-worker", settings)
     nc = await nats.connect(settings.nats_url)
     js = nc.jetstream()
     await ensure_stream(js)
@@ -98,6 +99,4 @@ async def run_worker(settings: Settings) -> None:
 
 
 def main() -> None:
-    settings = get_settings()
-    configure_tracing("ask-the-docs-worker", settings)
-    asyncio.run(run_worker(settings))
+    asyncio.run(run_worker(get_settings()))
