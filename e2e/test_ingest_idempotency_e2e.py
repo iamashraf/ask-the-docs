@@ -3,6 +3,8 @@ import uuid
 
 import requests
 
+from conftest import wait_for_job
+
 
 def test_reingesting_an_unchanged_source_does_not_invalidate_the_answer_cache(base_url, docs_dir):
     """Raw ingest latency is too fast and noisy on this stack (~0.15-0.25s
@@ -21,7 +23,9 @@ def test_reingesting_an_unchanged_source_does_not_invalidate_the_answer_cache(ba
     )
     query = f"In what year was the fictional Kethrin-{marker} protocol invented?"
     try:
-        assert requests.post(f"{base_url}/v1/ingest", json={"source": fixture_path.name}, timeout=60).status_code == 200
+        first_ingest = requests.post(f"{base_url}/v1/ingest", json={"source": fixture_path.name}, timeout=60)
+        assert first_ingest.status_code == 202
+        assert wait_for_job(base_url, first_ingest.json()["job_id"])["status"] == "done"
 
         # Primes the answer cache -- a real LLM call, several seconds.
         first = requests.post(f"{base_url}/v1/ask", json={"query": query}, timeout=60)
@@ -30,7 +34,9 @@ def test_reingesting_an_unchanged_source_does_not_invalidate_the_answer_cache(ba
 
         # Unchanged re-ingest: dedup must skip it entirely, so the index
         # generation (part of the answer cache key) must not bump.
-        assert requests.post(f"{base_url}/v1/ingest", json={"source": fixture_path.name}, timeout=60).status_code == 200
+        second_ingest = requests.post(f"{base_url}/v1/ingest", json={"source": fixture_path.name}, timeout=60)
+        assert second_ingest.status_code == 202
+        assert wait_for_job(base_url, second_ingest.json()["job_id"])["status"] == "done"
 
         start = time.monotonic()
         second = requests.post(f"{base_url}/v1/ask", json={"query": query}, timeout=60)

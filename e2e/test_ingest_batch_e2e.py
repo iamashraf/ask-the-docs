@@ -2,6 +2,8 @@ import uuid
 
 import requests
 
+from conftest import wait_for_job
+
 
 def test_bulk_index_ingests_a_large_number_of_chunks_without_timing_out(base_url, docs_dir):
     marker = uuid.uuid4().hex[:8]
@@ -10,7 +12,8 @@ def test_bulk_index_ingests_a_large_number_of_chunks_without_timing_out(base_url
     # this stack), so an exact-delta assertion needs a known starting
     # point, not an absolute "at least N" that a silently-empty fixture
     # could still satisfy via pre-existing files.
-    baseline = requests.post(f"{base_url}/v1/index", timeout=180).json()
+    baseline_response = requests.post(f"{base_url}/v1/index", timeout=180)
+    baseline = wait_for_job(base_url, baseline_response.json()["job_id"], timeout=180)["result"]
 
     fixture_paths = []
     # 150 distinct one-chunk docs -- well past INDEX_WRITE_BATCH_SIZE (64),
@@ -24,8 +27,10 @@ def test_bulk_index_ingests_a_large_number_of_chunks_without_timing_out(base_url
 
     try:
         response = requests.post(f"{base_url}/v1/index", timeout=180)
-        assert response.status_code == 200
-        body = response.json()
+        assert response.status_code == 202
+        job = wait_for_job(base_url, response.json()["job_id"], timeout=180)
+        assert job["status"] == "done"
+        body = job["result"]
         # Exact deltas, not "at least 150": a fixture that silently loads
         # as zero documents must be visible here, not hidden by whatever
         # else is already in docs_dir.
