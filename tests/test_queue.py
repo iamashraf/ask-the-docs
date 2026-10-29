@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from ask_the_docs.config import ProviderConfig, Settings
@@ -50,6 +52,38 @@ async def test_publish_ingest_job_sends_the_job_payload(monkeypatch):
     assert subject == "ingest.jobs"
     assert b'"job_id": "job-1"' in payload or b'"job_id":"job-1"' in payload
     assert client.closed is True
+
+
+async def test_publish_ingest_job_injects_trace_context(monkeypatch):
+    js = FakeJetStream()
+    client = FakeNatsClient(js)
+
+    async def fake_connect(url):
+        return client
+
+    monkeypatch.setattr("ask_the_docs.queue.nats.connect", fake_connect)
+
+    await publish_ingest_job(make_settings(), "job-1", kind="ingest", source="a.pdf")
+
+    _, payload = js.published[0]
+    body = json.loads(payload)
+    assert "traceparent" in body
+
+
+async def test_publish_ingest_job_with_no_active_span_still_publishes(monkeypatch):
+    """Review Focus: inject() into an empty carrier when nothing is tracing
+    must not raise -- the payload is still valid."""
+    js = FakeJetStream()
+    client = FakeNatsClient(js)
+
+    async def fake_connect(url):
+        return client
+
+    monkeypatch.setattr("ask_the_docs.queue.nats.connect", fake_connect)
+
+    await publish_ingest_job(make_settings(), "job-1", kind="ingest", source="a.pdf")
+
+    assert len(js.published) == 1
 
 
 async def test_publish_ingest_job_wraps_connection_failures(monkeypatch):

@@ -161,6 +161,22 @@ async def test_consume_once_leaves_a_message_unacked_and_does_not_raise_when_pro
     assert msg.acked is False
 
 
+async def test_consume_once_extracts_trace_context_without_a_traceparent_key(monkeypatch):
+    """Review Focus: a message with no "traceparent" key at all (e.g. from
+    an older publisher) must not crash extraction."""
+    msg = FakeMsg(json.dumps({"job_id": "job-1", "kind": "ingest", "source": "a.pdf"}).encode())
+    sub = FakeSub([[msg]])
+    monkeypatch.setattr("ask_the_docs.worker.process_job", lambda settings, payload: _noop())
+
+    await _consume_once(make_settings(), sub)  # must not raise
+
+    assert msg.acked is True
+
+
+async def _noop():
+    pass
+
+
 async def test_consume_once_drops_an_unparseable_message_without_crashing(monkeypatch):
     msg = FakeMsg(b"not valid json")
     sub = FakeSub([[msg]])
