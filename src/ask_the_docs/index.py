@@ -8,7 +8,10 @@ from pathlib import Path
 import neo4j
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import (
+    MarkdownHeaderTextSplitter,
+    RecursiveCharacterTextSplitter,
+)
 
 from ask_the_docs.community import run_community_detection, summarize_communities
 from ask_the_docs.config import Settings
@@ -23,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 50
+MARKDOWN_HEADERS_TO_SPLIT_ON = [("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")]
 # Chroma.from_documents used to batch writes internally (create_batches);
 # load_index(settings).add_documents() doesn't, so build_index batches it
 # here instead -- keeps each Ollama embed request and each Chroma upsert
@@ -67,12 +71,45 @@ def _hash_sources(docs: list[Document]) -> dict[str, str]:
     return {doc_id: hashlib.sha256(content.encode()).hexdigest() for doc_id, content in content_by_id.items()}
 
 
+def _markdown_heading_prefix(section_metadata: dict) -> str:
+    titles = [section_metadata[key] for _, key in MARKDOWN_HEADERS_TO_SPLIT_ON if key in section_metadata]
+    return " > ".join(titles)
+
+
+def _split_markdown_document(doc: Document) -> list[Document]:
+    """Splits on header boundaries first so every resulting chunk carries its
+    section heading -- plain char-splitting only keeps the heading text in
+    whichever single chunk it happens to land in, losing it for every other
+    chunk in that section."""
+    sections = MarkdownHeaderTextSplitter(MARKDOWN_HEADERS_TO_SPLIT_ON, strip_headers=True).split_text(
+        doc.page_content
+    )
+
+    chunks = []
+    for section in sections:
+        heading = _markdown_heading_prefix(section.metadata)
+        prefix = f"{heading}\n" if heading else ""
+        body_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=CHUNK_SIZE - len(prefix), chunk_overlap=CHUNK_OVERLAP
+        )
+        for body_chunk in body_splitter.split_text(section.page_content):
+            chunks.append(Document(page_content=prefix + body_chunk, metadata={**doc.metadata, **section.metadata}))
+    return chunks
+
+
 def chunk_documents(docs: list[Document], embedding_model: str) -> list[Document]:
     """Splits docs into chunks and tags each with chunk_index/total_chunks
-    (per source_doc_id), embedding_model, ingested_at, and content_hash."""
+    (per source_doc_id), embedding_model, ingested_at, and content_hash.
+    Markdown sources are split header-first (see _split_markdown_document);
+    every other source type keeps today's plain char-based splitting."""
     source_hashes = _hash_sources(docs)
-    splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
-    chunks = splitter.split_documents(docs)
+    generic_splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
+    chunks: list[Document] = []
+    for doc in docs:
+        if doc.metadata.get("source", "").lower().endswith(".md"):
+            chunks.extend(_split_markdown_document(doc))
+        else:
+            chunks.extend(generic_splitter.split_documents([doc]))
 
     totals: dict[str, int] = {}
     for chunk in chunks:

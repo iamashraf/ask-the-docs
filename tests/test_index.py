@@ -23,7 +23,6 @@ from ask_the_docs.index import (
     load_index,
 )
 from ask_the_docs.llm import OllamaUnavailableError
-from ask_the_docs.llm import OllamaUnavailableError
 
 
 def make_settings(tmp_path, embeddings_backend: str = "ollama", graph_enabled: bool = False) -> Settings:
@@ -134,6 +133,40 @@ def test_chunk_documents_content_hash_changes_when_content_changes():
     hash_v1 = chunk_documents([doc_v1], embedding_model="m")[0].metadata["content_hash"]
     hash_v2 = chunk_documents([doc_v2], embedding_model="m")[0].metadata["content_hash"]
     assert hash_v1 != hash_v2
+
+
+def test_chunk_documents_markdown_heading_survives_in_every_chunk_of_its_section():
+    # Body alone is long enough to span several 512-char chunks -- plain
+    # char-splitting only keeps "Refund Policy" in whichever one chunk the
+    # heading line happens to land in, losing it for every other chunk in
+    # the same section. Header-aware splitting must keep it in all of them.
+    text = "## Refund Policy\n" + "Customers may request a refund within 30 days of purchase, subject to conditions. " * 15
+    doc = Document(page_content=text, metadata={"source": "policy.md", "source_doc_id": "doc1"})
+
+    chunks = chunk_documents([doc], embedding_model="nomic-embed-text")
+
+    assert len(chunks) > 1
+    assert all("Refund Policy" in c.page_content for c in chunks)
+    assert all(c.metadata["embedding_model"] == "nomic-embed-text" for c in chunks)
+
+
+def test_chunk_documents_markdown_long_section_still_respects_chunk_size():
+    text = "## Terms\n" + "word " * 400
+    doc = Document(page_content=text, metadata={"source": "terms.md", "source_doc_id": "doc1"})
+
+    chunks = chunk_documents([doc], embedding_model="m")
+
+    assert len(chunks) > 1
+    assert all(len(c.page_content) <= CHUNK_SIZE for c in chunks)
+
+
+def test_chunk_documents_markdown_without_headers_falls_back_cleanly():
+    doc = Document(page_content="word " * 400, metadata={"source": "plain.md", "source_doc_id": "doc1"})
+
+    chunks = chunk_documents([doc], embedding_model="m")
+
+    assert len(chunks) > 1
+    assert all(len(c.page_content) <= CHUNK_SIZE for c in chunks)
 
 
 def test_get_collection_name_differs_by_backend(tmp_path):
