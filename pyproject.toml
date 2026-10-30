@@ -24,7 +24,6 @@ dependencies = [
     "opentelemetry-instrumentation-redis>=0.66b1",
     "opentelemetry-instrumentation-requests>=0.66b1",
     "opentelemetry-sdk>=1.45.1",
-    "prometheus-client>=0.26.0",
     "pydantic-settings>=2.16.1",
     "pymupdf>=2.0",
     "pymupdf4llm>=2.0",

@@ -14,11 +14,9 @@ from pathlib import Path
 from typing import Literal
 
 import requests
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from prometheus_client import REGISTRY
-from prometheus_client.exposition import choose_encoder
 from pydantic import BaseModel, Field
 
 from ask_the_docs.answer import answer
@@ -35,7 +33,7 @@ from ask_the_docs.jobs import JobStoreError, create_job, get_async_cache_client,
 from ask_the_docs.llm import OllamaUnavailableError
 from ask_the_docs.queue import QueuePublishError, publish_ingest_job
 from ask_the_docs.seed import seed_if_needed
-from ask_the_docs.tracing import configure_tracing
+from ask_the_docs.tracing import configure_logging, configure_metrics, configure_tracing
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +53,8 @@ _package_logger.setLevel(logging.INFO)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_tracing("ask-the-docs-app", get_settings())
+    configure_logging("ask-the-docs-app", get_settings())
+    configure_metrics("ask-the-docs-app", get_settings())
     seed_if_needed(get_settings())
     yield
 
@@ -88,12 +88,6 @@ def health() -> dict[str, str]:
     """No dependency on Settings/Ollama/anything external -- the compose
     healthcheck gates on this, so it must reflect only "is the process up"."""
     return {"status": "ok"}
-
-
-@app.get("/metrics")
-def metrics(request: Request) -> Response:
-    encoder, content_type = choose_encoder(request.headers.get("accept", ""))
-    return Response(content=encoder(REGISTRY), media_type=content_type)
 
 
 @app.get("/ready")
