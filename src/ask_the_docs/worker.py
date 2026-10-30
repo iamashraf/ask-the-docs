@@ -63,6 +63,7 @@ async def process_job(settings: Settings, payload: dict) -> None:
         if kind == "index":
             result["files_found"] = file_count
         await update_job(client, job_id, status="done", result=result)
+        logger.info("Job %s completed: kind=%s, documents=%d", job_id, kind, len(docs))
         metrics.ingest_job_total.add(1, {"status": "success"})
     except Exception as exc:
         logger.warning("Job %s failed: %s", job_id, exc, exc_info=True)

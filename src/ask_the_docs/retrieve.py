@@ -131,12 +131,14 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
                 local_results = []
             seen = {_doc_key(doc) for doc in candidates}
             candidates = [doc for doc in local_results if _doc_key(doc) not in seen] + candidates
+        logger.info("Hybrid retrieve succeeded: %d candidates", len(candidates))
     metrics.retrieve_latency_seconds.record(time.monotonic() - hybrid_start)
 
     if settings.rerank_enabled:
         rerank_start = time.monotonic()
         with tracer.start_as_current_span("rerank"):
             reranked = get_reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
+            logger.info("Rerank succeeded: %d results", len(reranked))
         metrics.rerank_latency_seconds.record(time.monotonic() - rerank_start)
         return reranked
     return candidates[:k]

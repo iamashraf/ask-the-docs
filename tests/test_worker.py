@@ -60,7 +60,7 @@ def _histogram_count(name, **attributes):
     return point.count if point is not None else 0
 
 
-async def test_process_job_ingests_and_marks_done(monkeypatch):
+async def test_process_job_ingests_and_marks_done(monkeypatch, caplog):
     docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
     monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
     built = {}
@@ -73,11 +73,13 @@ async def test_process_job_ingests_and_marks_done(monkeypatch):
     monkeypatch.setattr("ask_the_docs.worker.update_job", fake_update_job)
     monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
 
+    caplog.set_level(logging.INFO, logger="ask_the_docs.worker")
     await process_job(make_settings(), {"job_id": "job-1", "kind": "ingest", "source": "a.pdf"})
 
     assert built["docs"] == docs
     assert updates[0] == ("job-1", "processing", None, None)
     assert updates[1] == ("job-1", "done", {"documents_ingested": 1}, None)
+    assert any("Job job-1 completed" in record.message for record in caplog.records)
 
 
 async def test_process_job_marks_failed_on_an_exception(monkeypatch):
