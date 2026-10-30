@@ -173,6 +173,47 @@ def test_load_url_fetches_and_parses_html(monkeypatch):
     assert docs[0].metadata["title"] == "Hi"
 
 
+def test_load_url_heading_survives_in_every_chunk_of_a_long_section(monkeypatch):
+    _allow_public_host(monkeypatch)
+    _patch_url_settings(monkeypatch)
+    body = "Customers may request a refund within 30 days of purchase, subject to conditions. " * 15
+    html = f"<html><body><h2>Refund Policy</h2><p>{body}</p></body></html>".encode()
+    monkeypatch.setattr(requests, "get", lambda url, timeout, allow_redirects, stream: FakeResponse(html))
+
+    docs = load_url("http://example.com/policy")
+    chunks = chunk_documents(docs, embedding_model="m")
+
+    assert len(chunks) > 1
+    assert all("Refund Policy" in c.page_content for c in chunks)
+
+
+def test_load_url_heading_with_inline_tags_keeps_word_boundaries(monkeypatch):
+    # get_text(strip=True) alone strips each text fragment before joining
+    # them with nothing -- "<b>Refund</b> Policy" would otherwise collapse
+    # to "RefundPolicy", losing the word boundary at the tag boundary.
+    _allow_public_host(monkeypatch)
+    _patch_url_settings(monkeypatch)
+    html = b"<html><body><h2><b>Refund</b> Policy</h2><p>Body text.</p></body></html>"
+    monkeypatch.setattr(requests, "get", lambda url, timeout, allow_redirects, stream: FakeResponse(html))
+
+    docs = load_url("http://example.com/policy")
+
+    assert "Refund Policy" in docs[0].page_content
+
+
+def test_load_url_without_headings_falls_back_to_plain_text(monkeypatch):
+    _allow_public_host(monkeypatch)
+    _patch_url_settings(monkeypatch)
+    html = b"<html><head><title>Hi</title></head><body><p>Hello world</p></body></html>"
+    monkeypatch.setattr(requests, "get", lambda url, timeout, allow_redirects, stream: FakeResponse(html))
+
+    docs = load_url("http://example.com/page")
+
+    assert len(docs) == 1
+    assert docs[0].page_content == "Hi\nHello world"
+    assert "content_format" not in docs[0].metadata
+
+
 def test_load_url_parses_pdf_by_content_type(monkeypatch):
     """arxiv-style URLs (e.g. https://arxiv.org/pdf/2305.10601) serve a raw PDF
     with no .pdf suffix in the URL -- Content-Type is the only reliable signal."""
