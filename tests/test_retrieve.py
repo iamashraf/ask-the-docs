@@ -4,12 +4,12 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from neo4j.exceptions import SessionExpired
-from prometheus_client import REGISTRY
 
 from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.index import build_index
 from ask_the_docs.query_analyzer import QueryClassification
 from ask_the_docs.retrieve import hybrid_merge, retrieve
+from tests.test_metrics import find_data_point, find_metric, get_metrics_data
 
 
 def make_settings(tmp_path) -> Settings:
@@ -531,8 +531,14 @@ def test_retrieve_falls_back_to_bm25_only_when_vector_search_fails(tmp_path, mon
     assert any("vector search" in record.message.lower() for record in caplog.records)
 
 
-def _sample(name: str) -> float:
-    return REGISTRY.get_sample_value(name) or 0.0
+def _histogram_count(name: str) -> int:
+    data = get_metrics_data()
+    if data is None:
+        return 0
+    try:
+        return find_data_point(find_metric(data, name)).count
+    except AssertionError:
+        return 0
 
 
 def _stub_hybrid_with_one_hit(monkeypatch) -> None:
@@ -548,20 +554,20 @@ def _stub_hybrid_with_one_hit(monkeypatch) -> None:
 
 def test_retrieve_observes_hybrid_retrieve_latency(tmp_path, monkeypatch):
     _stub_hybrid_with_one_hit(monkeypatch)
-    before = _sample("retrieve_latency_seconds_count")
+    before = _histogram_count("retrieve_latency")
 
     retrieve("a query", make_settings(tmp_path), k=1)
 
-    assert _sample("retrieve_latency_seconds_count") - before == 1.0
+    assert _histogram_count("retrieve_latency") - before == 1.0
 
 
 def test_retrieve_does_not_observe_rerank_latency_when_rerank_disabled(tmp_path, monkeypatch):
     _stub_hybrid_with_one_hit(monkeypatch)
-    before = _sample("rerank_latency_seconds_count")
+    before = _histogram_count("rerank_latency")
 
     retrieve("a query", make_settings(tmp_path).model_copy(update={"rerank_enabled": False}), k=1)
 
-    assert _sample("rerank_latency_seconds_count") - before == 0.0
+    assert _histogram_count("rerank_latency") - before == 0.0
 
 
 def test_retrieve_observes_rerank_latency_when_rerank_enabled(tmp_path, monkeypatch):
@@ -572,10 +578,10 @@ def test_retrieve_observes_rerank_latency_when_rerank_enabled(tmp_path, monkeypa
             return candidates[:k]
 
     monkeypatch.setattr("ask_the_docs.retrieve.get_reranker", lambda model_name: PassThroughReranker())
-    rerank_before = _sample("rerank_latency_seconds_count")
-    retrieve_before = _sample("retrieve_latency_seconds_count")
+    rerank_before = _histogram_count("rerank_latency")
+    retrieve_before = _histogram_count("retrieve_latency")
 
     retrieve("a query", make_settings(tmp_path).model_copy(update={"rerank_enabled": True}), k=1)
 
-    assert _sample("rerank_latency_seconds_count") - rerank_before == 1.0
-    assert _sample("retrieve_latency_seconds_count") - retrieve_before == 1.0
+    assert _histogram_count("rerank_latency") - rerank_before == 1.0
+    assert _histogram_count("retrieve_latency") - retrieve_before == 1.0
