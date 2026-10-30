@@ -3,12 +3,45 @@
   --ink: #1c1f23;
   --ink-muted: #6b7178;
   --accent: #2f6f62;
+  --accent-ink: #ffffff;
   --user-tint: #e8f0ec;
   --panel: #f1f0ec;
+  --surface: #ffffff;
   --border: #dedcd5;
   --error-bg: #fbeaea;
   --error-ink: #8b3a3a;
   --error-border: #e3bcbc;
+  --refusal-bg: #fbf3e4;
+  --refusal-ink: #8a6420;
+  --refusal-border: #e8d6a8;
+  --citation-bg: #f1f0ec;
+  --citation-border: #dedcd5;
+  --code-bg: #e9e8e2;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #15171a;
+    --ink: #e7e5e0;
+    --ink-muted: #969aa1;
+    --accent: #5fb39f;
+    --accent-ink: #0c1412;
+    --user-tint: #1f2b27;
+    --panel: #1f2225;
+    --surface: #1b1d20;
+    --border: #33363a;
+    --error-bg: #351f1f;
+    --error-ink: #e49a9a;
+    --error-border: #5c3333;
+    --refusal-bg: #352c1a;
+    --refusal-ink: #e0bd73;
+    --refusal-border: #5c4a24;
+    --citation-bg: #1f2225;
+    --citation-border: #33363a;
+    --code-bg: #272a2e;
+  }
 }
 
 * {
@@ -143,7 +176,7 @@ a {
   border: none;
   border-radius: 8px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-ink);
   font-size: 1rem;
   cursor: pointer;
 }
@@ -189,7 +222,7 @@ a {
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 1rem;
-  background: white;
+  background: var(--surface);
   color: var(--ink);
 }
 
@@ -203,7 +236,7 @@ a {
   border: none;
   border-radius: 8px;
   background: var(--accent);
-  color: white;
+  color: var(--accent-ink);
   font-size: 1rem;
   cursor: pointer;
 }
