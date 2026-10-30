@@ -102,6 +102,33 @@ describe("Page", () => {
     expect(screen.queryByText(/thinking/i)).not.toBeInTheDocument();
   });
 
+  test("shows an elapsed-time counter while waiting, reset for the next question", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let resolveFetch: (value: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockReturnValue(
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+      ),
+    );
+
+    render(<Page />);
+    await userEvent.type(screen.getByRole("textbox"), "What is BM25?");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(screen.getByText("0s")).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(screen.getByText("3s")).toBeInTheDocument();
+
+    resolveFetch!(new Response(JSON.stringify({ answer: "A ranking function.", citations: [] }), { status: 200 }));
+    await screen.findByText("A ranking function.");
+
+    expect(screen.queryByText(/^\d+s$/)).not.toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
   test("auto-focuses the question input on load", () => {
     render(<Page />);
     expect(screen.getByRole("textbox")).toHaveFocus();

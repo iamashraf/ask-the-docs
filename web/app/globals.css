@@ -152,9 +152,31 @@ a {
   font-weight: 600;
 }
 
+.message--thinking {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  animation: thinking-pulse 1.6s ease-in-out infinite;
+}
+
 .message--thinking p {
   color: var(--ink-muted);
   font-style: italic;
+}
+
+.message__elapsed {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes thinking-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
 }
 
 .message__markdown > :first-child {
@@ -384,5 +406,9 @@ a {
 @media (prefers-reduced-motion: reduce) {
   * {
     scroll-behavior: auto !important;
+  }
+
+  .message--thinking {
+    animation: none;
   }
 }
