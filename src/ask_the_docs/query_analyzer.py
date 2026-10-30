@@ -4,13 +4,18 @@ retrieval to decide how a user's question should be routed."""
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Literal
 
+from opentelemetry import trace
+
+from ask_the_docs import metrics
 from ask_the_docs.config import Settings
 from ask_the_docs.llm import get_llm_client
 
 logger = logging.getLogger(__name__)
+tracer = trace.get_tracer(__name__)
 
 QUERY_REWRITE_PROMPT_TEMPLATE = """Rewrite the question below into an effective search query for a document retrieval system.
 
@@ -50,7 +55,34 @@ def _strip_code_fence(raw: str) -> str:
 
 def rewrite_query(query: str, settings: Settings) -> str:
     client = get_llm_client(settings.generator)
-    return client.generate(QUERY_REWRITE_PROMPT_TEMPLATE.format(query=query)).strip()
+    with tracer.start_as_current_span("rewrite_query") as span:
+        start = time.monotonic()
+        result = client.generate_with_usage(QUERY_REWRITE_PROMPT_TEMPLATE.format(query=query))
+        duration = time.monotonic() - start
+
+        span.set_attribute("gen_ai.request.model", settings.generator.model)
+        span.set_attribute("gen_ai.response.model", result.response_model or settings.generator.model)
+        span.set_attribute("gen_ai.provider.name", settings.generator.provider)
+        attrs = {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.provider.name": settings.generator.provider,
+            "gen_ai.request.model": settings.generator.model,
+        }
+        if result.input_tokens is not None:
+            span.set_attribute("gen_ai.usage.input_tokens", result.input_tokens)
+            metrics.gen_ai_client_inference_usage_input_tokens.add(
+                result.input_tokens, {**attrs, "gen_ai.token.modality": "text"}
+            )
+        if result.output_tokens is not None:
+            span.set_attribute("gen_ai.usage.output_tokens", result.output_tokens)
+            metrics.gen_ai_client_inference_usage_output_tokens.add(
+                result.output_tokens, {**attrs, "gen_ai.token.modality": "text"}
+            )
+        metrics.gen_ai_client_inference_duration.record(duration, attrs)
+
+        rewritten = result.text.strip()
+        logger.info("Query rewrite succeeded (%d -> %d chars)", len(query), len(rewritten))
+    return rewritten
 
 
 @dataclass
@@ -63,16 +95,42 @@ def classify_query(query: str, settings: Settings) -> QueryClassification:
     """Falls back to label="local", entities=[] if the LLM's response isn't parseable JSON matching the expected shape."""
     client = get_llm_client(settings.generator)
     prompt = QUERY_CLASSIFICATION_PROMPT_TEMPLATE.format(query=query)
-    raw = client.generate(prompt)
-    try:
-        data = json.loads(_strip_code_fence(raw))
-        label = data["label"]
-        if label not in ("local", "global"):
-            raise ValueError(f"unexpected label: {label!r}")
-        if not isinstance(data["entities"], list):
-            raise TypeError(f"entities is not a list: {data['entities']!r}")
-        entities = [str(entity) for entity in data["entities"]]
-        return QueryClassification(label=label, entities=entities)
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        logger.warning("Query classification response was invalid JSON or had an unexpected shape; defaulting to local.", exc_info=True)
-        return QueryClassification(label="local", entities=[])
+    with tracer.start_as_current_span("classify_query") as span:
+        start = time.monotonic()
+        result = client.generate_with_usage(prompt)
+        duration = time.monotonic() - start
+
+        span.set_attribute("gen_ai.request.model", settings.generator.model)
+        span.set_attribute("gen_ai.response.model", result.response_model or settings.generator.model)
+        span.set_attribute("gen_ai.provider.name", settings.generator.provider)
+        attrs = {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.provider.name": settings.generator.provider,
+            "gen_ai.request.model": settings.generator.model,
+        }
+        if result.input_tokens is not None:
+            span.set_attribute("gen_ai.usage.input_tokens", result.input_tokens)
+            metrics.gen_ai_client_inference_usage_input_tokens.add(
+                result.input_tokens, {**attrs, "gen_ai.token.modality": "text"}
+            )
+        if result.output_tokens is not None:
+            span.set_attribute("gen_ai.usage.output_tokens", result.output_tokens)
+            metrics.gen_ai_client_inference_usage_output_tokens.add(
+                result.output_tokens, {**attrs, "gen_ai.token.modality": "text"}
+            )
+        metrics.gen_ai_client_inference_duration.record(duration, attrs)
+
+        raw = result.text
+        try:
+            data = json.loads(_strip_code_fence(raw))
+            label = data["label"]
+            if label not in ("local", "global"):
+                raise ValueError(f"unexpected label: {label!r}")
+            if not isinstance(data["entities"], list):
+                raise TypeError(f"entities is not a list: {data['entities']!r}")
+            entities = [str(entity) for entity in data["entities"]]
+            logger.info("Query classification succeeded: label=%s, entities=%d", label, len(entities))
+            return QueryClassification(label=label, entities=entities)
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            logger.warning("Query classification response was invalid JSON or had an unexpected shape; defaulting to local.", exc_info=True)
+            return QueryClassification(label="local", entities=[])
