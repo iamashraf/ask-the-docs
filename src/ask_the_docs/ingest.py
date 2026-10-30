@@ -161,17 +161,22 @@ def load_text(path: Path) -> list[Document]:
     return [Document(page_content=text, metadata=metadata)]
 
 
-def _is_docx_heading(style_name: str) -> bool:
-    # "Heading 1".."Heading 9" from add_heading(level=1..9); "Title" from
-    # add_heading(level=0) -- python-docx's own built-in heading styles.
-    # Any other/custom style (including "Normal") is treated as body text.
-    return style_name.startswith("Heading") or style_name == "Title"
+def _docx_heading_level(style_name: str) -> int | None:
+    # "Heading 1".."Heading 9" from add_heading(level=1..9) map to that same
+    # level; "Title" from add_heading(level=0) is treated as a level-1
+    # heading. Any other/custom style (including "Normal") is body text.
+    if style_name == "Title":
+        return 1
+    suffix = style_name.removeprefix("Heading ")
+    return int(suffix) if suffix != style_name and suffix.isdigit() else None
 
 
 def load_docx(path: Path) -> list[Document]:
-    """Loads a .docx file as one Document per heading section, so a chunk
-    downstream keeps the heading it falls under instead of every paragraph
-    being flattened into one blob with no section boundaries."""
+    """Loads a .docx file as one Document per heading section, with each
+    heading rewritten as a markdown header line (content_format="markdown")
+    so chunk_documents routes it through the same header-aware splitting as
+    .md/PDF sources -- a chunk downstream then keeps its section heading
+    even when the section itself is long enough to be sub-split."""
     import docx
 
     document = docx.Document(str(path))
@@ -180,16 +185,23 @@ def load_docx(path: Path) -> list[Document]:
 
     groups: list[list[str]] = [[]]
     for paragraph in document.paragraphs:
-        if _is_docx_heading(paragraph.style.name) and groups[-1]:
+        level = _docx_heading_level(paragraph.style.name)
+        if level is not None and groups[-1]:
             groups.append([])
-        groups[-1].append(paragraph.text)
+        text = f"{'#' * level} {paragraph.text}" if level is not None else paragraph.text
+        groups[-1].append(text)
 
     docs = []
     for group in groups:
         text = clean_text("\n".join(group))
         if not text.strip():
             continue
-        docs.append(Document(page_content=text, metadata={"source": source, "source_doc_id": source_doc_id}))
+        docs.append(
+            Document(
+                page_content=text,
+                metadata={"source": source, "source_doc_id": source_doc_id, "content_format": "markdown"},
+            )
+        )
     return docs
 
 
