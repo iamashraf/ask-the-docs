@@ -1,47 +1,48 @@
+import pymupdf
+
 from ask_the_docs.ingest import load_pdf, load_text
 
 
-class FakePage:
-    def __init__(self, text):
-        self._text = text
-
-    def extract_text(self):
-        return self._text
-
-
-class FakePdfReader:
-    def __init__(self, path):
-        self.pages = [
-            FakePage("Page one content."),
-            FakePage("   "),
-            FakePage("Page three content."),
-        ]
+def _make_pdf_with_heading(heading: str, body: str) -> bytes:
+    # fontsize 18 vs 11 is what pymupdf4llm's heading reconstruction keys
+    # on (larger text -> markdown "#" heading).
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), heading, fontsize=18, fontname="helv")
+    page.insert_text((72, 100), body, fontsize=11, fontname="helv")
+    return doc.tobytes()
 
 
-class AllBlankPdfReader:
-    def __init__(self, path):
-        self.pages = [FakePage(""), FakePage("   \n\t")]
+def _make_scanned_pdf() -> bytes:
+    # No text objects at all -- simulates a scanned/image-only page.
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.draw_rect(pymupdf.Rect(50, 50, 400, 400), fill=(0, 0, 0))
+    return doc.tobytes()
 
 
-def test_load_pdf_returns_document_per_nonempty_page(tmp_path, monkeypatch):
-    monkeypatch.setattr("pypdf.PdfReader", FakePdfReader)
-    pdf_path = tmp_path / "paper.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4 fake")
+def test_load_pdf_keeps_heading_text_with_its_section(tmp_path):
+    # Asserting the heading text is merely present isn't enough -- plain
+    # text extraction would already include it unstructured. The real
+    # signal is markdown heading syntax plus the content_format tag that
+    # routes this document through chunk_documents' header-aware splitter.
+    pdf_path = tmp_path / "policy.pdf"
+    pdf_path.write_bytes(
+        _make_pdf_with_heading("Refund Policy", "Customers may request a refund within 30 days.")
+    )
 
     docs = load_pdf(pdf_path)
 
-    assert len(docs) == 2
-    assert docs[0].page_content == "Page one content."
-    assert docs[0].metadata["source"] == str(pdf_path)
-    assert docs[0].metadata["page"] == 1
-    assert docs[1].metadata["page"] == 3
-    assert docs[0].metadata["source_doc_id"] == docs[1].metadata["source_doc_id"]
+    assert any("# Refund Policy" in doc.page_content for doc in docs)
+    assert any("Customers may request a refund within 30 days." in doc.page_content for doc in docs)
+    assert all(doc.metadata["content_format"] == "markdown" for doc in docs)
+    assert all(doc.metadata["source"] == str(pdf_path) for doc in docs)
+    assert all("source_doc_id" in doc.metadata for doc in docs)
 
 
-def test_load_pdf_skips_pages_with_only_whitespace_text(tmp_path, monkeypatch):
-    monkeypatch.setattr("pypdf.PdfReader", AllBlankPdfReader)
+def test_load_pdf_returns_empty_list_for_scanned_pdf_with_no_text(tmp_path):
     pdf_path = tmp_path / "scanned.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4 fake")
+    pdf_path.write_bytes(_make_scanned_pdf())
 
     assert load_pdf(pdf_path) == []
 

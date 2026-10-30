@@ -2,6 +2,7 @@ import socket
 from types import SimpleNamespace
 
 import docx as docx_module
+import pymupdf
 import pytest
 import requests
 
@@ -44,6 +45,16 @@ def _patch_url_settings(monkeypatch, max_url_fetch_size_mb: int = 10):
             max_url_fetch_size_mb=max_url_fetch_size_mb, url_fetch_timeout_seconds=10
         ),
     )
+
+
+def _make_pdf_with_heading(heading: str, body: str) -> bytes:
+    # fontsize 18 vs 11 is what pymupdf4llm's heading reconstruction keys
+    # on (larger text -> markdown "#" heading).
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), heading, fontsize=18, fontname="helv")
+    page.insert_text((72, 100), body, fontsize=11, fontname="helv")
+    return doc.tobytes()
 
 
 def test_load_docx_reads_paragraphs(tmp_path):
@@ -149,30 +160,22 @@ def test_load_url_parses_pdf_by_content_type(monkeypatch):
     with no .pdf suffix in the URL -- Content-Type is the only reliable signal."""
     _allow_public_host(monkeypatch)
     _patch_url_settings(monkeypatch)
-
-    class FakePage:
-        def extract_text(self):
-            return "The paper's actual text."
-
-    class FakeReader:
-        def __init__(self, stream):
-            self.pages = [FakePage()]
-
-    monkeypatch.setattr("pypdf.PdfReader", FakeReader)
+    pdf_bytes = _make_pdf_with_heading("Attention Is All You Need", "The paper's actual text.")
     monkeypatch.setattr(
         requests,
         "get",
         lambda url, timeout, allow_redirects, stream: FakeResponse(
-            b"%PDF-1.4 fake bytes", headers={"Content-Type": "application/pdf"}
+            pdf_bytes, headers={"Content-Type": "application/pdf"}
         ),
     )
 
     docs = load_url("https://arxiv.org/pdf/2305.10601")
 
     assert len(docs) == 1
-    assert docs[0].page_content == "The paper's actual text."
+    assert "# Attention Is All You Need" in docs[0].page_content
+    assert "The paper's actual text." in docs[0].page_content
     assert docs[0].metadata["source"] == "https://arxiv.org/pdf/2305.10601"
-    assert docs[0].metadata["page"] == 1
+    assert docs[0].metadata["content_format"] == "markdown"
 
 
 def test_load_url_follows_redirect_and_revalidates_target(monkeypatch):

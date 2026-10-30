@@ -141,7 +141,10 @@ def test_chunk_documents_markdown_heading_survives_in_every_chunk_of_its_section
     # heading line happens to land in, losing it for every other chunk in
     # the same section. Header-aware splitting must keep it in all of them.
     text = "## Refund Policy\n" + "Customers may request a refund within 30 days of purchase, subject to conditions. " * 15
-    doc = Document(page_content=text, metadata={"source": "policy.md", "source_doc_id": "doc1"})
+    doc = Document(
+        page_content=text,
+        metadata={"source": "policy.md", "source_doc_id": "doc1", "content_format": "markdown"},
+    )
 
     chunks = chunk_documents([doc], embedding_model="nomic-embed-text")
 
@@ -152,7 +155,10 @@ def test_chunk_documents_markdown_heading_survives_in_every_chunk_of_its_section
 
 def test_chunk_documents_markdown_long_section_still_respects_chunk_size():
     text = "## Terms\n" + "word " * 400
-    doc = Document(page_content=text, metadata={"source": "terms.md", "source_doc_id": "doc1"})
+    doc = Document(
+        page_content=text,
+        metadata={"source": "terms.md", "source_doc_id": "doc1", "content_format": "markdown"},
+    )
 
     chunks = chunk_documents([doc], embedding_model="m")
 
@@ -161,12 +167,33 @@ def test_chunk_documents_markdown_long_section_still_respects_chunk_size():
 
 
 def test_chunk_documents_markdown_without_headers_falls_back_cleanly():
-    doc = Document(page_content="word " * 400, metadata={"source": "plain.md", "source_doc_id": "doc1"})
+    doc = Document(
+        page_content="word " * 400,
+        metadata={"source": "plain.md", "source_doc_id": "doc1", "content_format": "markdown"},
+    )
 
     chunks = chunk_documents([doc], embedding_model="m")
 
     assert len(chunks) > 1
     assert all(len(c.page_content) <= CHUNK_SIZE for c in chunks)
+
+
+def test_chunk_documents_routes_by_content_format_not_file_extension():
+    # PDF sources are converted to markdown text upstream (pymupdf4llm) and
+    # tagged content_format="markdown" -- dispatch must key off that tag,
+    # not the ".md" suffix, so a .pdf source gets the same header-aware
+    # splitting a .md source does. Same long-section setup as the markdown
+    # heading-survival test above, just with a non-.md source path.
+    text = "## Refund Policy\n" + "Customers may request a refund within 30 days of purchase, subject to conditions. " * 15
+    doc = Document(
+        page_content=text,
+        metadata={"source": "policy.pdf", "source_doc_id": "doc1", "content_format": "markdown"},
+    )
+
+    chunks = chunk_documents([doc], embedding_model="m")
+
+    assert len(chunks) > 1
+    assert all("Refund Policy" in c.page_content for c in chunks)
 
 
 def test_get_collection_name_differs_by_backend(tmp_path):
