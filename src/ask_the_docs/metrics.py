@@ -1,62 +1,90 @@
-"""Prometheus metric singletons shared across api, worker, and retrieval/generation code."""
+"""OTel metric instrument singletons shared across api, worker, and retrieval/generation code."""
 
-from opentelemetry import trace
-from prometheus_client import Counter, Gauge, Histogram
+from opentelemetry import metrics
 
-cache_result_total = Counter(
-    "cache_result",
-    "Answer cache lookups by outcome",
-    ["result"],
-)
-citation_guardrail_total = Counter(
-    "citation_guardrail",
-    "Citation guardrail checks by outcome",
-    ["result"],
-)
-refusal_total = Counter("refusal", "Answers refused by the pipeline")
+meter = metrics.get_meter("ask_the_docs")
 
-retrieve_latency_seconds = Histogram(
-    "retrieve_latency_seconds", "Hybrid retrieval latency"
-)
-rerank_latency_seconds = Histogram("rerank_latency_seconds", "Reranking latency")
 LLM_LATENCY_BUCKETS = (0.5, 1, 2.5, 5, 10, 20, 30, 60, 90, 120)
-generate_latency_seconds = Histogram(
-    "generate_latency_seconds", "LLM generation latency", buckets=LLM_LATENCY_BUCKETS
+# prometheus_client's own default histogram buckets -- OTel SDK's default
+# (5ms..10s floor at 5) is too coarse for sub-5s retrieval/rerank latencies.
+DEFAULT_LATENCY_BUCKETS = (
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.075,
+    0.1,
+    0.25,
+    0.5,
+    0.75,
+    1.0,
+    2.5,
+    5.0,
+    7.5,
+    10.0,
 )
 
-gen_ai_client_token_usage = Histogram(
-    "gen_ai_client_token_usage",
-    "Tokens used per LLM call, by token type",
-    ["gen_ai_token_type", "gen_ai_request_model"],
+cache_result_total = meter.create_counter(
+    "cache_result", description="Answer cache lookups by outcome"
 )
-gen_ai_client_operation_duration = Histogram(
-    "gen_ai_client_operation_duration",
-    "LLM client operation duration",
-    ["gen_ai_operation_name", "gen_ai_provider_name", "gen_ai_request_model"],
-    buckets=LLM_LATENCY_BUCKETS,
+citation_guardrail_total = meter.create_counter(
+    "citation_guardrail", description="Citation guardrail checks by outcome"
+)
+refusal_total = meter.create_counter(
+    "refusal", description="Answers refused by the pipeline"
 )
 
-ingest_job_total = Counter(
-    "ingest_job",
-    "Ingestion jobs processed by the worker, by outcome",
-    ["status"],
+retrieve_latency_seconds = meter.create_histogram(
+    "retrieve_latency",
+    unit="s",
+    description="Hybrid retrieval latency",
+    explicit_bucket_boundaries_advisory=DEFAULT_LATENCY_BUCKETS,
 )
-build_index_latency_seconds = Histogram(
-    "build_index_latency_seconds",
-    "Index build latency per ingestion job",
-    buckets=(1, 5, 10, 30, 60, 120, 300, 600),
+rerank_latency_seconds = meter.create_histogram(
+    "rerank_latency",
+    unit="s",
+    description="Reranking latency",
+    explicit_bucket_boundaries_advisory=DEFAULT_LATENCY_BUCKETS,
 )
-job_queue_depth = Gauge("job_queue_depth", "Pending jobs in the NATS JetStream consumer")
-worker_job_latency_seconds = Histogram(
-    "worker_job_latency_seconds",
-    "Time from job enqueue to completion",
-    buckets=(1, 5, 10, 30, 60, 120, 300, 600, 900, 1800),
+generate_latency_seconds = meter.create_histogram(
+    "generate_latency",
+    unit="s",
+    description="LLM generation latency",
+    explicit_bucket_boundaries_advisory=LLM_LATENCY_BUCKETS,
 )
 
+gen_ai_client_inference_duration = meter.create_histogram(
+    "gen_ai.client.inference.duration",
+    unit="s",
+    description="Duration of GenAI client inference operations",
+    explicit_bucket_boundaries_advisory=LLM_LATENCY_BUCKETS,
+)
+gen_ai_client_inference_usage_input_tokens = meter.create_counter(
+    "gen_ai.client.inference.usage.input_tokens",
+    unit="{token}",
+    description="Input tokens used per GenAI client inference operation",
+)
+gen_ai_client_inference_usage_output_tokens = meter.create_counter(
+    "gen_ai.client.inference.usage.output_tokens",
+    unit="{token}",
+    description="Output tokens used per GenAI client inference operation",
+)
 
-def trace_exemplar() -> dict[str, str]:
-    """Current span's trace ID as an exemplar label; empty when no valid span is active."""
-    ctx = trace.get_current_span().get_span_context()
-    if not ctx.is_valid:
-        return {}
-    return {"trace_id": format(ctx.trace_id, "032x")}
+ingest_job_total = meter.create_counter(
+    "ingest_job", description="Ingestion jobs processed by the worker, by outcome"
+)
+build_index_latency_seconds = meter.create_histogram(
+    "build_index_latency",
+    unit="s",
+    description="Index build latency per ingestion job",
+    explicit_bucket_boundaries_advisory=(1, 5, 10, 30, 60, 120, 300, 600),
+)
+job_queue_depth = meter.create_gauge(
+    "job_queue_depth", description="Pending jobs in the NATS JetStream consumer"
+)
+worker_job_latency_seconds = meter.create_histogram(
+    "worker_job_latency",
+    unit="s",
+    description="Time from job enqueue to completion",
+    explicit_bucket_boundaries_advisory=(1, 5, 10, 30, 60, 120, 300, 600, 900, 1800),
+)
