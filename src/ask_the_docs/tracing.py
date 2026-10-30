@@ -48,9 +48,14 @@ def configure_metrics(service_name: str, settings: Settings) -> None:
     global _metrics_configured
     if _metrics_configured:
         return
-    exporter = OTLPMetricExporter(endpoint=settings.otel_exporter_endpoint, insecure=True)
+    exporter = OTLPMetricExporter(
+        endpoint=settings.otel_exporter_endpoint, insecure=True
+    )
     reader = PeriodicExportingMetricReader(exporter)
-    provider = MeterProvider(resource=Resource.create({"service.name": service_name}), metric_readers=[reader])
+    provider = MeterProvider(
+        resource=Resource.create({"service.name": service_name}),
+        metric_readers=[reader],
+    )
     metrics.set_meter_provider(provider)
     _metrics_configured = True
 
