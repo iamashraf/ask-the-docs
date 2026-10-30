@@ -1,7 +1,15 @@
+import { classifyCitation } from "./citation";
+
 export type Message = {
   role: "user" | "assistant" | "error";
   text: string;
   citations?: string[];
+};
+
+const CITATION_ICON: Record<ReturnType<typeof classifyCitation>["kind"], string> = {
+  url: "🔗",
+  community: "🕸️",
+  file: "📄",
 };
 
 export function ChatMessage({ message }: { message: Message }) {
@@ -10,11 +18,33 @@ export function ChatMessage({ message }: { message: Message }) {
     <div className={`message message--${message.role}`} role={isError ? "alert" : undefined}>
       <p>{isError ? `Error: ${message.text}` : message.text}</p>
       {message.citations && message.citations.length > 0 && (
-        <ul className="message__citations">
-          {message.citations.map((citation) => (
-            <li key={citation}>{citation}</li>
-          ))}
-        </ul>
+        <div className="message__citations-wrap">
+          <p className="message__citations-label">Sources retrieved</p>
+          <ul className="message__citations">
+            {message.citations.map((citation) => {
+              const { kind, href } = classifyCitation(citation);
+              return (
+                <li key={citation} className={`citation citation--${kind}`}>
+                  <span className="citation__icon" aria-hidden="true">
+                    {CITATION_ICON[kind]}
+                  </span>
+                  {href ? (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="citation__label"
+                    >
+                      {citation}
+                    </a>
+                  ) : (
+                    <span className="citation__label">{citation}</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       )}
     </div>
   );

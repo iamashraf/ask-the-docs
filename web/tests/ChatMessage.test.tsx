@@ -40,4 +40,30 @@ describe("ChatMessage", () => {
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.getByText(/^Error:/)).toBeInTheDocument();
   });
+
+  test("renders a URL citation as a real, safe followable link", () => {
+    render(
+      <ChatMessage
+        message={{
+          role: "assistant",
+          text: "Answer text",
+          citations: ["https://arxiv.org/abs/2201.11903"],
+        }}
+      />,
+    );
+    const link = screen.getByRole("link", { name: "https://arxiv.org/abs/2201.11903" });
+    expect(link).toHaveAttribute("href", "https://arxiv.org/abs/2201.11903");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  });
+
+  test("renders a non-URL citation (file or community) as a plain label, not a link", () => {
+    render(
+      <ChatMessage
+        message={{ role: "assistant", text: "Answer text", citations: ["bm25.pdf"] }}
+      />,
+    );
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByText("bm25.pdf")).toBeInTheDocument();
+  });
 });
