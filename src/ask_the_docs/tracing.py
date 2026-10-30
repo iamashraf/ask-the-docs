@@ -1,6 +1,4 @@
-"""OpenTelemetry SDK setup -- one TracerProvider per process, exporting to
-Tempo over OTLP; mirrors the module-level singleton pattern jobs.py/
-queue.py use for their own connection config."""
+"""OpenTelemetry SDK setup for the trace/metric/log providers, exporting to the OTel Collector over OTLP."""
 
 import logging
 

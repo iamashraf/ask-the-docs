@@ -113,7 +113,7 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
             span.set_attribute("citation_guardrail_passed", passed)
             if passed:
                 logger.info(
-                    "Answer generated: model=%s, attempt=%d/%d, citations=%d",
+                    "Answer generated: model=%s, attempt=%d/%d, chunks=%d",
                     settings.generator.model,
                     attempt,
                     MAX_GENERATION_ATTEMPTS,

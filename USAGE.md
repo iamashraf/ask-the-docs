@@ -11,6 +11,12 @@ architecture.
 - An Anthropic API key, only if you plan to run `evaluate` (the judge
   defaults to Claude; the generator defaults to local Ollama, which needs
   no key).
+- The external `llm-observability` Docker/Podman network — `app`, `worker`,
+  and `web` join it, and Compose refuses to start them without it. Create
+  it once with `podman network create llm-observability`. To also collect
+  traces/metrics/logs, start the sibling `llm-observability` repo's stack
+  first (see its README's "Start" section); without it, the app runs
+  normally and the OTLP exporters just retry/warn.
 
 ## Setup (one-time)
 

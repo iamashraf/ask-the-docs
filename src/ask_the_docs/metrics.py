@@ -6,7 +6,7 @@ meter = metrics.get_meter("ask_the_docs")
 
 LLM_LATENCY_BUCKETS = (0.5, 1, 2.5, 5, 10, 20, 30, 60, 90, 120)
 # prometheus_client's own default histogram buckets -- OTel SDK's default
-# (5ms..10s floor at 5) is too coarse for sub-5s retrieval/rerank latencies.
+# (0, 5, 10, 25...) is too coarse for sub-5s retrieval/rerank latencies.
 DEFAULT_LATENCY_BUCKETS = (
     0.005,
     0.01,
