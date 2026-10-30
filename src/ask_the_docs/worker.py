@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 import nats
 from nats.js.api import ConsumerConfig
 from opentelemetry import propagate, trace
-from prometheus_client import start_http_server
 
 from ask_the_docs import metrics
 from ask_the_docs.config import Settings, get_settings
@@ -19,7 +18,7 @@ from ask_the_docs.index import build_index
 from ask_the_docs.ingest import dispatch, dispatch_all_under_docs_dir
 from ask_the_docs.jobs import get_async_cache_client, update_job
 from ask_the_docs.queue import INGEST_JOBS_STREAM, INGEST_JOBS_SUBJECT, ensure_stream
-from ask_the_docs.tracing import configure_tracing
+from ask_the_docs.tracing import configure_logging, configure_metrics, configure_tracing
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -41,9 +40,7 @@ def _observe_worker_job_latency(payload: dict) -> None:
         enqueued_dt = datetime.fromisoformat(enqueued_at)
     except (TypeError, ValueError):
         return
-    metrics.worker_job_latency_seconds.observe(
-        (datetime.now(UTC) - enqueued_dt).total_seconds(), exemplar=metrics.trace_exemplar()
-    )
+    metrics.worker_job_latency_seconds.record((datetime.now(UTC) - enqueued_dt).total_seconds())
 
 
 async def process_job(settings: Settings, payload: dict) -> None:
@@ -61,18 +58,16 @@ async def process_job(settings: Settings, payload: dict) -> None:
         if docs:
             build_start = time.monotonic()
             build_index(docs, settings)
-            metrics.build_index_latency_seconds.observe(
-                time.monotonic() - build_start, exemplar=metrics.trace_exemplar()
-            )
+            metrics.build_index_latency_seconds.record(time.monotonic() - build_start)
         result = {"documents_ingested": len(docs)}
         if kind == "index":
             result["files_found"] = file_count
         await update_job(client, job_id, status="done", result=result)
-        metrics.ingest_job_total.labels(status="success").inc()
+        metrics.ingest_job_total.add(1, {"status": "success"})
     except Exception as exc:
         logger.warning("Job %s failed: %s", job_id, exc, exc_info=True)
         await update_job(client, job_id, status="failed", error=str(exc))
-        metrics.ingest_job_total.labels(status="failure").inc()
+        metrics.ingest_job_total.add(1, {"status": "failure"})
     finally:
         _observe_worker_job_latency(payload)
 
@@ -122,14 +117,8 @@ async def _sample_queue_depth(js) -> None:
 
 async def run_worker(settings: Settings) -> None:
     configure_tracing("ask-the-docs-worker", settings)
-    try:
-        start_http_server(settings.metrics_port)
-    except Exception:
-        logger.warning(
-            "Metrics server failed to start on port %s; continuing without it",
-            settings.metrics_port,
-            exc_info=True,
-        )
+    configure_logging("ask-the-docs-worker", settings)
+    configure_metrics("ask-the-docs-worker", settings)
     nc = await nats.connect(settings.nats_url)
     js = nc.jetstream()
     await ensure_stream(js)

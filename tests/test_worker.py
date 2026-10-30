@@ -6,7 +6,6 @@ from unittest.mock import Mock
 
 import pytest
 from langchain_core.documents import Document
-from prometheus_client import REGISTRY
 
 from ask_the_docs import worker
 from ask_the_docs.config import ProviderConfig, Settings
@@ -18,6 +17,7 @@ from ask_the_docs.worker import (
     process_job,
     run_worker,
 )
+from tests.test_metrics import find_data_point, find_metric, get_metrics_data
 
 
 def make_settings() -> Settings:
@@ -36,6 +36,28 @@ class RecordingAsyncRedis:
 
     async def get(self, key):
         return None
+
+
+def _metric_point(name, **attributes):
+    """Looks up a recorded data point, tolerating one that doesn't exist yet."""
+    try:
+        metric = find_metric(get_metrics_data(), name)
+    except AssertionError:
+        return None
+    try:
+        return find_data_point(metric, **attributes)
+    except AssertionError:
+        return None
+
+
+def _counter_value(name, **attributes):
+    point = _metric_point(name, **attributes)
+    return point.value if point is not None else 0
+
+
+def _histogram_count(name, **attributes):
+    point = _metric_point(name, **attributes)
+    return point.count if point is not None else 0
 
 
 async def test_process_job_ingests_and_marks_done(monkeypatch):
@@ -128,11 +150,11 @@ async def test_process_job_increments_ingest_job_total_on_success(monkeypatch):
     monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
     monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
 
-    before = REGISTRY.get_sample_value("ingest_job_total", {"status": "success"}) or 0
+    before = _counter_value("ingest_job", status="success")
 
     await process_job(make_settings(), {"job_id": "job-5", "kind": "ingest", "source": "a.pdf"})
 
-    after = REGISTRY.get_sample_value("ingest_job_total", {"status": "success"})
+    after = _counter_value("ingest_job", status="success")
     assert after - before == 1.0
 
 
@@ -144,11 +166,11 @@ async def test_process_job_increments_ingest_job_total_on_failure(monkeypatch):
     monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
     monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
 
-    before = REGISTRY.get_sample_value("ingest_job_total", {"status": "failure"}) or 0
+    before = _counter_value("ingest_job", status="failure")
 
     await process_job(make_settings(), {"job_id": "job-6", "kind": "ingest", "source": "bad.pdf"})
 
-    after = REGISTRY.get_sample_value("ingest_job_total", {"status": "failure"})
+    after = _counter_value("ingest_job", status="failure")
     assert after - before == 1.0
 
 
@@ -159,11 +181,11 @@ async def test_process_job_observes_build_index_latency(monkeypatch):
     monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
     monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
 
-    before = REGISTRY.get_sample_value("build_index_latency_seconds_count") or 0
+    before = _histogram_count("build_index_latency")
 
     await process_job(make_settings(), {"job_id": "job-7", "kind": "ingest", "source": "a.pdf"})
 
-    after = REGISTRY.get_sample_value("build_index_latency_seconds_count")
+    after = _histogram_count("build_index_latency")
     assert after - before == 1.0
 
 
@@ -176,13 +198,13 @@ async def test_process_job_skips_latency_observation_when_enqueued_at_missing(mo
     monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
     monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
 
-    before = REGISTRY.get_sample_value("worker_job_latency_seconds_count") or 0
+    before = _histogram_count("worker_job_latency")
 
     payload = {"job_id": "job-8", "kind": "ingest", "source": "a.pdf"}
     assert "enqueued_at" not in payload
     await process_job(make_settings(), payload)  # must not raise
 
-    after = REGISTRY.get_sample_value("worker_job_latency_seconds_count")
+    after = _histogram_count("worker_job_latency")
     assert after == before
 
 
@@ -193,12 +215,12 @@ async def test_process_job_skips_latency_observation_when_enqueued_at_unparsable
     monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
     monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
 
-    before = REGISTRY.get_sample_value("worker_job_latency_seconds_count") or 0
+    before = _histogram_count("worker_job_latency")
 
     payload = {"job_id": "job-9", "kind": "ingest", "source": "a.pdf", "enqueued_at": "not-a-timestamp"}
     await process_job(make_settings(), payload)  # must not raise
 
-    after = REGISTRY.get_sample_value("worker_job_latency_seconds_count")
+    after = _histogram_count("worker_job_latency")
     assert after == before
 
 
@@ -209,7 +231,7 @@ async def test_process_job_observes_worker_job_latency_when_enqueued_at_present(
     monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
     monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
 
-    before = REGISTRY.get_sample_value("worker_job_latency_seconds_count") or 0
+    before = _histogram_count("worker_job_latency")
 
     payload = {
         "job_id": "job-10",
@@ -219,7 +241,7 @@ async def test_process_job_observes_worker_job_latency_when_enqueued_at_present(
     }
     await process_job(make_settings(), payload)
 
-    after = REGISTRY.get_sample_value("worker_job_latency_seconds_count")
+    after = _histogram_count("worker_job_latency")
     assert after - before == 1.0
 
 
@@ -328,7 +350,8 @@ async def test_consume_once_drops_an_unparseable_message_without_crashing(monkey
 
 async def test_run_worker_subscribes_with_a_generous_ack_wait(monkeypatch):
     monkeypatch.setattr("ask_the_docs.worker.configure_tracing", lambda service_name, settings: None)
-    monkeypatch.setattr(worker, "start_http_server", Mock())
+    monkeypatch.setattr("ask_the_docs.worker.configure_logging", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.worker.configure_metrics", lambda service_name, settings: None)
     calls = {}
 
     class FakeJetStream:
@@ -364,7 +387,8 @@ async def test_run_worker_configures_tracing(monkeypatch):
         "ask_the_docs.worker.configure_tracing",
         lambda service_name, settings: captured.setdefault("service_name", service_name),
     )
-    monkeypatch.setattr(worker, "start_http_server", Mock())
+    monkeypatch.setattr("ask_the_docs.worker.configure_logging", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.worker.configure_metrics", lambda service_name, settings: None)
 
     class FakeJetStream:
         async def add_stream(self, **kwargs):
@@ -388,8 +412,25 @@ async def test_run_worker_configures_tracing(monkeypatch):
     assert captured["service_name"] == "ask-the-docs-worker"
 
 
-def _stop_run_worker_after_subscribe(monkeypatch):
-    monkeypatch.setattr("ask_the_docs.worker.configure_tracing", lambda service_name, settings: None)
+async def test_run_worker_configures_logging_and_metrics(monkeypatch):
+    """configure_logging/configure_metrics must be wired in alongside
+    configure_tracing -- the worker emits logs and records metrics, so both
+    need their OTel providers set up before the loop starts. The call order
+    is pinned too, matching run_worker's configure_tracing/_logging/_metrics
+    sequence."""
+    order = []
+    monkeypatch.setattr(
+        "ask_the_docs.worker.configure_tracing",
+        lambda service_name, settings: order.append(("tracing", service_name)),
+    )
+    monkeypatch.setattr(
+        "ask_the_docs.worker.configure_logging",
+        lambda service_name, settings: order.append(("logging", service_name)),
+    )
+    monkeypatch.setattr(
+        "ask_the_docs.worker.configure_metrics",
+        lambda service_name, settings: order.append(("metrics", service_name)),
+    )
 
     class FakeJetStream:
         async def add_stream(self, **kwargs):
@@ -407,17 +448,14 @@ def _stop_run_worker_after_subscribe(monkeypatch):
 
     monkeypatch.setattr("ask_the_docs.worker.nats.connect", fake_connect)
 
-
-async def test_run_worker_starts_the_metrics_http_server(monkeypatch):
-    start_server = Mock()
-    monkeypatch.setattr(worker, "start_http_server", start_server)
-    _stop_run_worker_after_subscribe(monkeypatch)
-    settings = make_settings()
-
     with pytest.raises(asyncio.CancelledError):
-        await run_worker(settings)
+        await run_worker(make_settings())
 
-    start_server.assert_called_once_with(settings.metrics_port)
+    assert order == [
+        ("tracing", "ask-the-docs-worker"),
+        ("logging", "ask-the-docs-worker"),
+        ("metrics", "ask-the-docs-worker"),
+    ]
 
 
 class FakeJetStreamWithConsumerInfo:
@@ -438,7 +476,8 @@ async def test_sample_queue_depth_sets_gauge_from_consumer_info(monkeypatch):
 
     await _sample_queue_depth(js)
 
-    assert REGISTRY.get_sample_value("job_queue_depth") == 7
+    point = find_data_point(find_metric(get_metrics_data(), "job_queue_depth"))
+    assert point.value == 7
     assert js.calls == [(worker.INGEST_JOBS_STREAM, DURABLE_CONSUMER_NAME)]
 
 
@@ -451,13 +490,3 @@ async def test_sample_queue_depth_logs_and_continues_on_consumer_info_failure(mo
         await _sample_queue_depth(js)  # must not raise
 
     assert any("queue depth" in r.getMessage().lower() for r in caplog.records if r.levelno == logging.WARNING)
-
-
-async def test_run_worker_logs_and_continues_if_metrics_port_is_taken(monkeypatch, caplog):
-    monkeypatch.setattr(worker, "start_http_server", Mock(side_effect=OSError("port in use")))
-    _stop_run_worker_after_subscribe(monkeypatch)
-
-    with caplog.at_level(logging.WARNING, logger="ask_the_docs.worker"), pytest.raises(asyncio.CancelledError):
-        await run_worker(make_settings())  # must not raise OSError; loop still reaches subscribe
-
-    assert any("metrics" in r.getMessage().lower() for r in caplog.records if r.levelno == logging.WARNING)
