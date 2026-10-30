@@ -67,6 +67,69 @@ def test_load_docx_returns_empty_list_for_blank_document(tmp_path):
     assert load_docx(docx_path) == []
 
 
+def test_load_docx_keeps_heading_text_with_its_section(tmp_path):
+    docx_path = tmp_path / "policy.docx"
+    document = docx_module.Document()
+    document.add_heading("Refund Policy", level=1)
+    document.add_paragraph("Customers may request a refund within 30 days.")
+    document.save(str(docx_path))
+
+    docs = load_docx(docx_path)
+
+    assert any("Refund Policy" in doc.page_content for doc in docs)
+
+
+def test_load_docx_separates_sections_by_heading(tmp_path):
+    docx_path = tmp_path / "policy.docx"
+    document = docx_module.Document()
+    document.add_heading("Refund Policy", level=1)
+    document.add_paragraph("Refunds within 30 days.")
+    document.add_heading("Shipping Policy", level=1)
+    document.add_paragraph("Ships within 5 business days.")
+    document.save(str(docx_path))
+
+    docs = load_docx(docx_path)
+
+    refund_doc = next(doc for doc in docs if "Refunds within 30 days." in doc.page_content)
+    shipping_doc = next(doc for doc in docs if "Ships within 5 business days." in doc.page_content)
+    assert "Shipping Policy" not in refund_doc.page_content
+    assert "Refund Policy" not in shipping_doc.page_content
+    assert "Refund Policy" in refund_doc.page_content
+    assert "Shipping Policy" in shipping_doc.page_content
+
+
+def test_load_docx_without_headings_still_produces_one_document(tmp_path):
+    docx_path = tmp_path / "plain.docx"
+    document = docx_module.Document()
+    document.add_paragraph("Just a plain paragraph.")
+    document.add_paragraph("Another plain paragraph.")
+    document.save(str(docx_path))
+
+    docs = load_docx(docx_path)
+
+    assert len(docs) == 1
+    assert "Just a plain paragraph." in docs[0].page_content
+    assert "Another plain paragraph." in docs[0].page_content
+
+
+def test_load_docx_title_style_also_starts_a_new_section(tmp_path):
+    # python-docx's add_heading(level=0) uses the "Title" style, not
+    # "Heading N" -- must be recognized as a section boundary too, not
+    # silently folded into whatever group precedes it.
+    docx_path = tmp_path / "titled.docx"
+    document = docx_module.Document()
+    document.add_paragraph("Preamble paragraph.")
+    document.add_heading("Document Title", level=0)
+    document.add_paragraph("Body under the title.")
+    document.save(str(docx_path))
+
+    docs = load_docx(docx_path)
+
+    title_doc = next(doc for doc in docs if "Document Title" in doc.page_content)
+    assert "Preamble paragraph." not in title_doc.page_content
+    assert "Body under the title." in title_doc.page_content
+
+
 def test_load_url_fetches_and_parses_html(monkeypatch):
     _allow_public_host(monkeypatch)
     _patch_url_settings(monkeypatch)
