@@ -44,49 +44,6 @@ services:
       timeout: 5s
       retries: 10
 
-  tempo:
-    image: grafana/tempo:3.1.1
-    command: ["-target=all", "-config.file=/etc/tempo.yaml"]
-    volumes:
-      - ./tempo.yaml:/etc/tempo.yaml:ro
-    ports:
-      - "4317:4317"
-      - "4318:4318"
-
-  prometheus:
-    image: prom/prometheus:v3.15.1
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-      - "--enable-feature=exemplar-storage"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    ports:
-      - "9090:9090"
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/ready"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  grafana:
-    image: grafana/grafana:13.3.0
-    volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/etc/grafana/dashboards:ro
-    depends_on:
-      prometheus:
-        condition: service_healthy
-      tempo:
-        condition: service_started
-    ports:
-      - "3001:3000"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   neo4j:
     image: neo4j:5
     env_file:
@@ -117,8 +74,6 @@ services:
         condition: service_healthy
       nats:
         condition: service_healthy
-      tempo:
-        condition: service_started
     volumes:
       - ./data:/app/data
       - ./evals:/app/evals
@@ -136,6 +91,9 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - default
+      - llm-observability
 
   worker:
     image: localhost/ask-the-docs-app
@@ -148,8 +106,6 @@ services:
         condition: service_healthy
       nats:
         condition: service_healthy
-      tempo:
-        condition: service_started
     volumes:
       - ./data:/app/data
     env_file:
@@ -159,16 +115,16 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - default
+      - llm-observability
 
   web:
     image: localhost/ask-the-docs-web
     build: ./web
-    depends_on:
-      tempo:
-        condition: service_started
     environment:
       - BACKEND_URL=http://app:8000
-      - OTEL_EXPORTER_ENDPOINT=http://tempo:4318/v1/traces
+      - OTEL_EXPORTER_ENDPOINT=http://otel-collector:4318/v1/traces
     ports:
       - "3000:3000"
     logging:
@@ -176,6 +132,14 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - default
+      - llm-observability
+
+networks:
+  default: {}
+  llm-observability:
+    external: true
 
 volumes:
   ollama_data:
