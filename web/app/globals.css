@@ -107,6 +107,18 @@ a {
   font-size: 0.9rem;
 }
 
+.masthead nav a {
+  display: inline-block;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  text-decoration: none;
+}
+
+.masthead nav a:hover {
+  border-color: var(--accent);
+}
+
 .message-log {
   flex: 1;
   overflow-y: auto;
