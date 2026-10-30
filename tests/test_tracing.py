@@ -93,33 +93,43 @@ def test_configure_tracing_instruments_redis_and_requests(monkeypatch):
     assert set(instrumented) == {"redis", "requests"}
 
 
+class FakeMetricReader:
+    def __init__(self, exporter):
+        self.exporter = exporter
+
+
 class FakeMeterProvider:
     def __init__(self, resource=None, metric_readers=None):
         self.resource = resource
         self.metric_readers = metric_readers
 
 
-def _patch_metrics_sdk(monkeypatch, exporter_calls, provider_calls):
+def _patch_metrics_sdk(monkeypatch, exporter_calls, reader_calls, provider_calls):
     monkeypatch.setattr("ask_the_docs.tracing._metrics_configured", False)
     monkeypatch.setattr(
         "ask_the_docs.tracing.OTLPMetricExporter",
         lambda endpoint, insecure=True: exporter_calls.append(endpoint) or object(),
     )
-    monkeypatch.setattr(
-        "ask_the_docs.tracing.PeriodicExportingMetricReader", lambda exporter: object()
-    )
+
+    def fake_reader(exporter):
+        reader = FakeMetricReader(exporter)
+        reader_calls.append(reader)
+        return reader
+
+    monkeypatch.setattr("ask_the_docs.tracing.PeriodicExportingMetricReader", fake_reader)
 
     def fake_provider(resource=None, metric_readers=None):
-        provider_calls.append(resource)
-        return FakeMeterProvider(resource, metric_readers)
+        provider = FakeMeterProvider(resource, metric_readers)
+        provider_calls.append(provider)
+        return provider
 
     monkeypatch.setattr("ask_the_docs.tracing.MeterProvider", fake_provider)
     monkeypatch.setattr("ask_the_docs.tracing.metrics.set_meter_provider", lambda provider: None)
 
 
 def test_configure_metrics_sets_up_an_exporter_with_the_configured_endpoint(monkeypatch):
-    exporter_calls, provider_calls = [], []
-    _patch_metrics_sdk(monkeypatch, exporter_calls, provider_calls)
+    exporter_calls, reader_calls, provider_calls = [], [], []
+    _patch_metrics_sdk(monkeypatch, exporter_calls, reader_calls, provider_calls)
 
     configure_metrics("ask-the-docs-app", make_settings())
 
@@ -127,8 +137,8 @@ def test_configure_metrics_sets_up_an_exporter_with_the_configured_endpoint(monk
 
 
 def test_configure_metrics_sets_the_service_name_resource(monkeypatch):
-    exporter_calls, provider_calls = [], []
-    _patch_metrics_sdk(monkeypatch, exporter_calls, provider_calls)
+    exporter_calls, reader_calls, provider_calls = [], [], []
+    _patch_metrics_sdk(monkeypatch, exporter_calls, reader_calls, provider_calls)
     captured = {}
     monkeypatch.setattr(
         "ask_the_docs.tracing.Resource.create",
@@ -140,9 +150,20 @@ def test_configure_metrics_sets_the_service_name_resource(monkeypatch):
     assert captured["attrs"]["service.name"] == "ask-the-docs-worker"
 
 
+def test_configure_metrics_wires_the_reader_into_the_provider(monkeypatch):
+    """The reader must actually reach the provider, not just get created."""
+    exporter_calls, reader_calls, provider_calls = [], [], []
+    _patch_metrics_sdk(monkeypatch, exporter_calls, reader_calls, provider_calls)
+
+    configure_metrics("ask-the-docs-app", make_settings())
+
+    assert len(reader_calls) == 1
+    assert provider_calls[-1].metric_readers == [reader_calls[-1]]
+
+
 def test_configure_metrics_is_idempotent(monkeypatch):
-    exporter_calls, provider_calls = [], []
-    _patch_metrics_sdk(monkeypatch, exporter_calls, provider_calls)
+    exporter_calls, reader_calls, provider_calls = [], [], []
+    _patch_metrics_sdk(monkeypatch, exporter_calls, reader_calls, provider_calls)
 
     configure_metrics("ask-the-docs-app", make_settings())
     configure_metrics("ask-the-docs-app", make_settings())
@@ -227,4 +248,6 @@ def test_configure_logging_attaches_the_handler_to_its_own_logger_provider(monke
     configure_logging("ask-the-docs-app", make_settings())
 
     assert len(handler_calls) == 1
-    assert isinstance(handler_calls[0]["logger_provider"], FakeLoggerProvider)
+    handler_provider = handler_calls[0]["logger_provider"]
+    assert isinstance(handler_provider, FakeLoggerProvider)
+    assert len(handler_provider.processors) == 1
