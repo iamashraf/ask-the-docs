@@ -25,6 +25,8 @@ def make_settings() -> Settings:
 def test_startup_triggers_seeding(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
     monkeypatch.setattr("ask_the_docs.api.configure_tracing", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_logging", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_metrics", lambda service_name, settings: None)
     captured = {}
     monkeypatch.setattr(
         "ask_the_docs.api.seed_if_needed", lambda settings: captured.setdefault("called", True)
@@ -39,6 +41,8 @@ def test_startup_triggers_seeding(monkeypatch):
 def test_startup_configures_tracing(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
     monkeypatch.setattr("ask_the_docs.api.seed_if_needed", lambda settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_logging", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_metrics", lambda service_name, settings: None)
     captured = {}
     monkeypatch.setattr(
         "ask_the_docs.api.configure_tracing",
@@ -49,6 +53,36 @@ def test_startup_configures_tracing(monkeypatch):
         pass
 
     assert captured["service_name"] == "ask-the-docs-app"
+
+
+def test_startup_configures_logging_and_metrics_alongside_tracing(monkeypatch):
+    """lifespan must wire up configure_logging/configure_metrics alongside
+    configure_tracing -- the app emits logs and records metrics, so both
+    need their OTel providers set up before the app starts serving."""
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.seed_if_needed", lambda settings: None)
+    order = []
+    monkeypatch.setattr(
+        "ask_the_docs.api.configure_tracing",
+        lambda service_name, settings: order.append(("tracing", service_name)),
+    )
+    monkeypatch.setattr(
+        "ask_the_docs.api.configure_logging",
+        lambda service_name, settings: order.append(("logging", service_name)),
+    )
+    monkeypatch.setattr(
+        "ask_the_docs.api.configure_metrics",
+        lambda service_name, settings: order.append(("metrics", service_name)),
+    )
+
+    with TestClient(app):
+        pass
+
+    assert order == [
+        ("tracing", "ask-the-docs-app"),
+        ("logging", "ask-the-docs-app"),
+        ("metrics", "ask-the-docs-app"),
+    ]
 
 
 def test_health_returns_ok():
@@ -408,27 +442,6 @@ def test_package_logger_configured_for_info_with_a_handler():
     package_logger = logging.getLogger("ask_the_docs")
     assert package_logger.getEffectiveLevel() <= logging.INFO
     assert len(package_logger.handlers) >= 1
-
-
-def test_metrics_endpoint_returns_prometheus_text():
-    response = TestClient(app).get("/metrics")
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/plain")
-
-
-def test_metrics_endpoint_returns_openmetrics_with_exemplar_when_requested():
-    from ask_the_docs.metrics import generate_latency_seconds
-
-    generate_latency_seconds.observe(1.0, exemplar={"trace_id": "deadbeefdeadbeefdeadbeefdeadbeef"})
-
-    response = TestClient(app).get(
-        "/metrics",
-        headers={"Accept": "application/openmetrics-text; version=1.0.0; charset=utf-8"},
-    )
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/openmetrics-text")
-    assert "deadbeefdeadbeefdeadbeefdeadbeef" in response.text
 
 
 class _FakeAsyncRedisClient:
