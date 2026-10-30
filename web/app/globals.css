@@ -69,9 +69,19 @@ a {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  max-width: 680px;
+  max-width: 760px;
   margin: 0 auto;
   padding: 0 1rem;
+}
+
+@media (max-width: 480px) {
+  .app {
+    padding: 0 0.75rem;
+  }
+
+  .message {
+    max-width: 92%;
+  }
 }
 
 .masthead {
