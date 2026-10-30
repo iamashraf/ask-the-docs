@@ -111,6 +111,14 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
             text = result.text
             passed = citation_guardrail_passes(text, num_chunks=len(chunks))
             span.set_attribute("citation_guardrail_passed", passed)
+            if passed:
+                logger.info(
+                    "Answer generated: model=%s, attempt=%d/%d, citations=%d",
+                    settings.generator.model,
+                    attempt,
+                    MAX_GENERATION_ATTEMPTS,
+                    len(chunks),
+                )
         metrics.citation_guardrail_total.add(1, {"result": "pass" if passed else "fail"})
         if passed:
             citations = list(dict.fromkeys(chunk.metadata["source"] for chunk in chunks))

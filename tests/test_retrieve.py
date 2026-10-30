@@ -92,7 +92,7 @@ def test_retrieve_returns_empty_list_when_index_not_built(tmp_path, monkeypatch)
     assert retrieve("apples are red fruit", settings) == []
 
 
-def test_retrieve_returns_top_k_ordered_by_relevance(tmp_path, monkeypatch):
+def test_retrieve_returns_top_k_ordered_by_relevance(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
     monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda settings: FakeCache())
     settings = make_settings(tmp_path)
@@ -108,11 +108,13 @@ def test_retrieve_returns_top_k_ordered_by_relevance(tmp_path, monkeypatch):
     ]
     build_index(docs, settings)
 
+    caplog.set_level(logging.INFO, logger="ask_the_docs.retrieve")
     results = retrieve("apples are red fruit", settings, k=2)
 
     assert len(results) == 2
     assert results[0].page_content == "apples are red fruit"
     assert results[1].page_content == "bananas are yellow fruit"
+    assert any("Hybrid retrieve succeeded" in record.message for record in caplog.records)
 
 
 def test_hybrid_merge_keeps_vector_only_and_bm25_only_matches():
@@ -570,7 +572,7 @@ def test_retrieve_does_not_observe_rerank_latency_when_rerank_disabled(tmp_path,
     assert _histogram_count("rerank_latency") - before == 0.0
 
 
-def test_retrieve_observes_rerank_latency_when_rerank_enabled(tmp_path, monkeypatch):
+def test_retrieve_observes_rerank_latency_when_rerank_enabled(tmp_path, monkeypatch, caplog):
     _stub_hybrid_with_one_hit(monkeypatch)
 
     class PassThroughReranker:
@@ -581,7 +583,9 @@ def test_retrieve_observes_rerank_latency_when_rerank_enabled(tmp_path, monkeypa
     rerank_before = _histogram_count("rerank_latency")
     retrieve_before = _histogram_count("retrieve_latency")
 
+    caplog.set_level(logging.INFO, logger="ask_the_docs.retrieve")
     retrieve("a query", make_settings(tmp_path).model_copy(update={"rerank_enabled": True}), k=1)
 
     assert _histogram_count("rerank_latency") - rerank_before == 1.0
     assert _histogram_count("retrieve_latency") - retrieve_before == 1.0
+    assert any("Rerank succeeded" in record.message for record in caplog.records)

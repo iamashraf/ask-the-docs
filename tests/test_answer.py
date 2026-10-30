@@ -126,7 +126,7 @@ def test_answer_returns_refusal_message_without_calling_llm(monkeypatch):
     mock_get_llm_client.assert_not_called()
 
 
-def test_answer_calls_generator_with_context_and_returns_citations(monkeypatch):
+def test_answer_calls_generator_with_context_and_returns_citations(monkeypatch, caplog):
     chunks = [
         Document(page_content="chunk one", metadata={"source": "a.pdf"}),
         Document(page_content="chunk two", metadata={"source": "b.pdf"}),
@@ -142,6 +142,8 @@ def test_answer_calls_generator_with_context_and_returns_citations(monkeypatch):
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
 
+    caplog.set_level(logging.INFO, logger="ask_the_docs.answer")
+
     result = answer("What is X?", make_settings())
 
     assert result.text == "the answer [1][2]"
@@ -149,6 +151,7 @@ def test_answer_calls_generator_with_context_and_returns_citations(monkeypatch):
     assert "chunk one" in result.context
     assert "What is X?" in captured_prompts[0]
     assert "chunk one" in captured_prompts[0]
+    assert any("Answer generated" in record.message for record in caplog.records)
 
 
 def test_answer_dedupes_citations_preserving_order(monkeypatch):
