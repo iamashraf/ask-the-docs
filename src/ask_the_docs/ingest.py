@@ -117,43 +117,48 @@ def validate_url(url: str) -> str:
     return url
 
 
-def _extract_pdf_pages(reader, source: str) -> list[Document]:
-    """One Document per page; pages with no extractable text (e.g. scanned
-    images) are dropped rather than indexed as empty content. Shared by
+def _extract_pdf_markdown(doc, source: str) -> list[Document]:
+    """Converts the whole PDF to markdown (pymupdf4llm reconstructs headings
+    from font size/weight) so chunk_documents' header-aware splitter can be
+    reused instead of a separate PDF-specific one. A PDF with no extractable
+    text anywhere (e.g. fully scanned) produces no Document -- same "don't
+    index empty content" rule as before, now at whole-document granularity
+    rather than per-page, since no code reads per-page metadata. Shared by
     load_pdf (local file) and load_url (PDF served directly over HTTP)."""
-    source_doc_id = make_source_doc_id(source)
-    docs = []
-    for i, page in enumerate(reader.pages):
-        text = clean_text(page.extract_text() or "")
-        if not text.strip():
-            continue
-        docs.append(
-            Document(
-                page_content=text,
-                metadata={"source": source, "source_doc_id": source_doc_id, "page": i + 1},
-            )
-        )
-    return docs
+    import pymupdf4llm
 
-
-def load_pdf(path: Path) -> list[Document]:
-    from pypdf import PdfReader
-
-    return _extract_pdf_pages(PdfReader(str(path)), str(path))
-
-
-def load_text(path: Path) -> list[Document]:
-    """Loads a .txt/.md file as a single Document; empty/whitespace-only
-    files produce no Document."""
-    text = clean_text(path.read_text(encoding="utf-8"))
+    text = clean_text(pymupdf4llm.to_markdown(doc))
     if not text.strip():
         return []
     return [
         Document(
             page_content=text,
-            metadata={"source": str(path), "source_doc_id": make_source_doc_id(str(path))},
+            metadata={
+                "source": source,
+                "source_doc_id": make_source_doc_id(source),
+                "content_format": "markdown",
+            },
         )
     ]
+
+
+def load_pdf(path: Path) -> list[Document]:
+    import pymupdf
+
+    return _extract_pdf_markdown(pymupdf.open(str(path)), str(path))
+
+
+def load_text(path: Path) -> list[Document]:
+    """Loads a .txt/.md file as a single Document; empty/whitespace-only
+    files produce no Document. .md files are tagged content_format="markdown"
+    so chunk_documents routes them through header-aware splitting."""
+    text = clean_text(path.read_text(encoding="utf-8"))
+    if not text.strip():
+        return []
+    metadata = {"source": str(path), "source_doc_id": make_source_doc_id(str(path))}
+    if path.suffix.lower() == ".md":
+        metadata["content_format"] = "markdown"
+    return [Document(page_content=text, metadata=metadata)]
 
 
 def _is_docx_heading(style_name: str) -> bool:
@@ -196,10 +201,8 @@ def load_url(url: str, _redirects_followed: int = 0) -> list[Document]:
     Each redirect hop is re-validated through validate_url (an
     attacker-controlled redirect target is exactly as dangerous as the
     original URL)."""
-    import io
-
+    import pymupdf
     from bs4 import BeautifulSoup
-    from pypdf import PdfReader
 
     settings = get_settings()
     validate_url(url)
@@ -226,7 +229,7 @@ def load_url(url: str, _redirects_followed: int = 0) -> list[Document]:
     content = b"".join(chunks)
     content_type = response.headers.get("Content-Type", "")
     if "application/pdf" in content_type or url.lower().endswith(".pdf"):
-        return _extract_pdf_pages(PdfReader(io.BytesIO(content)), url)
+        return _extract_pdf_markdown(pymupdf.open(stream=content, filetype="pdf"), url)
 
     html = content.decode(response.encoding or "utf-8", errors="replace")
     soup = BeautifulSoup(html, "html.parser")

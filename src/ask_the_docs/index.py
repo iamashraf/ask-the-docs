@@ -100,13 +100,15 @@ def _split_markdown_document(doc: Document) -> list[Document]:
 def chunk_documents(docs: list[Document], embedding_model: str) -> list[Document]:
     """Splits docs into chunks and tags each with chunk_index/total_chunks
     (per source_doc_id), embedding_model, ingested_at, and content_hash.
-    Markdown sources are split header-first (see _split_markdown_document);
-    every other source type keeps today's plain char-based splitting."""
+    Documents tagged content_format="markdown" (.md sources, and PDFs
+    converted to markdown upstream) are split header-first (see
+    _split_markdown_document); every other source type keeps today's plain
+    char-based splitting."""
     source_hashes = _hash_sources(docs)
     generic_splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     chunks: list[Document] = []
     for doc in docs:
-        if doc.metadata.get("source", "").lower().endswith(".md"):
+        if doc.metadata.get("content_format") == "markdown":
             chunks.extend(_split_markdown_document(doc))
         else:
             chunks.extend(generic_splitter.split_documents([doc]))
