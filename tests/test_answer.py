@@ -5,7 +5,6 @@ from unittest.mock import Mock
 
 import pytest
 from langchain_core.documents import Document
-from prometheus_client import REGISTRY
 
 from ask_the_docs import metrics
 from ask_the_docs.answer import (
@@ -20,6 +19,7 @@ from ask_the_docs.answer import (
 from ask_the_docs.cache import make_cache_key
 from ask_the_docs.config import REFUSAL_MESSAGE, ProviderConfig, Settings
 from ask_the_docs.llm import GenerationResult
+from tests.test_metrics import find_data_point, find_metric, get_metrics_data
 
 
 def make_settings() -> Settings:
@@ -27,6 +27,28 @@ def make_settings() -> Settings:
         generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
         judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
     )
+
+
+def _find_point_or_none(name, **attributes):
+    """Looks up a recorded data point, tolerating one that doesn't exist yet."""
+    try:
+        metric = find_metric(get_metrics_data(), name)
+    except AssertionError:
+        return None
+    try:
+        return find_data_point(metric, **attributes)
+    except AssertionError:
+        return None
+
+
+def _counter_value(name, **attributes):
+    point = _find_point_or_none(name, **attributes)
+    return point.value if point is not None else 0
+
+
+def _histogram_count(name, **attributes):
+    point = _find_point_or_none(name, **attributes)
+    return point.count if point is not None else 0
 
 
 def test_format_context_includes_source_citation_markers():
@@ -288,6 +310,7 @@ def test_compute_answer_sets_gen_ai_span_attributes(monkeypatch):
     attrs = fake_tracer.spans[0].attrs
     assert attrs["gen_ai.request.model"] == settings.generator.model
     assert attrs["gen_ai.response.model"] == "llama3.1:8b-instruct-q4_K_M"
+    assert attrs["gen_ai.provider.name"] == settings.generator.provider
     assert attrs["gen_ai.usage.input_tokens"] == 12
     assert attrs["gen_ai.usage.output_tokens"] == 34
 
@@ -353,21 +376,21 @@ def test_compute_answer_increments_citation_guardrail_counter(monkeypatch):
             )
         ),
     )
-    before = REGISTRY.get_sample_value("citation_guardrail_total", {"result": "pass"}) or 0
+    before = _counter_value("citation_guardrail", result="pass")
 
     _compute_answer("What is X?", make_settings(), k=5)
 
-    after = REGISTRY.get_sample_value("citation_guardrail_total", {"result": "pass"})
+    after = _counter_value("citation_guardrail", result="pass")
     assert after - before == 1.0
 
 
 def test_compute_answer_increments_refusal_counter_when_no_chunks_retrieved(monkeypatch):
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: [])
-    before = REGISTRY.get_sample_value("refusal_total") or 0
+    before = _counter_value("refusal")
 
     _compute_answer("anything", make_settings(), k=5)
 
-    after = REGISTRY.get_sample_value("refusal_total")
+    after = _counter_value("refusal")
     assert after - before == 1.0
 
 
@@ -384,11 +407,11 @@ def test_compute_answer_increments_refusal_counter_when_guardrail_fails_after_re
             )
         ),
     )
-    before = REGISTRY.get_sample_value("refusal_total") or 0
+    before = _counter_value("refusal")
 
     _compute_answer("some question", make_settings(), k=5)
 
-    after = REGISTRY.get_sample_value("refusal_total")
+    after = _counter_value("refusal")
     assert after - before == 1.0
 
 
@@ -404,27 +427,23 @@ def test_compute_answer_observes_gen_ai_token_usage_and_duration_histograms(monk
             )
         ),
     )
-    input_labels = {"gen_ai_token_type": "input", "gen_ai_request_model": settings.generator.model}
-    output_labels = {"gen_ai_token_type": "output", "gen_ai_request_model": settings.generator.model}
-    duration_labels = {
-        "gen_ai_operation_name": "chat",
-        "gen_ai_provider_name": settings.generator.provider,
-        "gen_ai_request_model": settings.generator.model,
+    duration_attrs = {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": settings.generator.provider,
+        "gen_ai.request.model": settings.generator.model,
     }
-    before_input = REGISTRY.get_sample_value("gen_ai_client_token_usage_count", input_labels) or 0
-    before_output = REGISTRY.get_sample_value("gen_ai_client_token_usage_count", output_labels) or 0
-    before_duration = REGISTRY.get_sample_value("gen_ai_client_operation_duration_count", duration_labels) or 0
-    before_generate = REGISTRY.get_sample_value("generate_latency_seconds_count") or 0
+    usage_attrs = {**duration_attrs, "gen_ai.token.modality": "text"}
+    before_input = _counter_value("gen_ai.client.inference.usage.input_tokens", **usage_attrs)
+    before_output = _counter_value("gen_ai.client.inference.usage.output_tokens", **usage_attrs)
+    before_duration = _histogram_count("gen_ai.client.inference.duration", **duration_attrs)
+    before_generate = _histogram_count("generate_latency")
 
     _compute_answer("What is X?", settings, k=5)
 
-    assert REGISTRY.get_sample_value("gen_ai_client_token_usage_count", input_labels) - before_input == 1.0
-    assert REGISTRY.get_sample_value("gen_ai_client_token_usage_count", output_labels) - before_output == 1.0
-    assert (
-        REGISTRY.get_sample_value("gen_ai_client_operation_duration_count", duration_labels) - before_duration
-        == 1.0
-    )
-    assert REGISTRY.get_sample_value("generate_latency_seconds_count") - before_generate == 1.0
+    assert _counter_value("gen_ai.client.inference.usage.input_tokens", **usage_attrs) - before_input == 12
+    assert _counter_value("gen_ai.client.inference.usage.output_tokens", **usage_attrs) - before_output == 34
+    assert _histogram_count("gen_ai.client.inference.duration", **duration_attrs) - before_duration == 1
+    assert _histogram_count("generate_latency") - before_generate == 1
 
 
 def test_compute_answer_skips_token_usage_histogram_when_tokens_are_none(monkeypatch):
@@ -439,13 +458,18 @@ def test_compute_answer_skips_token_usage_histogram_when_tokens_are_none(monkeyp
             )
         ),
     )
-    input_labels = {"gen_ai_token_type": "input", "gen_ai_request_model": settings.generator.model}
-    before_input = REGISTRY.get_sample_value("gen_ai_client_token_usage_count", input_labels) or 0
+    usage_attrs = {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": settings.generator.provider,
+        "gen_ai.request.model": settings.generator.model,
+        "gen_ai.token.modality": "text",
+    }
+    before_input = _counter_value("gen_ai.client.inference.usage.input_tokens", **usage_attrs)
 
     result = _compute_answer("What is X?", settings, k=5)
 
     assert result.text == "the answer [1]"
-    assert (REGISTRY.get_sample_value("gen_ai_client_token_usage_count", input_labels) or 0) == before_input
+    assert _counter_value("gen_ai.client.inference.usage.input_tokens", **usage_attrs) == before_input
 
 
 def test_answer_logs_prompt_at_debug_level(monkeypatch, caplog):
@@ -496,14 +520,14 @@ def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
     mock_get_llm_client = Mock()
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", mock_get_llm_client)
 
-    before_hit = REGISTRY.get_sample_value("cache_result_total", {"result": "hit"}) or 0
+    before_hit = _counter_value("cache_result", result="hit")
 
     result = answer("What is X?", settings, k=5)
 
     assert result == cached_result
     mock_retrieve.assert_not_called()
     mock_get_llm_client.assert_not_called()
-    assert (REGISTRY.get_sample_value("cache_result_total", {"result": "hit"}) or 0) - before_hit == 1.0
+    assert _counter_value("cache_result", result="hit") - before_hit == 1.0
 
 
 def test_answer_increments_cache_miss_counter_on_cache_miss(monkeypatch):
@@ -517,11 +541,11 @@ def test_answer_increments_cache_miss_counter_on_cache_miss(monkeypatch):
             )
         ),
     )
-    before_miss = REGISTRY.get_sample_value("cache_result_total", {"result": "miss"}) or 0
+    before_miss = _counter_value("cache_result", result="miss")
 
     answer("a fresh question", make_settings(), k=5)
 
-    assert (REGISTRY.get_sample_value("cache_result_total", {"result": "miss"}) or 0) - before_miss == 1.0
+    assert _counter_value("cache_result", result="miss") - before_miss == 1.0
 
 
 def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
@@ -556,16 +580,16 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
     )
     fake_cache.set(key, b"not valid json")
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: fake_cache)
-    before_hit = REGISTRY.get_sample_value("cache_result_total", {"result": "hit"}) or 0
-    before_miss = REGISTRY.get_sample_value("cache_result_total", {"result": "miss"}) or 0
+    before_hit = _counter_value("cache_result", result="hit")
+    before_miss = _counter_value("cache_result", result="miss")
 
     result = answer("What is X?", make_settings(), k=5)
 
     assert result.text == "the answer [1]"
     # A corrupted cache value is treated as a miss, not a hit -- it was
     # never a usable AnswerResult to begin with.
-    assert (REGISTRY.get_sample_value("cache_result_total", {"result": "hit"}) or 0) - before_hit == 0
-    assert (REGISTRY.get_sample_value("cache_result_total", {"result": "miss"}) or 0) - before_miss == 1.0
+    assert _counter_value("cache_result", result="hit") - before_hit == 0
+    assert _counter_value("cache_result", result="miss") - before_miss == 1.0
 
 
 def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
