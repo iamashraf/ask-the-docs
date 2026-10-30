@@ -156,20 +156,36 @@ def load_text(path: Path) -> list[Document]:
     ]
 
 
+def _is_docx_heading(style_name: str) -> bool:
+    # "Heading 1".."Heading 9" from add_heading(level=1..9); "Title" from
+    # add_heading(level=0) -- python-docx's own built-in heading styles.
+    # Any other/custom style (including "Normal") is treated as body text.
+    return style_name.startswith("Heading") or style_name == "Title"
+
+
 def load_docx(path: Path) -> list[Document]:
-    """Loads a .docx file's paragraphs as a single Document."""
+    """Loads a .docx file as one Document per heading section, so a chunk
+    downstream keeps the heading it falls under instead of every paragraph
+    being flattened into one blob with no section boundaries."""
     import docx
 
     document = docx.Document(str(path))
-    text = clean_text("\n".join(p.text for p in document.paragraphs))
-    if not text.strip():
-        return []
-    return [
-        Document(
-            page_content=text,
-            metadata={"source": str(path), "source_doc_id": make_source_doc_id(str(path))},
-        )
-    ]
+    source = str(path)
+    source_doc_id = make_source_doc_id(source)
+
+    groups: list[list[str]] = [[]]
+    for paragraph in document.paragraphs:
+        if _is_docx_heading(paragraph.style.name) and groups[-1]:
+            groups.append([])
+        groups[-1].append(paragraph.text)
+
+    docs = []
+    for group in groups:
+        text = clean_text("\n".join(group))
+        if not text.strip():
+            continue
+        docs.append(Document(page_content=text, metadata={"source": source, "source_doc_id": source_doc_id}))
+    return docs
 
 
 def load_url(url: str, _redirects_followed: int = 0) -> list[Document]:
