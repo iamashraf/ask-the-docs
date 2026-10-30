@@ -1,4 +1,6 @@
+import ReactMarkdown from "react-markdown";
 import { classifyCitation } from "./citation";
+import { remarkCitationMarkers } from "./remarkCitationMarkers";
 
 export type Message = {
   role: "user" | "assistant" | "error";
@@ -14,9 +16,18 @@ const CITATION_ICON: Record<ReturnType<typeof classifyCitation>["kind"], string>
 
 export function ChatMessage({ message }: { message: Message }) {
   const isError = message.role === "error";
+  const isAssistant = message.role === "assistant";
   return (
     <div className={`message message--${message.role}`} role={isError ? "alert" : undefined}>
-      <p>{isError ? `Error: ${message.text}` : message.text}</p>
+      {isError ? (
+        <p>{`Error: ${message.text}`}</p>
+      ) : isAssistant ? (
+        <div className="message__markdown">
+          <ReactMarkdown remarkPlugins={[remarkCitationMarkers]}>{message.text}</ReactMarkdown>
+        </div>
+      ) : (
+        <p>{message.text}</p>
+      )}
       {message.citations && message.citations.length > 0 && (
         <div className="message__citations-wrap">
           <p className="message__citations-label">Sources retrieved</p>

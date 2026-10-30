@@ -57,6 +57,32 @@ describe("ChatMessage", () => {
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 
+  test("renders markdown in an assistant answer (lists, emphasis, code)", () => {
+    const { container } = render(
+      <ChatMessage
+        message={{
+          role: "assistant",
+          text: "Here is **bold** text:\n\n- one\n- two\n\n`inline code`",
+        }}
+      />,
+    );
+    expect(container.querySelector("strong")).toHaveTextContent("bold");
+    expect(container.querySelectorAll("li")).toHaveLength(2);
+    expect(container.querySelector("code")).toHaveTextContent("inline code");
+  });
+
+  test("renders an inline [n] citation marker as a styled, non-interactive chip", () => {
+    const { container } = render(
+      <ChatMessage
+        message={{ role: "assistant", text: "BM25 is a ranking function [1]." }}
+      />,
+    );
+    const marker = container.querySelector(".citation-marker");
+    expect(marker).not.toBeNull();
+    expect(marker?.tagName).toBe("SUP");
+    expect(marker).toHaveTextContent("[1]");
+  });
+
   test("renders a non-URL citation (file or community) as a plain label, not a link", () => {
     render(
       <ChatMessage
