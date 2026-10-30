@@ -112,6 +112,10 @@ a {
 
 .message p {
   margin: 0;
+}
+
+.message--user p,
+.message--error p {
   white-space: pre-wrap;
 }
 
@@ -135,6 +139,66 @@ a {
 .message--thinking p {
   color: var(--ink-muted);
   font-style: italic;
+}
+
+.message__markdown > :first-child {
+  margin-top: 0;
+}
+
+.message__markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.message__markdown p,
+.message__markdown ul,
+.message__markdown ol,
+.message__markdown pre,
+.message__markdown blockquote {
+  margin: 0 0 0.6rem;
+}
+
+.message__markdown ul,
+.message__markdown ol {
+  padding-left: 1.3rem;
+}
+
+.message__markdown li {
+  margin: 0.15rem 0;
+}
+
+.message__markdown code {
+  background: var(--code-bg);
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+.message__markdown pre {
+  background: var(--code-bg);
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.message__markdown pre code {
+  background: none;
+  padding: 0;
+}
+
+.message__markdown blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.message__markdown a {
+  color: var(--accent);
+}
+
+.citation-marker {
+  font-size: 0.75em;
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .empty-state {
