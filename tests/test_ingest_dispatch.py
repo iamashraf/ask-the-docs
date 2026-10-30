@@ -6,6 +6,7 @@ import pymupdf
 import pytest
 import requests
 
+from ask_the_docs.index import chunk_documents
 from ask_the_docs.ingest import (
     discover_sources,
     dispatch,
@@ -139,6 +140,23 @@ def test_load_docx_title_style_also_starts_a_new_section(tmp_path):
     title_doc = next(doc for doc in docs if "Document Title" in doc.page_content)
     assert "Preamble paragraph." not in title_doc.page_content
     assert "Body under the title." in title_doc.page_content
+
+
+def test_load_docx_heading_survives_in_every_chunk_of_a_long_section(tmp_path):
+    # A section long enough that chunk_documents' splitter must sub-split it
+    # into several chunks -- the heading must survive in all of them, not
+    # just whichever one happens to contain the heading line itself.
+    docx_path = tmp_path / "policy.docx"
+    document = docx_module.Document()
+    document.add_heading("Refund Policy", level=1)
+    document.add_paragraph("Customers may request a refund within 30 days of purchase, subject to conditions. " * 15)
+    document.save(str(docx_path))
+
+    docs = load_docx(docx_path)
+    chunks = chunk_documents(docs, embedding_model="m")
+
+    assert len(chunks) > 1
+    assert all("Refund Policy" in c.page_content for c in chunks)
 
 
 def test_load_url_fetches_and_parses_html(monkeypatch):
