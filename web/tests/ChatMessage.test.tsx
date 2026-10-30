@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
-import { ChatMessage } from "../components/ChatMessage";
+import { ChatMessage, REFUSAL_MESSAGE } from "../components/ChatMessage";
 
 describe("ChatMessage", () => {
   test("renders assistant text and citations", () => {
@@ -81,6 +81,23 @@ describe("ChatMessage", () => {
     expect(marker).not.toBeNull();
     expect(marker?.tagName).toBe("SUP");
     expect(marker).toHaveTextContent("[1]");
+  });
+
+  test("renders a refusal distinctly from a normal answer, with a link to add documents", () => {
+    const { container } = render(<ChatMessage message={{ role: "assistant", text: REFUSAL_MESSAGE }} />);
+    // Still a bona fide assistant message (the e2e suite and citation
+    // styling both key off .message--assistant) -- message--refusal is an
+    // additional modifier, not a replacement.
+    expect(container.querySelector(".message--assistant")).not.toBeNull();
+    expect(container.querySelector(".message--refusal")).not.toBeNull();
+    expect(screen.getByText(REFUSAL_MESSAGE)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /add documents/i })).toHaveAttribute("href", "/ingest");
+  });
+
+  test("renders a normal assistant answer without the refusal styling", () => {
+    const { container } = render(<ChatMessage message={{ role: "assistant", text: "A real answer." }} />);
+    expect(container.querySelector(".message--refusal")).toBeNull();
+    expect(screen.queryByRole("link", { name: /add documents/i })).not.toBeInTheDocument();
   });
 
   test("renders a non-URL citation (file or community) as a plain label, not a link", () => {

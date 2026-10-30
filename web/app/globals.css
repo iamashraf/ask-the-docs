@@ -136,6 +136,22 @@ a {
   border: 1px solid var(--error-border);
 }
 
+.message--refusal {
+  background: var(--refusal-bg);
+  border: 1px solid var(--refusal-border);
+  color: var(--refusal-ink);
+}
+
+.message__refusal-hint {
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+}
+
+.message__refusal-hint a {
+  color: var(--refusal-ink);
+  font-weight: 600;
+}
+
 .message--thinking p {
   color: var(--ink-muted);
   font-style: italic;
