@@ -8,12 +8,26 @@ export default function Page() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
+
+  // No backend signal exists for "which stage is this request in" --
+  // /v1/ask is one synchronous call -- so this is a deliberately honest
+  // indeterminate indicator (an elapsed-time counter) rather than a fake
+  // staged "Retrieving... / Generating..." sequence.
+  useEffect(() => {
+    if (!loading) {
+      setElapsedSeconds(0);
+      return;
+    }
+    const id = setInterval(() => setElapsedSeconds((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [loading]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView();
@@ -77,7 +91,10 @@ export default function Page() {
         ))}
         {loading && (
           <div className="message message--assistant message--thinking">
-            <p>Thinking…</p>
+            <p role="status">Thinking…</p>
+            <p className="message__elapsed" aria-hidden="true">
+              {elapsedSeconds}s
+            </p>
           </div>
         )}
         <div ref={bottomRef} />
