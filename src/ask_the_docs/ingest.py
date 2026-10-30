@@ -205,6 +205,41 @@ def load_docx(path: Path) -> list[Document]:
     return docs
 
 
+_HTML_HEADING_LEVELS = {"h1": 1, "h2": 2, "h3": 3, "h4": 4, "h5": 5, "h6": 6}
+
+
+def _html_to_markdown(soup) -> tuple[str, bool]:
+    """Walks the parsed tree in document order, rewriting heading tags as
+    markdown header lines (capped at level 3 to match
+    MARKDOWN_HEADERS_TO_SPLIT_ON in index.py) so chunk_documents' existing
+    header-aware splitter can keep a heading with its section. Returns
+    (markdown_text, found_any_heading) -- walking NavigableStrings rather
+    than tag.get_text() on each heading/paragraph avoids double-counting
+    text from nested inline tags (e.g. <h2><b>Policy</b></h2>)."""
+    from bs4 import NavigableString, Tag
+
+    lines = []
+    has_heading = False
+    for node in soup.descendants:
+        if isinstance(node, Tag) and node.name in _HTML_HEADING_LEVELS:
+            # separator=" ": a heading split across inline tags (e.g.
+            # "<b>Refund</b> Policy") would otherwise lose the word
+            # boundary between fragments (get_text(strip=True) alone
+            # strips each fragment before joining them with nothing).
+            heading_text = node.get_text(separator=" ", strip=True)
+            if heading_text:
+                level = min(_HTML_HEADING_LEVELS[node.name], 3)
+                lines.append(f"{'#' * level} {heading_text}")
+                has_heading = True
+        elif isinstance(node, NavigableString):
+            if node.find_parent(list(_HTML_HEADING_LEVELS) + ["script", "style"]) is not None:
+                continue
+            text = str(node).strip()
+            if text:
+                lines.append(text)
+    return "\n".join(lines), has_heading
+
+
 def load_url(url: str, _redirects_followed: int = 0) -> list[Document]:
     """Fetches a URL and extracts its content. PDFs served directly over
     HTTP (common for whitepapers, often with no .pdf suffix in the URL --
@@ -246,14 +281,16 @@ def load_url(url: str, _redirects_followed: int = 0) -> list[Document]:
     html = content.decode(response.encoding or "utf-8", errors="replace")
     soup = BeautifulSoup(html, "html.parser")
     title = soup.title.string.strip() if soup.title and soup.title.string else url
-    text = clean_text(soup.get_text(separator="\n", strip=True))
+    metadata = {"source": url, "source_doc_id": make_source_doc_id(url), "title": title}
 
-    return [
-        Document(
-            page_content=text,
-            metadata={"source": url, "source_doc_id": make_source_doc_id(url), "title": title},
-        )
-    ]
+    markdown_text, has_heading = _html_to_markdown(soup)
+    if has_heading:
+        text = clean_text(markdown_text)
+        metadata["content_format"] = "markdown"
+    else:
+        text = clean_text(soup.get_text(separator="\n", strip=True))
+
+    return [Document(page_content=text, metadata=metadata)]
 
 
 def load_path(path: Path) -> list[Document]:
