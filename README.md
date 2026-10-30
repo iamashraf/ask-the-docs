@@ -50,6 +50,13 @@ search, BM25, reranking, Graph RAG, ...) behind each stage.
 
 ## Quickstart
 
+`app`, `worker`, and `web` join an external `llm-observability` Docker/Podman
+network, and Compose refuses to start them without it. Create it once with
+`podman network create llm-observability`. To also collect traces/metrics/
+logs, start the sibling `llm-observability` repo's stack first (see its
+README's "Start" section); without it, the app runs normally and the OTLP
+exporters just retry/warn.
+
 ```bash
 git clone <this-repo> && cd ask-the-docs
 cp .env.example .env.local        # reference copy -> your local config
