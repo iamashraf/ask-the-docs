@@ -1,3 +1,4 @@
+import time
 import uuid
 
 import requests
@@ -36,3 +37,26 @@ def test_ask_refuses_a_question_unrelated_to_anything_ingested(base_url):
     assert response.status_code == 200
     assert body["answer"] == "I don't have enough information in the available documents to answer that."
     assert body["citations"] == []
+
+
+def test_ask_routes_greeting_to_chitchat_quickly(base_url):
+    started = time.monotonic()
+    response = requests.post(f"{base_url}/v1/ask", json={"query": "hi"}, timeout=60)
+    elapsed = time.monotonic() - started
+    body = response.json()
+    assert response.status_code == 200
+    assert body["kind"] == "chitchat"
+    assert body["citations"] == []
+    assert elapsed < 2
+
+
+def test_ask_answers_collection_question_from_index(base_url):
+    response = requests.post(
+        f"{base_url}/v1/ask",
+        json={"query": "what documents do you have?"},
+        timeout=60,
+    )
+    body = response.json()
+    assert response.status_code == 200
+    assert body["kind"] == "meta"
+    assert "arxiv.org/pdf/1706.03762" in body["answer"]

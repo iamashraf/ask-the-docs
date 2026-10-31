@@ -46,3 +46,21 @@ test("refuses a deliberately out-of-corpus question", async ({ page }) => {
   await page.getByRole("button", { name: /send/i }).click();
   await expect(page.getByText(REFUSAL_MESSAGE)).toBeVisible({ timeout: ANSWER_TIMEOUT });
 });
+
+test("answers a follow-up that depends on the previous turn", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("textbox").fill("What is the attention mechanism?");
+  await page.getByRole("button", { name: /send/i }).click();
+  await expect(page.locator(".message__citations li").first()).toBeVisible({
+    timeout: ANSWER_TIMEOUT,
+  });
+  await page.getByRole("textbox").fill("explain that more simply");
+  await page.getByRole("button", { name: /send/i }).click();
+  const replies = page.locator(".message--assistant:not(.message--thinking)");
+  await expect(replies).toHaveCount(2, { timeout: ANSWER_TIMEOUT });
+  const followUp = replies.last();
+  await expect(followUp).not.toContainText(REFUSAL_MESSAGE);
+  await expect(followUp.locator(".message__citations li").first()).toBeVisible({
+    timeout: ANSWER_TIMEOUT,
+  });
+});
