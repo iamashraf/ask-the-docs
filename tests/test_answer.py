@@ -11,19 +11,21 @@ from ask_the_docs.answer import (
     MAX_GENERATION_ATTEMPTS,
     STRUCTURED_SYSTEM_PROMPT_TEMPLATE,
     AnswerResult,
+    StructuredAnswer,
     _compute_answer,
     _structured_retry_feedback,
     answer,
     build_prompt,
     citation_guardrail_passes,
     format_context,
+    parse_structured_answer,
     structured_answer_passes,
 )
 from ask_the_docs.cache import make_cache_key
 from ask_the_docs.config import REFUSAL_MESSAGE, ProviderConfig, Settings
 from ask_the_docs.llm import (
     GenerationResult,
-    StructuredGenerationResult,
+    StructuredJSONResult,
     StructuredOutputError,
 )
 from ask_the_docs.retrieve import RetrievedChunks
@@ -157,8 +159,10 @@ def test_answer_calls_generator_with_context_and_returns_citations(monkeypatch, 
     class FakeClient:
         def generate_structured(self, prompt, schema, system=None):
             captured_prompts.append(prompt)
-            return StructuredGenerationResult(
-                grounded=True, answer="the answer [1][2]", citations=[1, 2], input_tokens=None, output_tokens=None
+            return StructuredJSONResult(
+                data={"grounded": True, "answer": "the answer [1][2]", "citations": [1, 2]},
+                input_tokens=None,
+                output_tokens=None,
             )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
@@ -186,10 +190,8 @@ def test_answer_dedupes_citations_preserving_order(monkeypatch):
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
             generate_structured=Mock(
-                return_value=StructuredGenerationResult(
-                    grounded=True,
-                    answer="the answer [1][2][3]",
-                    citations=[1, 2, 3],
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1][2][3]", "citations": [1, 2, 3]},
                     input_tokens=None,
                     output_tokens=None,
                 )
@@ -206,8 +208,10 @@ def test_answer_returns_refusal_message_when_guardrail_fails(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
     fake_generate = Mock(
-        return_value=StructuredGenerationResult(
-            grounded=False, answer="", citations=[], input_tokens=None, output_tokens=None
+        return_value=StructuredJSONResult(
+            data={"grounded": False, "answer": "", "citations": []},
+            input_tokens=None,
+            output_tokens=None,
         )
     )
     monkeypatch.setattr(
@@ -232,11 +236,15 @@ def test_answer_retries_once_when_first_attempt_fails_the_guardrail(monkeypatch)
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
     fake_generate = Mock(
         side_effect=[
-            StructuredGenerationResult(
-                grounded=False, answer="", citations=[], input_tokens=None, output_tokens=None
+            StructuredJSONResult(
+                data={"grounded": False, "answer": "", "citations": []},
+                input_tokens=None,
+                output_tokens=None,
             ),
-            StructuredGenerationResult(
-                grounded=True, answer="a grounded answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            StructuredJSONResult(
+                data={"grounded": True, "answer": "a grounded answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
             ),
         ]
     )
@@ -262,11 +270,15 @@ def test_answer_retry_includes_corrective_feedback_not_identical_prompt(monkeypa
     def fake_generate(prompt, schema, system=None):
         captured_prompts.append(prompt)
         if len(captured_prompts) == 1:
-            return StructuredGenerationResult(
-                grounded=False, answer="", citations=[], input_tokens=None, output_tokens=None
+            return StructuredJSONResult(
+                data={"grounded": False, "answer": "", "citations": []},
+                input_tokens=None,
+                output_tokens=None,
             )
-        return StructuredGenerationResult(
-            grounded=True, answer="a grounded answer [1]", citations=[1], input_tokens=None, output_tokens=None
+        return StructuredJSONResult(
+            data={"grounded": True, "answer": "a grounded answer [1]", "citations": [1]},
+            input_tokens=None,
+            output_tokens=None,
         )
 
     monkeypatch.setattr(
@@ -288,8 +300,10 @@ def test_answer_recovers_when_first_structured_reply_is_malformed_json(monkeypat
     fake_generate = Mock(
         side_effect=[
             StructuredOutputError("not valid json"),
-            StructuredGenerationResult(
-                grounded=True, answer="a grounded answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            StructuredJSONResult(
+                data={"grounded": True, "answer": "a grounded answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
             ),
         ]
     )
@@ -321,24 +335,16 @@ def test_answer_returns_refusal_when_every_structured_reply_is_malformed_json(mo
 
 def test_structured_retry_feedback_matches_the_failure_type():
     assert "not valid JSON" in _structured_retry_feedback(None)
-    ungrounded = StructuredGenerationResult(
-        grounded=False, answer="", citations=[], input_tokens=None, output_tokens=None
-    )
+    ungrounded = StructuredAnswer(grounded=False, answer="", citations=[])
     assert "did not contain the answer" in _structured_retry_feedback(ungrounded)
-    empty_answer = StructuredGenerationResult(
-        grounded=True, answer="   ", citations=[1], input_tokens=None, output_tokens=None
-    )
+    empty_answer = StructuredAnswer(grounded=True, answer="   ", citations=[1])
     assert "answer field was empty" in _structured_retry_feedback(empty_answer)
-    uncited = StructuredGenerationResult(
-        grounded=True, answer="a real answer", citations=[], input_tokens=None, output_tokens=None
-    )
+    uncited = StructuredAnswer(grounded=True, answer="a real answer", citations=[])
     assert "did not include valid citations" in _structured_retry_feedback(uncited)
 
 
 def test_structured_answer_passes_fails_on_blank_answer():
-    blank = StructuredGenerationResult(
-        grounded=True, answer="   ", citations=[1], input_tokens=None, output_tokens=None
-    )
+    blank = StructuredAnswer(grounded=True, answer="   ", citations=[1])
     assert structured_answer_passes(blank, num_chunks=3) is False
 
 
@@ -373,8 +379,10 @@ def test_compute_answer_records_the_guardrail_result_on_the_generate_span(monkey
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
             generate_structured=Mock(
-                return_value=StructuredGenerationResult(
-                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
                 )
             )
         ),
@@ -416,10 +424,8 @@ def test_compute_answer_sets_gen_ai_span_attributes(monkeypatch):
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
             generate_structured=Mock(
-                return_value=StructuredGenerationResult(
-                    grounded=True,
-                    answer="the answer [1]",
-                    citations=[1],
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
                     input_tokens=12,
                     output_tokens=34,
                     response_model="llama3.1:8b-instruct-q4_K_M",
@@ -473,8 +479,10 @@ def test_compute_answer_omits_usage_attributes_when_token_counts_are_none(monkey
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
             generate_structured=Mock(
-                return_value=StructuredGenerationResult(
-                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
                 )
             )
         ),
@@ -498,8 +506,10 @@ def test_compute_answer_increments_citation_guardrail_counter(monkeypatch):
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
             generate_structured=Mock(
-                return_value=StructuredGenerationResult(
-                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
                 )
             )
         ),
@@ -529,8 +539,10 @@ def test_compute_answer_increments_refusal_counter_when_guardrail_fails_after_re
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
             generate_structured=Mock(
-                return_value=StructuredGenerationResult(
-                    grounded=False, answer="", citations=[], input_tokens=None, output_tokens=None
+                return_value=StructuredJSONResult(
+                    data={"grounded": False, "answer": "", "citations": []},
+                    input_tokens=None,
+                    output_tokens=None,
                 )
             )
         ),
@@ -551,8 +563,10 @@ def test_compute_answer_observes_gen_ai_token_usage_and_duration_histograms(monk
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
             generate_structured=Mock(
-                return_value=StructuredGenerationResult(
-                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=12, output_tokens=34
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=12,
+                    output_tokens=34,
                 )
             )
         ),
@@ -584,8 +598,10 @@ def test_compute_answer_skips_token_usage_histogram_when_tokens_are_none(monkeyp
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
             generate_structured=Mock(
-                return_value=StructuredGenerationResult(
-                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
                 )
             )
         ),
@@ -611,8 +627,10 @@ def test_answer_logs_prompt_at_debug_level(monkeypatch, caplog):
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
             generate_structured=Mock(
-                return_value=StructuredGenerationResult(
-                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
                 )
             )
         ),
@@ -672,8 +690,10 @@ def test_answer_increments_cache_miss_counter_on_cache_miss(monkeypatch):
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
             generate_structured=Mock(
-                return_value=StructuredGenerationResult(
-                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
                 )
             )
         ),
@@ -692,8 +712,10 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
             generate_structured=Mock(
-                return_value=StructuredGenerationResult(
-                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
                 )
             )
         ),
@@ -744,8 +766,10 @@ def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
     class FakeClient:
         def generate_structured(self, prompt, schema, system=None):
             calls["count"] += 1
-            return StructuredGenerationResult(
-                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            return StructuredJSONResult(
+                data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
             )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
@@ -769,8 +793,10 @@ def test_answer_cache_key_changes_when_system_prompt_template_changes(monkeypatc
     class FakeClient:
         def generate_structured(self, prompt, schema, system=None):
             calls["count"] += 1
-            return StructuredGenerationResult(
-                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            return StructuredJSONResult(
+                data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
             )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
@@ -796,8 +822,10 @@ def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
     class FakeClient:
         def generate_structured(self, prompt, schema, system=None):
             calls["count"] += 1
-            return StructuredGenerationResult(
-                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            return StructuredJSONResult(
+                data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
             )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
@@ -831,8 +859,10 @@ def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field,
     class FakeClient:
         def generate_structured(self, prompt, schema, system=None):
             calls["count"] += 1
-            return StructuredGenerationResult(
-                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            return StructuredJSONResult(
+                data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
             )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
@@ -860,8 +890,10 @@ def test_answer_cache_key_changes_when_index_generation_changes(monkeypatch):
     class FakeClient:
         def generate_structured(self, prompt, schema, system=None):
             calls["count"] += 1
-            return StructuredGenerationResult(
-                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            return StructuredJSONResult(
+                data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
             )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
@@ -910,8 +942,10 @@ def test_compute_answer_builds_prompt_from_the_rewritten_search_query(monkeypatc
     class FakeClient:
         def generate_structured(self, prompt, schema, system=None):
             captured["prompt"] = prompt
-            return StructuredGenerationResult(
-                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            return StructuredJSONResult(
+                data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
             )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
@@ -935,8 +969,10 @@ def test_compute_answer_falls_back_to_raw_query_when_retrieve_returns_a_plain_li
     class FakeClient:
         def generate_structured(self, prompt, schema, system=None):
             captured["prompt"] = prompt
-            return StructuredGenerationResult(
-                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            return StructuredJSONResult(
+                data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
             )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
@@ -957,8 +993,10 @@ def test_answer_passes_structured_system_prompt_for_ollama(monkeypatch):
         def generate_structured(self, prompt, schema, system=None):
             captured["system"] = system
             captured["schema"] = schema
-            return StructuredGenerationResult(
-                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            return StructuredJSONResult(
+                data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
             )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
@@ -972,27 +1010,21 @@ def test_answer_passes_structured_system_prompt_for_ollama(monkeypatch):
 def test_structured_answer_passes_requires_grounded_and_citations():
     assert (
         structured_answer_passes(
-            StructuredGenerationResult(
-                grounded=True, answer="x", citations=[1], input_tokens=None, output_tokens=None
-            ),
+            StructuredAnswer(grounded=True, answer="x", citations=[1]),
             num_chunks=3,
         )
         is True
     )
     assert (
         structured_answer_passes(
-            StructuredGenerationResult(
-                grounded=False, answer="x", citations=[1], input_tokens=None, output_tokens=None
-            ),
+            StructuredAnswer(grounded=False, answer="x", citations=[1]),
             num_chunks=3,
         )
         is False
     )
     assert (
         structured_answer_passes(
-            StructuredGenerationResult(
-                grounded=True, answer="x", citations=[], input_tokens=None, output_tokens=None
-            ),
+            StructuredAnswer(grounded=True, answer="x", citations=[]),
             num_chunks=3,
         )
         is False
@@ -1000,9 +1032,7 @@ def test_structured_answer_passes_requires_grounded_and_citations():
 
 
 def test_structured_answer_passes_fails_on_out_of_range_citation():
-    result = StructuredGenerationResult(
-        grounded=True, answer="x", citations=[1, 9], input_tokens=None, output_tokens=None
-    )
+    result = StructuredAnswer(grounded=True, answer="x", citations=[1, 9])
     assert structured_answer_passes(result, num_chunks=3) is False
 
 
@@ -1047,3 +1077,19 @@ def test_answer_retries_freetext_provider_on_guardrail_failure_without_feedback(
 
     assert result.text == "a grounded answer [1]"
     assert captured_prompts[0] == captured_prompts[1]
+
+
+def test_parse_structured_answer_reads_fields():
+    parsed = parse_structured_answer({"grounded": 1, "answer": 42, "citations": ["1", 2]})
+
+    assert parsed == StructuredAnswer(grounded=True, answer="42", citations=[1, 2])
+
+
+def test_parse_structured_answer_raises_on_missing_field():
+    with pytest.raises(StructuredOutputError):
+        parse_structured_answer({"grounded": True, "answer": "x"})
+
+
+def test_parse_structured_answer_raises_on_non_integer_citation():
+    with pytest.raises(StructuredOutputError):
+        parse_structured_answer({"grounded": True, "answer": "x", "citations": ["a"]})

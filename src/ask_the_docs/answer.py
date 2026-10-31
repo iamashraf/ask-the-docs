@@ -15,7 +15,6 @@ from ask_the_docs.cache import cache_get, cache_set, get_cache_client, make_cach
 from ask_the_docs.config import REFUSAL_MESSAGE, Settings
 from ask_the_docs.index import get_index_generation
 from ask_the_docs.llm import (
-    StructuredGenerationResult,
     StructuredOutputError,
     get_llm_client,
 )
@@ -72,6 +71,25 @@ class AnswerResult:
     context: str = ""
 
 
+@dataclasses.dataclass
+class StructuredAnswer:
+    grounded: bool
+    answer: str
+    citations: list[int]
+
+
+def parse_structured_answer(data: dict) -> StructuredAnswer:
+    """Raises StructuredOutputError when a schema field is missing or ill-typed."""
+    try:
+        return StructuredAnswer(
+            grounded=bool(data["grounded"]),
+            answer=str(data["answer"]),
+            citations=[int(c) for c in data["citations"]],
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise StructuredOutputError(f"Ollama's response didn't match the requested schema: {data!r}") from exc
+
+
 def format_context(chunks: list[Document]) -> str:
     """Numbers each chunk with its source; [n] markers double as citation anchors."""
     return "\n\n".join(
@@ -103,14 +121,14 @@ def citation_guardrail_passes(answer_text: str, num_chunks: int) -> bool:
         return False
 
 
-def structured_answer_passes(result: StructuredGenerationResult, num_chunks: int) -> bool:
+def structured_answer_passes(result: StructuredAnswer, num_chunks: int) -> bool:
     """Structured-output counterpart to citation_guardrail_passes."""
     if not result.grounded or not result.citations or not result.answer.strip():
         return False
     return all(1 <= c <= num_chunks for c in result.citations)
 
 
-def _structured_retry_feedback(result: StructuredGenerationResult | None) -> str:
+def _structured_retry_feedback(result: StructuredAnswer | None) -> str:
     """Tells the model what was specifically wrong, instead of a blind resend."""
     if result is None:
         return "Your previous reply was not valid JSON. Reply again as JSON matching the schema exactly."
@@ -153,7 +171,7 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
     use_structured = settings.generator.provider == "ollama"
     system_prompt = STRUCTURED_SYSTEM_PROMPT_TEMPLATE if use_structured else settings.system_prompt_template
     logger.debug("LLM call -- system=%r, prompt=%r", system_prompt, prompt)
-    structured: StructuredGenerationResult | None = None
+    structured: StructuredAnswer | None = None
     feedback: str | None = None
 
     for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):
@@ -163,21 +181,21 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
 
             if use_structured:
                 try:
-                    structured = client.generate_structured(
-                        attempt_prompt, STRUCTURED_ANSWER_SCHEMA, system=system_prompt
-                    )
+                    raw = client.generate_structured(attempt_prompt, STRUCTURED_ANSWER_SCHEMA, system=system_prompt)
+                    structured = parse_structured_answer(raw.data)
                 except StructuredOutputError:
                     logger.warning(
                         "Ollama's structured response didn't parse (attempt %d/%d).",
                         attempt,
                         MAX_GENERATION_ATTEMPTS,
                     )
+                    raw = None
                     structured = None
                 passed = structured is not None and structured_answer_passes(structured, num_chunks=len(chunks))
                 text = structured.answer if structured is not None else ""
-                input_tokens = structured.input_tokens if structured is not None else None
-                output_tokens = structured.output_tokens if structured is not None else None
-                response_model = structured.response_model if structured is not None else None
+                input_tokens = raw.input_tokens if raw is not None else None
+                output_tokens = raw.output_tokens if raw is not None else None
+                response_model = raw.response_model if raw is not None else None
             else:
                 result = client.generate_with_usage(attempt_prompt, system=system_prompt)
                 text = result.text

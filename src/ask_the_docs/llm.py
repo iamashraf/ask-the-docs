@@ -38,12 +38,10 @@ class GenerationResult:
 
 
 @dataclasses.dataclass
-class StructuredGenerationResult:
-    """Parsed JSON from Ollama's schema-constrained output."""
+class StructuredJSONResult:
+    """Parsed JSON object from Ollama's schema-constrained output."""
 
-    grounded: bool
-    answer: str
-    citations: list[int]
+    data: dict
     input_tokens: int | None
     output_tokens: int | None
     response_model: str | None = None
@@ -100,7 +98,7 @@ class OllamaLLMClient:
 
     def generate_structured(
         self, prompt: str, schema: dict, system: str | None = None
-    ) -> StructuredGenerationResult:
+    ) -> StructuredJSONResult:
         """Like generate_with_usage, but constrains Ollama's output to `schema` via the `format` field."""
         messages = []
         if system is not None:
@@ -129,19 +127,17 @@ class OllamaLLMClient:
         body = response.json()
         raw_content = body["message"]["content"]
         try:
-            parsed = json.loads(raw_content)
-            return StructuredGenerationResult(
-                grounded=bool(parsed["grounded"]),
-                answer=str(parsed["answer"]),
-                citations=[int(c) for c in parsed["citations"]],
-                input_tokens=body.get("prompt_eval_count"),
-                output_tokens=body.get("eval_count"),
-                response_model=body.get("model"),
-            )
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            raise StructuredOutputError(
-                f"Ollama's response didn't match the requested schema: {raw_content!r}"
-            ) from exc
+            data = json.loads(raw_content)
+        except json.JSONDecodeError:
+            data = None
+        if not isinstance(data, dict):
+            raise StructuredOutputError(f"Ollama's response wasn't a JSON object: {raw_content!r}")
+        return StructuredJSONResult(
+            data=data,
+            input_tokens=body.get("prompt_eval_count"),
+            output_tokens=body.get("eval_count"),
+            response_model=body.get("model"),
+        )
 
 
 class AnthropicLLMClient:

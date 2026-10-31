@@ -12,7 +12,7 @@ from ask_the_docs.llm import (
     OllamaLLMClient,
     OllamaUnavailableError,
     OpenAILLMClient,
-    StructuredGenerationResult,
+    StructuredJSONResult,
     StructuredOutputError,
     get_llm_client,
 )
@@ -377,10 +377,8 @@ def test_ollama_generate_structured_sends_format_schema_and_parses_response(monk
     assert captured["json"]["format"] == STRUCTURED_SCHEMA
     assert captured["json"]["messages"][0] == {"role": "system", "content": "be grounded"}
     assert captured["json"]["messages"][1] == {"role": "user", "content": "prompt"}
-    assert result == StructuredGenerationResult(
-        grounded=True,
-        answer="the answer [1]",
-        citations=[1],
+    assert result == StructuredJSONResult(
+        data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
         input_tokens=12,
         output_tokens=34,
         response_model="llama3.1:8b-instruct-q4_K_M",
@@ -420,8 +418,22 @@ def test_ollama_generate_structured_raises_on_malformed_json(monkeypatch):
         client.generate_structured("prompt", STRUCTURED_SCHEMA)
 
 
-def test_ollama_generate_structured_raises_when_required_field_missing(monkeypatch):
-    content = json.dumps({"grounded": True, "answer": "x"})
+def test_ollama_generate_structured_raises_when_content_is_not_an_object(monkeypatch):
+    def fake_post(url, json, timeout):
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"message": {"content": "[1, 2]"}},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    with pytest.raises(StructuredOutputError):
+        client.generate_structured("prompt", STRUCTURED_SCHEMA)
+
+
+def test_ollama_generate_structured_returns_arbitrary_schema_objects(monkeypatch):
+    content = json.dumps({"intent": "doc", "standalone_query": "q", "reply": ""})
 
     def fake_post(url, json, timeout):
         return SimpleNamespace(
@@ -432,8 +444,9 @@ def test_ollama_generate_structured_raises_when_required_field_missing(monkeypat
     monkeypatch.setattr(requests, "post", fake_post)
 
     client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
-    with pytest.raises(StructuredOutputError):
-        client.generate_structured("prompt", STRUCTURED_SCHEMA)
+    result = client.generate_structured("prompt", {"type": "object"})
+
+    assert result.data == {"intent": "doc", "standalone_query": "q", "reply": ""}
 
 
 def test_ollama_generate_structured_raises_clear_error_on_connection_failure(monkeypatch):
