@@ -90,7 +90,7 @@ def test_run_evaluation_skips_judge_for_expected_refusal_question_that_correctly
     monkeypatch.setattr(
         "ask_the_docs.evaluate.answer",
         lambda query, settings, history=None, use_cache=True: AnswerResult(
-            text=REFUSAL_MESSAGE, citations=[], context=""
+            text=REFUSAL_MESSAGE, citations=[], context="", kind="refusal"
         ),
     )
     mock_get_llm_client = Mock()

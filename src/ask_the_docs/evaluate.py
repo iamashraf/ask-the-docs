@@ -11,7 +11,7 @@ from typing import Literal
 import yaml
 
 from ask_the_docs.answer import answer
-from ask_the_docs.config import REFUSAL_MESSAGE, Settings
+from ask_the_docs.config import Settings
 from ask_the_docs.llm import LLMClient, get_llm_client
 from ask_the_docs.router import Turn
 
@@ -126,7 +126,7 @@ def run_evaluation(settings: Settings, questions_path: Path) -> list[EvalResult]
                 score = None
                 error = f"latency {latency:.3f}s exceeded max {golden.max_latency_seconds}s"
             elif golden.expected_refusal:
-                if result.text == REFUSAL_MESSAGE:
+                if result.kind == "refusal":
                     score = JudgeScore(1.0, 1.0, 1.0, 1.0, "correctly refused, as expected")
                     error = None
                 else:
