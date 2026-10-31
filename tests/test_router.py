@@ -1,17 +1,29 @@
+import logging
+from unittest.mock import Mock
+
 import pytest
 from pydantic import ValidationError
 
+from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.llm import GenerationResult, StructuredJSONResult, StructuredOutputError
 from ask_the_docs.router import (
+    ANALYZE_SCHEMA,
+    ANALYZE_SYSTEM_PROMPT,
     GOODBYE_REPLY,
     GREETING_REPLY,
     META_CAPABILITY_SENTENCE,
     NO_DOCUMENTS_SENTENCE,
     THANKS_REPLY,
+    Route,
     Turn,
+    analyze,
+    build_analyze_prompt,
     build_meta_reply,
     match_smalltalk,
+    route,
     trim_history,
 )
+from tests.test_metrics import find_data_point, find_metric, get_metrics_data
 
 
 @pytest.mark.parametrize(
@@ -124,3 +136,184 @@ def test_build_meta_reply_singular_for_one_source():
     reply = build_meta_reply(["a.pdf"])
     assert "1 document" in reply
     assert "1 documents" not in reply
+
+
+def make_settings(provider="ollama", model="llama3.1:8b", **overrides) -> Settings:
+    return Settings(
+        generator=ProviderConfig(provider=provider, model=model, api_key=None if provider == "ollama" else "x"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+        **overrides,
+    )
+
+
+class FakeStructuredClient:
+    """Simulates OllamaLLMClient.generate_structured, including raising on request."""
+
+    def __init__(self, data=None, error=None):
+        self.data = data
+        self.error = error
+        self.captured_prompt = None
+        self.captured_schema = None
+        self.captured_system = None
+
+    def generate_structured(self, prompt, schema, system=None):
+        self.captured_prompt = prompt
+        self.captured_schema = schema
+        self.captured_system = system
+        if self.error is not None:
+            raise self.error
+        return StructuredJSONResult(data=self.data, input_tokens=5, output_tokens=7, response_model="fake-model")
+
+
+class FakeTextClient:
+    """Simulates a hosted provider's generate_with_usage, returning free text."""
+
+    def __init__(self, text):
+        self.text = text
+        self.captured_prompt = None
+        self.captured_system = None
+
+    def generate_with_usage(self, prompt, system=None):
+        self.captured_prompt = prompt
+        self.captured_system = system
+        return GenerationResult(text=self.text, input_tokens=5, output_tokens=7, response_model="fake-model")
+
+
+def _counter_value(name, **attributes):
+    try:
+        metric = find_metric(get_metrics_data(), name)
+        return find_data_point(metric, **attributes).value
+    except AssertionError:
+        return 0
+
+
+def test_build_analyze_prompt_without_history():
+    assert build_analyze_prompt("what is LoRA?", []) == "Latest user message: what is LoRA?"
+
+
+def test_build_analyze_prompt_with_history():
+    history = [
+        Turn(role="user", content="what is attention?"),
+        Turn(role="assistant", content="Attention weighs tokens [1]."),
+    ]
+    expected = (
+        "Conversation so far:\n"
+        "user: what is attention?\n"
+        "assistant: Attention weighs tokens [1].\n"
+        "\n"
+        "Latest user message: explain that more simply"
+    )
+    assert build_analyze_prompt("explain that more simply", history) == expected
+
+
+def test_analyze_ollama_uses_structured_output(monkeypatch):
+    fake_client = FakeStructuredClient(
+        data={"intent": "doc", "standalone_query": "LoRA low-rank adaptation", "reply": ""}
+    )
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", lambda _: fake_client)
+
+    result = analyze("what is LoRA?", [], make_settings())
+
+    assert result == Route("doc", "LoRA low-rank adaptation", "", "llm")
+    assert fake_client.captured_schema == ANALYZE_SCHEMA
+    assert fake_client.captured_system == ANALYZE_SYSTEM_PROMPT
+
+
+def test_analyze_hosted_provider_parses_fenced_json(monkeypatch):
+    text = '```json\n{"intent": "doc", "standalone_query": "LoRA low-rank adaptation", "reply": ""}\n```'
+    fake_client = FakeTextClient(text)
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", lambda _: fake_client)
+
+    result = analyze("what is LoRA?", [], make_settings(provider="anthropic", model="claude-sonnet-5-5"))
+
+    assert result == Route("doc", "LoRA low-rank adaptation", "", "llm")
+    assert fake_client.captured_system == ANALYZE_SYSTEM_PROMPT
+
+
+def test_analyze_normalizes_intent_casing(monkeypatch):
+    fake_client = FakeStructuredClient(data={"intent": " DOC ", "standalone_query": "q", "reply": ""})
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", lambda _: fake_client)
+
+    result = analyze("q", [], make_settings())
+
+    assert result.intent == "doc"
+
+
+def test_route_rules_hit_skips_llm(monkeypatch):
+    mock_get_client = Mock()
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", mock_get_client)
+
+    result = route("hi", None, make_settings())
+
+    assert result == Route("chitchat", "", GREETING_REPLY, "rules")
+    mock_get_client.assert_not_called()
+
+
+def test_route_disabled_skips_llm(monkeypatch):
+    mock_get_client = Mock()
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", mock_get_client)
+
+    result = route("what is LoRA?", None, make_settings(query_rewrite_enabled=False))
+
+    assert result == Route("doc", "what is LoRA?", "", "disabled")
+    mock_get_client.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("data", "error"),
+    [
+        (None, RuntimeError("boom")),
+        (None, StructuredOutputError("bad json")),
+        ({"intent": "weather", "standalone_query": "q", "reply": ""}, None),
+        ({"intent": "doc", "standalone_query": 123, "reply": ""}, None),
+    ],
+)
+def test_route_falls_back_to_doc(monkeypatch, caplog, data, error):
+    fake_client = FakeStructuredClient(data=data, error=error)
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", lambda _: fake_client)
+
+    with caplog.at_level(logging.WARNING, logger="ask_the_docs.router"):
+        result = route("what is LoRA?", None, make_settings())
+
+    assert result == Route("doc", "what is LoRA?", "", "fallback")
+    assert any(record.levelname == "WARNING" for record in caplog.records)
+
+
+def test_route_chitchat_with_empty_reply_uses_canned_reply(monkeypatch):
+    fake_client = FakeStructuredClient(data={"intent": "chitchat", "standalone_query": "", "reply": ""})
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", lambda _: fake_client)
+
+    result = route("tell me a joke", None, make_settings())
+
+    assert result == Route("chitchat", "", GREETING_REPLY, "llm")
+
+
+def test_route_doc_with_empty_standalone_query_uses_raw_query(monkeypatch):
+    fake_client = FakeStructuredClient(data={"intent": "doc", "standalone_query": "", "reply": ""})
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", lambda _: fake_client)
+
+    result = route("explain that more simply", None, make_settings())
+
+    assert result == Route("doc", "explain that more simply", "", "llm")
+
+
+def test_route_trims_history_before_analyze(monkeypatch):
+    fake_client = FakeStructuredClient(data={"intent": "doc", "standalone_query": "q", "reply": ""})
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", lambda _: fake_client)
+    history = _make_turns(8)
+
+    route("explain that more simply", history, make_settings(history_max_turns=6))
+
+    assert "turn 0" not in fake_client.captured_prompt
+    assert "turn 1" not in fake_client.captured_prompt
+    assert "turn 2" in fake_client.captured_prompt
+    assert "turn 7" in fake_client.captured_prompt
+
+
+def test_route_increments_route_counter(monkeypatch):
+    before = _counter_value("route", intent="chitchat", source="rules")
+
+    route("hi", None, make_settings())
+
+    after = _counter_value("route", intent="chitchat", source="rules")
+    assert after - before == 1

@@ -33,6 +33,9 @@ citation_guardrail_total = meter.create_counter(
 refusal_total = meter.create_counter(
     "refusal", description="Answers refused by the pipeline"
 )
+route_total = meter.create_counter(
+    "route", description="Routing decisions by intent and source"
+)
 
 retrieve_latency_seconds = meter.create_histogram(
     "retrieve_latency",
