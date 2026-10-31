@@ -1,6 +1,7 @@
 """Command-line entry point: ingest, index, ask, evaluate."""
 
 import argparse
+import sys
 from pathlib import Path
 
 import uvicorn
@@ -11,8 +12,10 @@ from ask_the_docs.config import Settings, get_settings
 from ask_the_docs.evaluate import run_evaluation, summarize
 from ask_the_docs.index import build_index
 from ask_the_docs.ingest import dispatch, dispatch_all_under_docs_dir
+from ask_the_docs.routing_eval import routing_report, run_routing_eval
 
 GOLDEN_QUESTIONS_PATH = Path("evals/golden_questions.yaml")
+ROUTING_CASES_PATH = Path("evals/routing_cases.yaml")
 
 
 def _ingest(args: argparse.Namespace, settings) -> None:
@@ -82,6 +85,13 @@ def _evaluate(args: argparse.Namespace, settings) -> None:
     )
 
 
+def _eval_routing(args: argparse.Namespace, settings) -> None:
+    results = run_routing_eval(settings, args.cases)
+    print(routing_report(results))
+    if any(result.critical for result in results):
+        sys.exit(1)
+
+
 def _serve(args: argparse.Namespace, settings) -> None:
     uvicorn.run(api_app, host="0.0.0.0", port=8000, log_level="info")
 
@@ -127,6 +137,12 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_parser.add_argument("--query-rewrite", choices=["true", "false"], default=None)
     evaluate_parser.add_argument("--graph", choices=["true", "false"], default=None)
     evaluate_parser.set_defaults(func=_evaluate)
+
+    eval_routing_parser = subparsers.add_parser(
+        "eval-routing", help="Run the labeled routing case set through route() and report accuracy"
+    )
+    eval_routing_parser.add_argument("--cases", type=Path, default=ROUTING_CASES_PATH)
+    eval_routing_parser.set_defaults(func=_eval_routing)
 
     serve_parser = subparsers.add_parser("serve", help="Run the long-running HTTP API server")
     serve_parser.set_defaults(func=_serve)

@@ -5,6 +5,7 @@ from ask_the_docs.answer import AnswerResult
 from ask_the_docs.cli import build_parser
 from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.evaluate import EvalResult, JudgeScore
+from ask_the_docs.routing_eval import RoutingCase, RoutingResult
 
 
 def make_settings(**overrides) -> Settings:
@@ -195,6 +196,70 @@ def test_evaluate_combines_multiple_overrides_in_one_call(monkeypatch):
     args.func(args, make_settings())
 
     assert captured_settings == {"backend": "huggingface", "alpha": 0.8, "rerank": False, "rewrite": False}
+
+
+def test_eval_routing_prints_report(capsys, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.cli.run_routing_eval", lambda settings, cases: [])
+
+    parser = build_parser()
+    args = parser.parse_args(["eval-routing"])
+    args.func(args, make_settings())
+
+    assert "critical: 0" in capsys.readouterr().out
+
+
+def test_eval_routing_exits_1_when_a_result_is_critical(monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.cli.run_routing_eval",
+        lambda settings, cases: [
+            RoutingResult(
+                case=RoutingCase(input="what is LoRA?", expected_intent="doc", category="doc"),
+                actual_intent="chitchat",
+                source="llm",
+                critical=True,
+            )
+        ],
+    )
+
+    parser = build_parser()
+    args = parser.parse_args(["eval-routing"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        args.func(args, make_settings())
+    assert exc_info.value.code == 1
+
+
+def test_eval_routing_does_not_exit_without_a_critical_result(monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.cli.run_routing_eval",
+        lambda settings, cases: [
+            RoutingResult(
+                case=RoutingCase(input="thanks!", expected_intent="chitchat", category="chitchat"),
+                actual_intent="chitchat",
+                source="rules",
+                critical=False,
+            )
+        ],
+    )
+
+    parser = build_parser()
+    args = parser.parse_args(["eval-routing"])
+
+    args.func(args, make_settings())  # does not raise SystemExit
+
+
+def test_eval_routing_passes_custom_cases_path(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "ask_the_docs.cli.run_routing_eval",
+        lambda settings, cases: captured.setdefault("cases", cases) and [],
+    )
+
+    parser = build_parser()
+    args = parser.parse_args(["eval-routing", "--cases", "custom/cases.yaml"])
+    args.func(args, make_settings())
+
+    assert str(captured["cases"]) == "custom/cases.yaml"
 
 
 def test_serve_starts_uvicorn(monkeypatch):
