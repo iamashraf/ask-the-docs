@@ -187,6 +187,16 @@ def _counter_value(name, **attributes):
         return 0
 
 
+def _histogram_count(name, **attributes):
+    """Reads the running count for a histogram data point; cumulative across the test session, so
+    callers compare a before/after delta (mirrors the helper in tests/test_query_analyzer.py)."""
+    try:
+        metric = find_metric(get_metrics_data(), name)
+        return find_data_point(metric, **attributes).count
+    except AssertionError:
+        return 0
+
+
 def test_build_analyze_prompt_without_history():
     assert build_analyze_prompt("what is LoRA?", []) == "Latest user message: what is LoRA?"
 
@@ -308,6 +318,26 @@ def test_route_trims_history_before_analyze(monkeypatch):
     assert "turn 1" not in fake_client.captured_prompt
     assert "turn 2" in fake_client.captured_prompt
     assert "turn 7" in fake_client.captured_prompt
+
+
+def test_route_records_gen_ai_metrics_on_hosted_provider_malformed_json(monkeypatch):
+    """Even when the hosted provider's text isn't parseable JSON, the LLM call still happened and consumed
+    tokens -- analyze must record gen_ai.* telemetry before attempting json.loads, not lose it to the parse error."""
+    fake_client = FakeTextClient("this is not json")
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", lambda _: fake_client)
+    settings = make_settings(provider="anthropic", model="claude-sonnet-5-5")
+    attrs = {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "anthropic",
+        "gen_ai.request.model": "claude-sonnet-5-5",
+    }
+
+    before = _histogram_count("gen_ai.client.inference.duration", **attrs)
+    result = route("what is LoRA?", None, settings)
+    after = _histogram_count("gen_ai.client.inference.duration", **attrs)
+
+    assert result == Route("doc", "what is LoRA?", "", "fallback")
+    assert after - before == 1
 
 
 def test_route_increments_route_counter(monkeypatch):

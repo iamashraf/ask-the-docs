@@ -130,10 +130,8 @@ def analyze(query: str, history: list[Turn], settings: Settings) -> Route:
         start = time.monotonic()
         if settings.generator.provider == "ollama":
             result = client.generate_structured(prompt, ANALYZE_SCHEMA, system=ANALYZE_SYSTEM_PROMPT)
-            data = result.data
         else:
             result = client.generate_with_usage(prompt, system=ANALYZE_SYSTEM_PROMPT)
-            data = json.loads(_strip_code_fence(result.text))
         duration = time.monotonic() - start
 
         span.set_attribute("gen_ai.request.model", settings.generator.model)
@@ -155,6 +153,11 @@ def analyze(query: str, history: list[Turn], settings: Settings) -> Route:
                 result.output_tokens, {**attrs, "gen_ai.token.modality": "text"}
             )
         metrics.gen_ai_client_inference_duration.record(duration, attrs)
+
+        if settings.generator.provider == "ollama":
+            data = result.data
+        else:
+            data = json.loads(_strip_code_fence(result.text))
 
         if not isinstance(data, dict):
             raise ValueError(f"analyze response wasn't a JSON object: {data!r}")
