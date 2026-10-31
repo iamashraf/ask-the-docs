@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from ask_the_docs.answer import answer
 from ask_the_docs.config import get_settings
-from ask_the_docs.evaluate import run_evaluation
+from ask_the_docs.evaluate import run_evaluation, summarize
 from ask_the_docs.index import load_index
 from ask_the_docs.ingest import (
     PathSecurityError,
@@ -207,7 +207,7 @@ async def get_job_status(job_id: str) -> JobStatusResponse:
 class AskRequest(BaseModel):
     query: str = Field(min_length=1)
     k: int = Field(default=5, ge=1)
-    history: list[Turn] = []
+    history: list[Turn] = Field(default=[], max_length=50)
 
 
 class AskResponse(BaseModel):
@@ -241,10 +241,20 @@ class EvalResultOut(BaseModel):
     question: str
     score: JudgeScoreOut | None
     error: str | None
+    intent: str | None = None
+    expected_intent: str | None = None
+    latency_seconds: float | None = None
+
+
+class EvaluateSummaryOut(BaseModel):
+    intent_accuracy: float | None
+    p50_latency_seconds: float | None
+    p95_latency_seconds: float | None
 
 
 class EvaluateResponse(BaseModel):
     results: list[EvalResultOut]
+    summary: EvaluateSummaryOut
 
 
 @app.post("/v1/evaluate")
@@ -263,13 +273,18 @@ def evaluate(request: EvaluateRequest) -> EvaluateResponse:
         settings = settings.model_copy(update=overrides)
 
     results = run_evaluation(settings, GOLDEN_QUESTIONS_PATH)
+    summary = EvaluateSummaryOut(**summarize(results))
     return EvaluateResponse(
         results=[
             EvalResultOut(
                 question=r.question,
                 score=JudgeScoreOut(**vars(r.score)) if r.score else None,
                 error=r.error,
+                intent=r.intent,
+                expected_intent=r.expected_intent,
+                latency_seconds=r.latency_seconds,
             )
             for r in results
-        ]
+        ],
+        summary=summary,
     )

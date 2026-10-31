@@ -447,6 +447,12 @@ def test_ask_rejects_empty_history_content():
     assert response.status_code == 422
 
 
+def test_ask_rejects_oversized_history_list():
+    history = [{"role": "user", "content": "hi"}] * 51
+    response = TestClient(app).post("/v1/ask", json={"query": "hi", "history": history})
+    assert response.status_code == 422
+
+
 def test_ask_rejects_empty_query():
     response = TestClient(app).post("/v1/ask", json={"query": ""})
     assert response.status_code == 422
@@ -483,6 +489,9 @@ def test_evaluate_returns_results(monkeypatch):
                 justification="ok",
             ),
             error=None,
+            intent="doc",
+            expected_intent="doc",
+            latency_seconds=0.5,
         ),
         EvalResult(question="Q2", score=None, error="boom"),
     ]
@@ -495,8 +504,17 @@ def test_evaluate_returns_results(monkeypatch):
     assert body["results"][0]["question"] == "Q1"
     assert body["results"][0]["score"]["accuracy"] == 1.0
     assert body["results"][0]["error"] is None
+    assert body["results"][0]["intent"] == "doc"
+    assert body["results"][0]["expected_intent"] == "doc"
+    assert body["results"][0]["latency_seconds"] == 0.5
     assert body["results"][1]["score"] is None
     assert body["results"][1]["error"] == "boom"
+    assert body["results"][1]["intent"] is None
+    assert body["summary"] == {
+        "intent_accuracy": 1.0,
+        "p50_latency_seconds": 0.5,
+        "p95_latency_seconds": 0.5,
+    }
 
 
 def test_evaluate_overrides_embeddings_backend(monkeypatch):
