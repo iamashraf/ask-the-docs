@@ -3,7 +3,16 @@ from unittest.mock import Mock
 
 from ask_the_docs.answer import AnswerResult
 from ask_the_docs.config import REFUSAL_MESSAGE, ProviderConfig, Settings
-from ask_the_docs.evaluate import GoldenQuestion, JudgeScore, judge, load_golden_questions, run_evaluation
+from ask_the_docs.evaluate import (
+    EvalResult,
+    GoldenQuestion,
+    JudgeScore,
+    judge,
+    load_golden_questions,
+    run_evaluation,
+    summarize,
+)
+from ask_the_docs.router import Turn
 
 
 def make_settings() -> Settings:
@@ -80,7 +89,9 @@ def test_run_evaluation_skips_judge_for_expected_refusal_question_that_correctly
 
     monkeypatch.setattr(
         "ask_the_docs.evaluate.answer",
-        lambda query, settings: AnswerResult(text=REFUSAL_MESSAGE, citations=[], context=""),
+        lambda query, settings, history=None, use_cache=True: AnswerResult(
+            text=REFUSAL_MESSAGE, citations=[], context=""
+        ),
     )
     mock_get_llm_client = Mock()
     monkeypatch.setattr("ask_the_docs.evaluate.get_llm_client", mock_get_llm_client)
@@ -98,7 +109,7 @@ def test_run_evaluation_flags_error_when_expected_refusal_question_gets_an_answe
 
     monkeypatch.setattr(
         "ask_the_docs.evaluate.answer",
-        lambda query, settings: AnswerResult(
+        lambda query, settings, history=None, use_cache=True: AnswerResult(
             text="a confident but wrong answer", citations=["a.pdf"], context="ctx"
         ),
     )
@@ -115,7 +126,9 @@ def test_run_evaluation_marks_error_and_continues(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         "ask_the_docs.evaluate.answer",
-        lambda query, settings: AnswerResult(text="some answer", citations=["a.pdf"], context="ctx"),
+        lambda query, settings, history=None, use_cache=True: AnswerResult(
+            text="some answer", citations=["a.pdf"], context="ctx"
+        ),
     )
 
     responses = iter(
@@ -143,3 +156,189 @@ def test_run_evaluation_marks_error_and_continues(tmp_path, monkeypatch):
     assert results[0].error is not None
     assert results[1].error is None
     assert results[1].score.accuracy == 1.0
+
+
+def test_load_golden_questions_parses_history_into_turns(tmp_path):
+    path = tmp_path / "questions.yaml"
+    path.write_text(
+        '- question: "explain that more simply"\n'
+        "  history:\n"
+        '    - role: "user"\n'
+        '      content: "What is the attention mechanism?"\n'
+        '    - role: "assistant"\n'
+        '      content: "Attention weighs tokens against each other [1]."\n'
+        '  expected_intent: "doc"\n'
+    )
+
+    questions = load_golden_questions(path)
+
+    assert questions[0].history == [
+        Turn(role="user", content="What is the attention mechanism?"),
+        Turn(role="assistant", content="Attention weighs tokens against each other [1]."),
+    ]
+    assert questions[0].expected_intent == "doc"
+
+
+def test_load_golden_questions_defaults_history_and_expected_intent(tmp_path):
+    path = tmp_path / "questions.yaml"
+    path.write_text('- question: "Q1"\n')
+
+    questions = load_golden_questions(path)
+
+    assert questions[0].history == []
+    assert questions[0].expected_intent is None
+    assert questions[0].max_latency_seconds is None
+
+
+def test_run_evaluation_calls_answer_with_history_and_without_cache(tmp_path, monkeypatch):
+    questions_path = tmp_path / "questions.yaml"
+    questions_path.write_text(
+        '- question: "explain that more simply"\n'
+        "  history:\n"
+        '    - role: "user"\n'
+        '      content: "What is the attention mechanism?"\n'
+        '    - role: "assistant"\n'
+        '      content: "Attention weighs tokens against each other [1]."\n'
+    )
+
+    mock_answer = Mock(return_value=AnswerResult(text="some answer", citations=["a.pdf"], context="ctx"))
+    monkeypatch.setattr("ask_the_docs.evaluate.answer", mock_answer)
+    fake_client = Mock()
+    fake_client.generate.return_value = json.dumps(
+        {"accuracy": 1.0, "answer_relevance": 1.0, "context_relevance": 1.0, "completeness": 1.0, "justification": "ok"}
+    )
+    monkeypatch.setattr("ask_the_docs.evaluate.get_llm_client", lambda config: fake_client)
+
+    settings = make_settings()
+    run_evaluation(settings, questions_path)
+
+    mock_answer.assert_called_once_with(
+        "explain that more simply",
+        settings,
+        history=[
+            Turn(role="user", content="What is the attention mechanism?"),
+            Turn(role="assistant", content="Attention weighs tokens against each other [1]."),
+        ],
+        use_cache=False,
+    )
+
+
+def test_run_evaluation_records_latency(tmp_path, monkeypatch):
+    questions_path = tmp_path / "questions.yaml"
+    questions_path.write_text('- question: "Q1"\n')
+
+    monkeypatch.setattr(
+        "ask_the_docs.evaluate.answer",
+        lambda query, settings, history=None, use_cache=True: AnswerResult(
+            text="some answer", citations=["a.pdf"], context="ctx"
+        ),
+    )
+    times = iter([10.0, 10.25])
+    monkeypatch.setattr("ask_the_docs.evaluate.time.monotonic", lambda: next(times))
+    fake_client = Mock()
+    fake_client.generate.return_value = json.dumps(
+        {"accuracy": 1.0, "answer_relevance": 1.0, "context_relevance": 1.0, "completeness": 1.0, "justification": "ok"}
+    )
+    monkeypatch.setattr("ask_the_docs.evaluate.get_llm_client", lambda config: fake_client)
+
+    results = run_evaluation(make_settings(), questions_path)
+
+    assert results[0].latency_seconds == 0.25
+
+
+def test_run_evaluation_flags_error_on_intent_mismatch_and_skips_judge(tmp_path, monkeypatch):
+    questions_path = tmp_path / "questions.yaml"
+    questions_path.write_text('- question: "hi"\n  expected_intent: "chitchat"\n')
+
+    monkeypatch.setattr(
+        "ask_the_docs.evaluate.answer",
+        lambda query, settings, history=None, use_cache=True: AnswerResult(
+            text="doc answer", citations=["a.pdf"], context="ctx", kind="answer"
+        ),
+    )
+    mock_get_llm_client = Mock()
+    monkeypatch.setattr("ask_the_docs.evaluate.get_llm_client", mock_get_llm_client)
+
+    results = run_evaluation(make_settings(), questions_path)
+
+    assert results[0].score is None
+    assert results[0].error is not None
+    assert "chitchat" in results[0].error
+    assert "doc" in results[0].error
+    assert results[0].intent == "doc"
+    assert results[0].expected_intent == "chitchat"
+    mock_get_llm_client.assert_not_called()
+
+
+def test_run_evaluation_flags_error_when_latency_exceeds_max(tmp_path, monkeypatch):
+    questions_path = tmp_path / "questions.yaml"
+    questions_path.write_text('- question: "hi"\n  expected_intent: "chitchat"\n  max_latency_seconds: 1\n')
+
+    monkeypatch.setattr(
+        "ask_the_docs.evaluate.answer",
+        lambda query, settings, history=None, use_cache=True: AnswerResult(
+            text="Hi!", citations=[], context="", kind="chitchat"
+        ),
+    )
+    times = iter([0.0, 2.0])
+    monkeypatch.setattr("ask_the_docs.evaluate.time.monotonic", lambda: next(times))
+    mock_get_llm_client = Mock()
+    monkeypatch.setattr("ask_the_docs.evaluate.get_llm_client", mock_get_llm_client)
+
+    results = run_evaluation(make_settings(), questions_path)
+
+    assert results[0].score is None
+    assert results[0].error is not None
+    assert "latency" in results[0].error
+    assert results[0].latency_seconds == 2.0
+    mock_get_llm_client.assert_not_called()
+
+
+def test_run_evaluation_scores_chitchat_deterministically_when_intent_matches(tmp_path, monkeypatch):
+    questions_path = tmp_path / "questions.yaml"
+    questions_path.write_text('- question: "hi"\n  expected_intent: "chitchat"\n')
+
+    monkeypatch.setattr(
+        "ask_the_docs.evaluate.answer",
+        lambda query, settings, history=None, use_cache=True: AnswerResult(
+            text="Hi! Ask me anything about the indexed documents.", citations=[], context="", kind="chitchat"
+        ),
+    )
+    mock_get_llm_client = Mock()
+    monkeypatch.setattr("ask_the_docs.evaluate.get_llm_client", mock_get_llm_client)
+
+    results = run_evaluation(make_settings(), questions_path)
+
+    assert results[0].error is None
+    assert results[0].score == JudgeScore(1.0, 1.0, 1.0, 1.0, results[0].score.justification)
+    assert results[0].intent == "chitchat"
+    mock_get_llm_client.assert_not_called()
+
+
+def test_summarize_computes_intent_accuracy_and_latency_percentiles():
+    results = [
+        EvalResult(question="q1", score=JudgeScore(1, 1, 1, 1, "x"), error=None, intent="doc", expected_intent="doc", latency_seconds=0.1),
+        EvalResult(
+            question="q2",
+            score=None,
+            error="expected intent 'doc' but got 'chitchat'",
+            intent="chitchat",
+            expected_intent="doc",
+            latency_seconds=0.5,
+        ),
+        EvalResult(question="q3", score=JudgeScore(1, 1, 1, 1, "x"), error=None, intent="doc", latency_seconds=0.3),
+    ]
+
+    summary = summarize(results)
+
+    assert summary["intent_accuracy"] == 0.5
+    assert summary["p50_latency_seconds"] == 0.3
+    assert summary["p95_latency_seconds"] == 0.5
+
+
+def test_summarize_returns_none_when_no_data():
+    results = [EvalResult(question="q1", score=None, error="boom")]
+
+    summary = summarize(results)
+
+    assert summary == {"intent_accuracy": None, "p50_latency_seconds": None, "p95_latency_seconds": None}

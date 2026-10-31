@@ -2,14 +2,18 @@
 context and the question, using a (usually stronger) separate judge model."""
 
 import json
-from dataclasses import dataclass
+import math
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import yaml
 
 from ask_the_docs.answer import answer
 from ask_the_docs.config import REFUSAL_MESSAGE, Settings
 from ask_the_docs.llm import LLMClient, get_llm_client
+from ask_the_docs.router import Turn
 
 JUDGE_PROMPT_TEMPLATE = """You are evaluating a RAG system's answer.
 
@@ -32,6 +36,9 @@ class GoldenQuestion:
     question: str
     notes: str | None = None
     expected_refusal: bool = False
+    expected_intent: Literal["doc", "chitchat", "meta"] | None = None
+    history: list[Turn] = field(default_factory=list)
+    max_latency_seconds: float | None = None
 
 
 @dataclass
@@ -48,6 +55,12 @@ class EvalResult:
     question: str
     score: JudgeScore | None
     error: str | None
+    intent: str | None = None  # "doc" for kind answer/refusal, else the kind
+    # Deviation from the brief: carries the golden question's expected_intent
+    # (not just the observed one) so summarize() can compute accuracy from
+    # EvalResults alone, without re-reading golden_questions.yaml.
+    expected_intent: str | None = None
+    latency_seconds: float | None = None
 
 
 def load_golden_questions(path: Path) -> list[GoldenQuestion]:
@@ -57,6 +70,9 @@ def load_golden_questions(path: Path) -> list[GoldenQuestion]:
             question=item["question"],
             notes=item.get("notes"),
             expected_refusal=item.get("expected_refusal", False),
+            expected_intent=item.get("expected_intent"),
+            history=[Turn(**turn) for turn in item.get("history", [])],
+            max_latency_seconds=item.get("max_latency_seconds"),
         )
         for item in data
     ]
@@ -95,15 +111,32 @@ def run_evaluation(settings: Settings, questions_path: Path) -> list[EvalResult]
 
     results = []
     for golden in questions:
+        intent: str | None = None
+        latency: float | None = None
         try:
-            result = answer(golden.question, settings)
-            if golden.expected_refusal:
+            start = time.monotonic()
+            result = answer(golden.question, settings, history=golden.history, use_cache=False)
+            latency = time.monotonic() - start
+            intent = "doc" if result.kind in ("answer", "refusal") else result.kind
+
+            if golden.expected_intent is not None and intent != golden.expected_intent:
+                score = None
+                error = f"expected intent {golden.expected_intent!r} but got {intent!r}"
+            elif golden.max_latency_seconds is not None and latency > golden.max_latency_seconds:
+                score = None
+                error = f"latency {latency:.3f}s exceeded max {golden.max_latency_seconds}s"
+            elif golden.expected_refusal:
                 if result.text == REFUSAL_MESSAGE:
                     score = JudgeScore(1.0, 1.0, 1.0, 1.0, "correctly refused, as expected")
                     error = None
                 else:
                     score = None
                     error = f"expected a refusal but got an answer: {result.text[:100]!r}"
+            elif golden.expected_intent in ("chitchat", "meta"):
+                # No retrieved context to judge for a canned chitchat/meta
+                # reply -- same rationale as the expected_refusal case above.
+                score = JudgeScore(1.0, 1.0, 1.0, 1.0, f"deterministic {golden.expected_intent} reply, not scored by judge")
+                error = None
             else:
                 if judge_client is None:
                     judge_client = get_llm_client(settings.judge)
@@ -112,6 +145,39 @@ def run_evaluation(settings: Settings, questions_path: Path) -> list[EvalResult]
         except Exception as exc:
             score = None
             error = str(exc)
-        results.append(EvalResult(question=golden.question, score=score, error=error))
+        results.append(
+            EvalResult(
+                question=golden.question,
+                score=score,
+                error=error,
+                intent=intent,
+                expected_intent=golden.expected_intent,
+                latency_seconds=latency,
+            )
+        )
 
     return results
+
+
+def _percentile(sorted_values: list[float], fraction: float) -> float | None:
+    """Nearest-rank percentile: rank = ceil(fraction * n), 1-indexed, clamped to the last value."""
+    if not sorted_values:
+        return None
+    n = len(sorted_values)
+    rank = max(math.ceil(fraction * n), 1)
+    return sorted_values[min(rank, n) - 1]
+
+
+def summarize(results: list[EvalResult]) -> dict:
+    """Aggregates intent-match rate (over questions with an expected_intent) and latency percentiles."""
+    checked = [r for r in results if r.expected_intent is not None]
+    intent_accuracy = (
+        sum(1 for r in checked if r.intent == r.expected_intent) / len(checked) if checked else None
+    )
+
+    latencies = sorted(r.latency_seconds for r in results if r.latency_seconds is not None)
+    return {
+        "intent_accuracy": intent_accuracy,
+        "p50_latency_seconds": _percentile(latencies, 0.50),
+        "p95_latency_seconds": _percentile(latencies, 0.95),
+    }

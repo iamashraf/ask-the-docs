@@ -8,7 +8,7 @@ import uvicorn
 from ask_the_docs.answer import answer
 from ask_the_docs.api import app as api_app
 from ask_the_docs.config import Settings, get_settings
-from ask_the_docs.evaluate import run_evaluation
+from ask_the_docs.evaluate import run_evaluation, summarize
 from ask_the_docs.index import build_index
 from ask_the_docs.ingest import dispatch, dispatch_all_under_docs_dir
 
@@ -60,7 +60,8 @@ def _evaluate(args: argparse.Namespace, settings) -> None:
         # through to run_evaluation.
         settings = Settings.model_validate({**settings.model_dump(), **overrides})
 
-    for result in run_evaluation(settings, GOLDEN_QUESTIONS_PATH):
+    results = run_evaluation(settings, GOLDEN_QUESTIONS_PATH)
+    for result in results:
         if result.error:
             print(f"{result.question}: ERROR ({result.error})")
         else:
@@ -69,6 +70,16 @@ def _evaluate(args: argparse.Namespace, settings) -> None:
                 f"{result.question}: accuracy={s.accuracy} answer_relevance={s.answer_relevance} "
                 f"context_relevance={s.context_relevance} completeness={s.completeness}"
             )
+
+    def _fmt(value: float | None) -> str:
+        return "n/a" if value is None else f"{value:.2f}"
+
+    summary = summarize(results)
+    print(
+        f"\nintent_accuracy={_fmt(summary['intent_accuracy'])} "
+        f"p50_latency_seconds={_fmt(summary['p50_latency_seconds'])} "
+        f"p95_latency_seconds={_fmt(summary['p95_latency_seconds'])}"
+    )
 
 
 def _serve(args: argparse.Namespace, settings) -> None:

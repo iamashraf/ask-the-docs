@@ -262,3 +262,41 @@ def test_evaluate_reports_errors(capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "Q1" in out
     assert "boom" in out
+
+
+def test_evaluate_prints_intent_and_latency_summary(capsys, monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.cli.run_evaluation",
+        lambda settings, questions_path: [
+            EvalResult(
+                question="Q1",
+                score=JudgeScore(1.0, 1.0, 1.0, 1.0, "ok"),
+                error=None,
+                intent="doc",
+                expected_intent="doc",
+                latency_seconds=0.5,
+            )
+        ],
+    )
+
+    parser = build_parser()
+    args = parser.parse_args(["evaluate"])
+    args.func(args, make_settings())
+
+    out = capsys.readouterr().out
+    assert "intent_accuracy=1.00" in out
+    assert "p50_latency_seconds=0.50" in out
+    assert "p95_latency_seconds=0.50" in out
+
+
+def test_evaluate_prints_n_a_summary_when_no_results(capsys, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.cli.run_evaluation", lambda settings, questions_path: [])
+
+    parser = build_parser()
+    args = parser.parse_args(["evaluate"])
+    args.func(args, make_settings())
+
+    out = capsys.readouterr().out
+    assert "intent_accuracy=n/a" in out
+    assert "p50_latency_seconds=n/a" in out
+    assert "p95_latency_seconds=n/a" in out
