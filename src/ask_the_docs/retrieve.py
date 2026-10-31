@@ -150,9 +150,7 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> RetrievedChunks:
     if settings.rerank_enabled:
         rerank_start = time.monotonic()
         with tracer.start_as_current_span("rerank"):
-            reranked = get_reranker(DEFAULT_RERANKER_MODEL).rerank(
-                query, candidates, k, score_floor=settings.rerank_score_floor
-            )
+            reranked = get_reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
             logger.info("Rerank succeeded: %d results", len(reranked))
         metrics.rerank_latency_seconds.record(time.monotonic() - rerank_start)
         return RetrievedChunks(reranked, search_query)

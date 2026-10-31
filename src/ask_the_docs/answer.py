@@ -250,7 +250,6 @@ def answer(query: str, settings: Settings, k: int = 5) -> AnswerResult:
         settings.generator.model,
         settings.hybrid_alpha,
         settings.rerank_enabled,
-        settings.rerank_score_floor,
         settings.query_rewrite_enabled,
         settings.system_prompt_template,
         settings.candidate_pool_size,

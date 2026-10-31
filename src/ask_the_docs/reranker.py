@@ -15,14 +15,10 @@ class Reranker:
         self.model_name = model_name
         self._model = CrossEncoder(model_name)
 
-    def rerank(
-        self, query: str, candidates: list[Document], k: int, score_floor: float | None = None
-    ) -> list[Document]:
+    def rerank(self, query: str, candidates: list[Document], k: int) -> list[Document]:
         pairs = [(query, doc.page_content) for doc in candidates]
         scores = self._model.predict(pairs)
         ranked = sorted(zip(candidates, scores), key=lambda pair: pair[1], reverse=True)
-        if score_floor is not None:
-            ranked = [pair for pair in ranked if pair[1] >= score_floor]
         return [doc for doc, _ in ranked[:k]]
 
 
