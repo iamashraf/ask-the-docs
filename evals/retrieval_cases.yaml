@@ -1,0 +1,94 @@
+# Labeled retrieval cases for `eval-retrieval`. Two questions per seeded
+# source (see seed_sources.yaml): one phrased close to the paper's own
+# terminology, one paraphrased without its title words or obvious jargon,
+# to check retrieval isn't just winning on keyword overlap with the title.
+
+# Attention Is All You Need
+- question: "What is multi-head attention in the Transformer architecture?"
+  expected_source: "https://arxiv.org/pdf/1706.03762"
+- question: "How can a model handle sequences without recurrence or convolutions?"
+  expected_source: "https://arxiv.org/pdf/1706.03762"
+
+# Language Models are Few-Shot Learners (GPT-3)
+- question: "How does GPT-3 perform few-shot learning without fine-tuning?"
+  expected_source: "https://arxiv.org/pdf/2005.14165"
+- question: "What happens to a language model's ability to learn new tasks from just a handful of examples as it gets bigger?"
+  expected_source: "https://arxiv.org/pdf/2005.14165"
+
+# Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks
+- question: "How does retrieval-augmented generation combine a retriever with a seq2seq generator?"
+  expected_source: "https://arxiv.org/pdf/2005.11401"
+- question: "How can a model look up external documents to answer questions it wasn't directly trained on?"
+  expected_source: "https://arxiv.org/pdf/2005.11401"
+
+# Training LMs to Follow Instructions with Human Feedback (InstructGPT/RLHF)
+- question: "How does InstructGPT use reinforcement learning from human feedback to align with user intent?"
+  expected_source: "https://arxiv.org/pdf/2203.02155"
+- question: "How can human preference ratings be used to make a model's outputs more helpful and less harmful?"
+  expected_source: "https://arxiv.org/pdf/2203.02155"
+
+# LoRA: Low-Rank Adaptation of Large Language Models
+- question: "How does LoRA use low-rank matrices to fine-tune large language models efficiently?"
+  expected_source: "https://arxiv.org/pdf/2106.09685"
+- question: "What's a way to adapt a huge pretrained model to a new task while only training a small number of extra parameters?"
+  expected_source: "https://arxiv.org/pdf/2106.09685"
+
+# Chain-of-Thought Prompting Elicits Reasoning in LLMs
+- question: "How does chain-of-thought prompting improve reasoning in large language models?"
+  expected_source: "https://arxiv.org/pdf/2201.11903"
+- question: "Does writing out intermediate reasoning steps before the final answer help a model solve harder problems?"
+  expected_source: "https://arxiv.org/pdf/2201.11903"
+
+# Self-Consistency Improves Chain of Thought Reasoning
+- question: "How does self-consistency decoding improve chain-of-thought reasoning?"
+  expected_source: "https://arxiv.org/pdf/2203.11171"
+- question: "If you sample several different reasoning paths for the same problem and take a majority vote on the answer, does that beat just taking one answer?"
+  expected_source: "https://arxiv.org/pdf/2203.11171"
+
+# ReAct: Synergizing Reasoning and Acting in Language Models
+- question: "How does the ReAct framework interleave reasoning traces with actions in language models?"
+  expected_source: "https://arxiv.org/pdf/2210.03629"
+- question: "What's an approach where a model alternates between thinking and taking actions like calling a tool or searching, instead of just reasoning silently?"
+  expected_source: "https://arxiv.org/pdf/2210.03629"
+
+# Tree of Thoughts
+- question: "How does Tree of Thoughts generalize chain-of-thought prompting by exploring multiple reasoning paths?"
+  expected_source: "https://arxiv.org/pdf/2305.10601"
+- question: "How can a model search over branching possibilities and backtrack when solving a problem, instead of committing to one linear train of thought?"
+  expected_source: "https://arxiv.org/pdf/2305.10601"
+
+# Chain-of-Table
+- question: "How does Chain-of-Table use iterative table operations for tabular reasoning?"
+  expected_source: "https://arxiv.org/pdf/2401.04398"
+- question: "What's a way to have a model reason step by step over structured, row-and-column data by transforming it along the way, rather than just reading it as text?"
+  expected_source: "https://arxiv.org/pdf/2401.04398"
+
+# Everything of Thoughts
+- question: "How does Everything of Thoughts combine reinforcement learning and Monte Carlo Tree Search for thought generation?"
+  expected_source: "https://arxiv.org/pdf/2311.04254"
+- question: "Is there a way to make a model's step-by-step problem solving more efficient by learning from past search trajectories instead of re-exploring from scratch every time?"
+  expected_source: "https://arxiv.org/pdf/2311.04254"
+
+# Quantifying LLM Sensitivity to Spurious Features in Prompt Design
+- question: "How sensitive are large language models to spurious features in prompt design, like formatting?"
+  expected_source: "https://arxiv.org/pdf/2310.11324"
+- question: "Can small, meaningless changes to how a prompt is formatted cause a model's answer to change a lot?"
+  expected_source: "https://arxiv.org/pdf/2310.11324"
+
+# What is In-context Learning? (lakera.ai blog)
+- question: "What is in-context learning and how does it let a model adapt from examples given in the prompt?"
+  expected_source: "https://www.lakera.ai/blog/what-is-in-context-learning"
+- question: "How can a model pick up a new pattern or task just from a few demonstrations shown right before the question, without updating its weights?"
+  expected_source: "https://www.lakera.ai/blog/what-is-in-context-learning"
+
+# Dissociating Language and Thought in LLMs
+- question: "How do large language models dissociate formal linguistic competence from functional thought and reasoning?"
+  expected_source: "https://arxiv.org/pdf/2301.06627"
+- question: "Does being fluent at producing grammatical, natural-sounding text necessarily mean a system is also good at reasoning or understanding the world?"
+  expected_source: "https://arxiv.org/pdf/2301.06627"
+
+# LLMs as Data Preprocessors
+- question: "How can LLMs be used as data preprocessors for tasks like data cleaning and integration?"
+  expected_source: "https://arxiv.org/pdf/2308.16361"
+- question: "Can a general-purpose language model help prepare and clean up messy structured datasets before they're used elsewhere?"
+  expected_source: "https://arxiv.org/pdf/2308.16361"

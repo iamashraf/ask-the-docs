@@ -12,10 +12,12 @@ from ask_the_docs.config import Settings, get_settings
 from ask_the_docs.evaluate import run_evaluation, summarize
 from ask_the_docs.index import build_index
 from ask_the_docs.ingest import dispatch, dispatch_all_under_docs_dir
+from ask_the_docs.retrieval_eval import retrieval_metrics, retrieval_report, run_retrieval_eval
 from ask_the_docs.routing_eval import routing_report, run_routing_eval
 
 GOLDEN_QUESTIONS_PATH = Path("evals/golden_questions.yaml")
 ROUTING_CASES_PATH = Path("evals/routing_cases.yaml")
+RETRIEVAL_CASES_PATH = Path("evals/retrieval_cases.yaml")
 
 
 def _ingest(args: argparse.Namespace, settings) -> None:
@@ -92,6 +94,13 @@ def _eval_routing(args: argparse.Namespace, settings) -> None:
         sys.exit(1)
 
 
+def _eval_retrieval(args: argparse.Namespace, settings) -> None:
+    results = run_retrieval_eval(settings, args.cases, args.k)
+    print(retrieval_report(results, args.k))
+    if retrieval_metrics(results)["hit_at_k"] < args.min_hit_at_k:
+        sys.exit(1)
+
+
 def _serve(args: argparse.Namespace, settings) -> None:
     uvicorn.run(api_app, host="0.0.0.0", port=8000, log_level="info")
 
@@ -143,6 +152,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eval_routing_parser.add_argument("--cases", type=Path, default=ROUTING_CASES_PATH)
     eval_routing_parser.set_defaults(func=_eval_routing)
+
+    eval_retrieval_parser = subparsers.add_parser(
+        "eval-retrieval", help="Run the labeled retrieval case set through retrieve() and report hit@k/MRR"
+    )
+    eval_retrieval_parser.add_argument("--cases", type=Path, default=RETRIEVAL_CASES_PATH)
+    eval_retrieval_parser.add_argument("--k", type=int, default=5)
+    eval_retrieval_parser.add_argument("--min-hit-at-k", type=float, default=0.9)
+    eval_retrieval_parser.set_defaults(func=_eval_retrieval)
 
     serve_parser = subparsers.add_parser("serve", help="Run the long-running HTTP API server")
     serve_parser.set_defaults(func=_serve)

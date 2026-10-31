@@ -5,6 +5,7 @@ from ask_the_docs.answer import AnswerResult
 from ask_the_docs.cli import build_parser
 from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.evaluate import EvalResult, JudgeScore
+from ask_the_docs.retrieval_eval import RetrievalCase, RetrievalResult
 from ask_the_docs.routing_eval import RoutingCase, RoutingResult
 
 
@@ -260,6 +261,90 @@ def test_eval_routing_passes_custom_cases_path(monkeypatch):
     args.func(args, make_settings())
 
     assert str(captured["cases"]) == "custom/cases.yaml"
+
+
+def test_eval_retrieval_prints_report(capsys, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.cli.run_retrieval_eval", lambda settings, cases, k: [])
+
+    parser = build_parser()
+    args = parser.parse_args(["eval-retrieval", "--min-hit-at-k", "0"])
+    args.func(args, make_settings())
+
+    assert "hit@1" in capsys.readouterr().out
+
+
+def test_eval_retrieval_exits_1_below_threshold(monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.cli.run_retrieval_eval",
+        lambda settings, cases, k: [
+            RetrievalResult(
+                case=RetrievalCase(question="what is LoRA?", expected_source="s1"),
+                rank=None,
+                returned_sources=["x"],
+            )
+        ],
+    )
+
+    parser = build_parser()
+    args = parser.parse_args(["eval-retrieval", "--min-hit-at-k", "0.9"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        args.func(args, make_settings())
+    assert exc_info.value.code == 1
+
+
+def test_eval_retrieval_does_not_exit_at_or_above_threshold(monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.cli.run_retrieval_eval",
+        lambda settings, cases, k: [
+            RetrievalResult(
+                case=RetrievalCase(question="what is LoRA?", expected_source="s1"),
+                rank=1,
+                returned_sources=["s1"],
+            )
+        ],
+    )
+
+    parser = build_parser()
+    args = parser.parse_args(["eval-retrieval", "--min-hit-at-k", "0.9"])
+
+    args.func(args, make_settings())  # does not raise SystemExit
+
+
+def test_eval_retrieval_does_not_exit_exactly_at_threshold(monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.cli.run_retrieval_eval",
+        lambda settings, cases, k: [
+            RetrievalResult(
+                case=RetrievalCase(question="q1", expected_source="s1"), rank=1, returned_sources=["s1"]
+            ),
+            RetrievalResult(
+                case=RetrievalCase(question="q2", expected_source="s2"), rank=None, returned_sources=["x"]
+            ),
+        ],
+    )
+
+    parser = build_parser()
+    args = parser.parse_args(["eval-retrieval", "--min-hit-at-k", "0.5"])
+
+    args.func(args, make_settings())  # hit_at_k == 0.5 exactly; does not raise SystemExit
+
+
+def test_eval_retrieval_passes_custom_cases_path_and_k(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "ask_the_docs.cli.run_retrieval_eval",
+        lambda settings, cases, k: captured.update(cases=cases, k=k) or [],
+    )
+
+    parser = build_parser()
+    args = parser.parse_args(
+        ["eval-retrieval", "--cases", "custom/cases.yaml", "--k", "3", "--min-hit-at-k", "0"]
+    )
+    args.func(args, make_settings())
+
+    assert str(captured["cases"]) == "custom/cases.yaml"
+    assert captured["k"] == 3
 
 
 def test_serve_starts_uvicorn(monkeypatch):
