@@ -13,6 +13,7 @@ from ask_the_docs.answer import (
     AnswerResult,
     StructuredAnswer,
     _compute_answer,
+    _doc_cache_key,
     _structured_retry_feedback,
     answer,
     build_prompt,
@@ -780,8 +781,9 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
     # never a usable AnswerResult to begin with.
     assert _counter_value("cache_result", result="hit") - before_hit == 0
     assert _counter_value("cache_result", result="miss") - before_miss == 1.0
-    # A diverged key would leave the corrupted entry and add a second one.
-    assert len(fake_cache._store) == 1
+    # The corrupted first-tier entry is repaired in place; the second-tier
+    # (standalone_query-keyed) entry is new, so the store now holds both.
+    assert len(fake_cache._store) == 2
     assert json.loads(fake_cache._store[key])["text"] == "the answer [1]"
 
 
@@ -876,7 +878,6 @@ def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
         ("graph_enabled", False, True),
         ("graph_traversal_hop_depth", 1, 2),
         ("global_search_top_communities", 3, 5),
-        ("history_max_turns", 6, 2),
     ],
 )
 def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field, value_a, value_b):
@@ -908,12 +909,61 @@ def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field,
     assert calls["count"] == 2
 
 
+def test_answer_cache_key_changes_when_history_max_turns_changes(monkeypatch):
+    """history_max_turns isn't part of the second-tier key directly (that
+    tier is keyed on the already-resolved standalone_query, so a trim-window
+    change only matters if it actually changes what routing sees) -- so this
+    needs real history long enough for the two settings to trim differently,
+    and a route() that resolves based on how many turns it actually received."""
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
+    shared_cache = FakeCacheClient()
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
+
+    def fake_route(query, history, settings):
+        return Route(intent="doc", standalone_query=f"n={len(history)}", reply="", source="llm")
+
+    monkeypatch.setattr("ask_the_docs.answer.route", fake_route)
+
+    calls = {"count": 0}
+
+    class FakeClient:
+        def generate_structured(self, prompt, schema, system=None):
+            calls["count"] += 1
+            return StructuredJSONResult(
+                data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
+            )
+
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
+
+    long_history = [Turn(role="user", content=f"turn {i}") for i in range(6)]
+    settings_a = make_settings().model_copy(update={"history_max_turns": 6})
+    settings_b = make_settings().model_copy(update={"history_max_turns": 2})
+
+    answer("What is X?", settings_a, k=5, history=long_history)
+    answer("What is X?", settings_b, k=5, history=long_history)
+
+    assert calls["count"] == 2
+
+
 def test_answer_cache_key_changes_when_index_generation_changes(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
 
-    generations = [2, 3]
-    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: generations.pop(0))
+    # get_index_generation is now read twice per answer() call (once for the
+    # first-tier key, once for the second-tier doc key on a first-tier miss)
+    # -- the first two reads (both within the first answer() call) return 2,
+    # the next two (within the second call) return 3.
+    call_count = {"n": 0}
+
+    def fake_get_index_generation(settings):
+        call_count["n"] += 1
+        return 2 if call_count["n"] <= 2 else 3
+
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", fake_get_index_generation)
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
 
@@ -938,11 +988,27 @@ def test_answer_cache_key_changes_when_index_generation_changes(monkeypatch):
 
 
 def test_answer_cache_key_changes_with_history(monkeypatch):
+    """First tier: a literal repeat always keys on the raw query + history,
+    so different history is always a first-tier miss (checked here via
+    routing still running -- resumed_route.call_count == 2). Second tier:
+    when history genuinely changes the resolved meaning (different
+    standalone_query, as a real follow-up resolution would), it must also
+    miss. (When the resolved meaning is the SAME despite different history,
+    the second tier intentionally collapses them -- see
+    test_answer_doc_cache_hits_for_same_standalone_query_across_different_history.)"""
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
+
+    def fake_route(query, history, settings):
+        # The resolved query depends on history, same as a real follow-up
+        # resolution would.
+        return Route(intent="doc", standalone_query=history[0].content, reply="", source="llm")
+
+    mock_route = Mock(side_effect=fake_route)
+    monkeypatch.setattr("ask_the_docs.answer.route", mock_route)
 
     calls = {"count": 0}
 
@@ -961,10 +1027,90 @@ def test_answer_cache_key_changes_with_history(monkeypatch):
     answer("What is X?", settings, k=5, history=[Turn(role="user", content="first turn")])
     answer("What is X?", settings, k=5, history=[Turn(role="user", content="a different turn")])
 
+    assert mock_route.call_count == 2
     assert calls["count"] == 2
 
 
-def test_answer_cache_round_trips_kind(monkeypatch):
+def test_answer_doc_cache_hits_for_same_standalone_query_across_different_history(monkeypatch):
+    """I3 fix: two different conversations (different raw query + history, so
+    the first-tier raw-query+history cache misses both times) that resolve to
+    the same standalone_query hit a second-tier cache keyed on the resolved
+    question, skipping generation on the second call. Routing still runs
+    both times -- only the first-tier zero-cost skip is reserved for literal
+    repeats (see test_answer_returns_cached_result_without_calling_generator)."""
+    shared_cache = FakeCacheClient()
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
+    mock_route = Mock(return_value=Route(intent="doc", standalone_query="what is BM25?", reply="", source="llm"))
+    monkeypatch.setattr("ask_the_docs.answer.route", mock_route)
+
+    calls = {"count": 0}
+
+    class FakeClient:
+        def generate_structured(self, prompt, schema, system=None):
+            calls["count"] += 1
+            return StructuredJSONResult(
+                data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
+            )
+
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
+    settings = make_settings()
+
+    first = answer("tell me about BM25", settings, k=5, history=[Turn(role="user", content="first turn")])
+    second = answer(
+        "what about that scoring thing again",
+        settings,
+        k=5,
+        history=[Turn(role="user", content="a totally different turn")],
+    )
+
+    assert calls["count"] == 1
+    assert mock_route.call_count == 2
+    assert first.text == second.text == "the answer [1]"
+
+
+def test_answer_doc_cache_recomputes_when_cached_value_is_corrupted(monkeypatch):
+    """Second-tier counterpart to test_answer_recomputes_when_cached_value_is_corrupted."""
+    shared_cache = FakeCacheClient()
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
+    settings = make_settings()
+
+    # Prime the second-tier key (keyed on the resolved standalone_query, not
+    # the raw query/history the first tier uses) with a value that would
+    # crash a naive json.loads/AnswerResult(**...).
+    doc_key = _doc_cache_key("what is bm25?", 5, settings)
+    shared_cache.set(doc_key, b"not valid json")
+
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
+    mock_route = Mock(return_value=Route(intent="doc", standalone_query="what is BM25?", reply="", source="llm"))
+    monkeypatch.setattr("ask_the_docs.answer.route", mock_route)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_structured=Mock(
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
+                )
+            )
+        ),
+    )
+
+    # Raw query differs from the standalone_query the mocked route() returns,
+    # so the first tier misses and routing runs, reaching the corrupted
+    # second-tier entry.
+    result = answer("tell me about BM25", settings, k=5)
+
+    assert result.text == "the answer [1]"
+    # A diverged key would leave the corrupted entry and add a second one.
+    assert json.loads(shared_cache._store[doc_key])["text"] == "the answer [1]"
     # Uses a refusal (not chitchat) here: chitchat/meta results are never
     # cached (Fix 3), so a chitchat round trip wouldn't prove kind survives
     # serialization -- "answer" wouldn't either, since it's the default.
@@ -1330,7 +1476,9 @@ def test_answer_caches_normal_doc_answer(monkeypatch):
     result = answer("What is X?", make_settings(), use_cache=True)
 
     assert result.kind == "answer"
-    mock_cache_set.assert_called_once()
+    # Stored under both the first-tier (raw query + history) and second-tier
+    # (standalone_query) keys.
+    assert mock_cache_set.call_count == 2
 
 
 def test_answer_passes_structured_system_prompt_for_ollama(monkeypatch):

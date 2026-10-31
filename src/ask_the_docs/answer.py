@@ -251,7 +251,34 @@ def _compute_answer(query: str, settings: Settings, k: int, search_query: str | 
     return AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal")
 
 
-def _dispatch(query: str, trimmed_history: list[Turn], settings: Settings, k: int) -> AnswerResult:
+def _doc_cache_key(standalone_query: str, k: int, settings: Settings) -> str:
+    """Second-tier answer cache key: keyed on the resolved, self-contained
+    standalone_query instead of the raw query + history the first tier (in
+    answer()) uses. standalone_query already has follow-up references
+    resolved, so two different conversations asking the same resolved
+    question collide here even though their raw query/history never would --
+    this is the fix for the answer cache barely hitting in UI sessions."""
+    return make_cache_key(
+        standalone_query.strip().lower(),
+        k,
+        settings.embeddings_backend,
+        settings.generator.provider,
+        settings.generator.model,
+        settings.hybrid_alpha,
+        settings.rerank_enabled,
+        settings.query_rewrite_enabled,
+        settings.system_prompt_template,
+        settings.candidate_pool_size,
+        settings.graph_enabled,
+        settings.graph_traversal_hop_depth,
+        settings.global_search_top_communities,
+        get_index_generation(settings),
+        STRUCTURED_SYSTEM_PROMPT_TEMPLATE,
+        ANALYZE_SYSTEM_PROMPT,
+    )
+
+
+def _dispatch(query: str, trimmed_history: list[Turn], settings: Settings, k: int, use_cache: bool) -> AnswerResult:
     """Chitchat/meta skip retrieval; a routing or source-listing failure falls back to the doc path with the raw query."""
     try:
         result = route(query, trimmed_history, settings)
@@ -270,7 +297,35 @@ def _dispatch(query: str, trimmed_history: list[Turn], settings: Settings, k: in
             return _compute_answer(query, settings, k)
         return AnswerResult(text=build_meta_reply(sources), citations=[], kind="meta")
 
-    return _compute_answer(result.standalone_query, settings, k, search_query=result.search_query or None)
+    doc_cache_key = None
+    cache_client = None
+    if use_cache:
+        cache_client = get_cache_client(settings)
+        doc_cache_key = _doc_cache_key(result.standalone_query, k, settings)
+        cached = cache_get(cache_client, doc_cache_key)
+        if cached is not None:
+            try:
+                cached_result = AnswerResult(**json.loads(cached))
+                # tier="doc" distinguishes this second-tier (standalone_query-keyed)
+                # lookup from the first-tier one in answer(), which keeps its
+                # existing untagged {"result": ...} shape so its own counts
+                # (and the tests pinned to them) are unaffected by this tier's hits/misses.
+                metrics.cache_result_total.add(1, {"result": "hit", "tier": "doc"})
+                return cached_result
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("Cached answer value was unusable; recomputing.", exc_info=True)
+        metrics.cache_result_total.add(1, {"result": "miss", "tier": "doc"})
+
+    answer_result = _compute_answer(result.standalone_query, settings, k, search_query=result.search_query or None)
+
+    if use_cache:
+        cache_set(
+            cache_client,
+            doc_cache_key,
+            json.dumps(dataclasses.asdict(answer_result)).encode(),
+            ttl_seconds=ANSWER_CACHE_TTL_SECONDS,
+        )
+    return answer_result
 
 
 def answer(
@@ -280,7 +335,10 @@ def answer(
     history: list[Turn] | None = None,
     use_cache: bool = True,
 ) -> AnswerResult:
-    """Cache lookup precedes routing so a hit skips everything; use_cache=False bypasses read and write."""
+    """First-tier cache lookup (raw query + history) precedes routing so a
+    literal repeat skips everything; a second tier inside _dispatch(), keyed
+    on the resolved standalone_query, catches repeats that only match after
+    routing. use_cache=False bypasses both tiers' reads and writes."""
     trimmed_history = trim_history(history, settings.history_max_turns)
 
     if use_cache:
@@ -320,7 +378,7 @@ def answer(
                 logger.warning("Cached answer value was unusable; recomputing.", exc_info=True)
         metrics.cache_result_total.add(1, {"result": "miss"})
 
-    result = _dispatch(query, trimmed_history, settings, k)
+    result = _dispatch(query, trimmed_history, settings, k, use_cache)
 
     if use_cache and result.kind not in ("chitchat", "meta"):
         cache_set(cache_client, cache_key, json.dumps(dataclasses.asdict(result)).encode(), ttl_seconds=ANSWER_CACHE_TTL_SECONDS)
