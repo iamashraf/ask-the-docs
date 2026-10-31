@@ -36,6 +36,87 @@ describe("Page", () => {
     expect(screen.getByText("bm25.pdf")).toBeInTheDocument();
   });
 
+  test("sends an empty history on the first request, then prior turns on the next", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ answer: "It's a ranking function.", citations: [], kind: "answer" }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ answer: "A statistic.", citations: [], kind: "answer" }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Page />);
+    await userEvent.type(screen.getByRole("textbox"), "What is BM25?");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText("It's a ranking function.");
+
+    await userEvent.type(screen.getByRole("textbox"), "And TF-IDF?");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText("A statistic.");
+
+    const firstBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const secondBody = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    expect(firstBody).toEqual({ query: "What is BM25?", history: [] });
+    expect(secondBody).toEqual({
+      query: "And TF-IDF?",
+      history: [
+        { role: "user", content: "What is BM25?" },
+        { role: "assistant", content: "It's a ranking function." },
+      ],
+    });
+  });
+
+  test("excludes an error bubble from the history sent on the next request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "Backend unreachable" }), { status: 502 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ answer: "A real answer.", citations: [], kind: "answer" }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Page />);
+    await userEvent.type(screen.getByRole("textbox"), "first question");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText(/Backend unreachable/);
+
+    await userEvent.type(screen.getByRole("textbox"), "second question");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText("A real answer.");
+
+    const secondBody = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    expect(secondBody.history).toEqual([{ role: "user", content: "first question" }]);
+  });
+
+  test("renders the not-from-your-documents label when the response kind is chitchat", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ answer: "Hi there!", citations: [], kind: "chitchat" }), {
+          status: 200,
+        }),
+      ),
+    );
+
+    render(<Page />);
+    await userEvent.type(screen.getByRole("textbox"), "hello");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(await screen.findByText("Hi there!")).toBeInTheDocument();
+    expect(screen.getByText("Not from your documents")).toBeInTheDocument();
+  });
+
   test("shows an error message when the request fails", async () => {
     vi.stubGlobal(
       "fetch",

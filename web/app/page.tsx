@@ -39,6 +39,10 @@ export default function Page() {
     const query = input.trim();
     if (!query) return;
 
+    const history = messages
+      .filter((message) => message.role !== "error")
+      .map((message) => ({ role: message.role, content: message.text }));
+
     setMessages((prev) => [...prev, { role: "user", text: query }]);
     setInput("");
     setLoading(true);
@@ -47,7 +51,7 @@ export default function Page() {
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query, history }),
       });
       const data = await res.json();
 
@@ -56,7 +60,7 @@ export default function Page() {
       } else {
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", text: data.answer, citations: data.citations },
+          { role: "assistant", text: data.answer, citations: data.citations, kind: data.kind },
         ]);
       }
     } catch {

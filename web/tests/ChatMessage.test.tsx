@@ -84,7 +84,9 @@ describe("ChatMessage", () => {
   });
 
   test("renders a refusal distinctly from a normal answer, with a link to add documents", () => {
-    const { container } = render(<ChatMessage message={{ role: "assistant", text: REFUSAL_MESSAGE }} />);
+    const { container } = render(
+      <ChatMessage message={{ role: "assistant", text: REFUSAL_MESSAGE, kind: "refusal" }} />,
+    );
     // Still a bona fide assistant message (the e2e suite and citation
     // styling both key off .message--assistant) -- message--refusal is an
     // additional modifier, not a replacement.
@@ -98,6 +100,29 @@ describe("ChatMessage", () => {
     const { container } = render(<ChatMessage message={{ role: "assistant", text: "A real answer." }} />);
     expect(container.querySelector(".message--refusal")).toBeNull();
     expect(screen.queryByRole("link", { name: /add documents/i })).not.toBeInTheDocument();
+  });
+
+  test("does not style as a refusal when the text matches the old refusal string but kind is answer", () => {
+    const { container } = render(
+      <ChatMessage message={{ role: "assistant", text: REFUSAL_MESSAGE, kind: "answer" }} />,
+    );
+    expect(container.querySelector(".message--refusal")).toBeNull();
+    expect(screen.queryByRole("link", { name: /add documents/i })).not.toBeInTheDocument();
+  });
+
+  test("shows a 'Not from your documents' label for a chitchat reply", () => {
+    render(<ChatMessage message={{ role: "assistant", text: "Hi there!", kind: "chitchat" }} />);
+    expect(screen.getByText("Not from your documents")).toBeInTheDocument();
+  });
+
+  test("shows a 'Not from your documents' label for a meta reply", () => {
+    render(<ChatMessage message={{ role: "assistant", text: "I'm AskTheDocs.", kind: "meta" }} />);
+    expect(screen.getByText("Not from your documents")).toBeInTheDocument();
+  });
+
+  test("does not show the 'Not from your documents' label for a grounded answer", () => {
+    render(<ChatMessage message={{ role: "assistant", text: "A real answer.", kind: "answer" }} />);
+    expect(screen.queryByText("Not from your documents")).not.toBeInTheDocument();
   });
 
   test("renders a non-URL citation (file or community) as a plain label, not a link", () => {
