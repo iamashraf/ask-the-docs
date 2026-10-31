@@ -14,6 +14,10 @@ from openai import OpenAI
 from ask_the_docs.config import ProviderConfig
 
 OLLAMA_CHAT_TIMEOUT_SECONDS = 60
+# Ollama's own default idle-unload is 5m -- without an explicit keep_alive,
+# a gap between requests longer than that forces the next call to pay a
+# full model-load cost on top of generation.
+OLLAMA_KEEP_ALIVE = "30m"
 
 
 class OllamaUnavailableError(RuntimeError):
@@ -58,6 +62,7 @@ class OllamaLLMClient:
                     "model": self.model,
                     "messages": messages,
                     "stream": False,
+                    "keep_alive": OLLAMA_KEEP_ALIVE,
                 },
                 timeout=OLLAMA_CHAT_TIMEOUT_SECONDS,
             )

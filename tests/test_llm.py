@@ -7,6 +7,7 @@ from ask_the_docs.config import ProviderConfig
 from ask_the_docs.llm import (
     AnthropicLLMClient,
     GenerationResult,
+    OLLAMA_KEEP_ALIVE,
     OllamaLLMClient,
     OllamaUnavailableError,
     OpenAILLMClient,
@@ -83,6 +84,28 @@ def test_ollama_client_generate_prepends_system_message_when_given(monkeypatch):
 
     assert captured["json"]["messages"][0] == {"role": "system", "content": "be terse"}
     assert captured["json"]["messages"][1] == {"role": "user", "content": "hi"}
+
+
+def test_ollama_client_sends_keep_alive_to_avoid_idle_model_eviction(monkeypatch):
+    """Without this, Ollama unloads the model after its default 5-minute
+    idle timeout, so the next request pays a full model-load cost on top
+    of generation -- this is the single biggest source of the "it was
+    fast a minute ago" variance observed in production traces."""
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["json"] = json
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"message": {"content": "hello world"}},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    client.generate("hi")
+
+    assert captured["json"]["keep_alive"] == OLLAMA_KEEP_ALIVE
 
 
 def test_anthropic_client_generate_calls_sdk(monkeypatch):
