@@ -20,6 +20,7 @@ from ask_the_docs.index import (
     get_chunks_by_refs,
     get_collection_name,
     get_index_generation,
+    list_sources,
     load_index,
 )
 from ask_the_docs.llm import OllamaUnavailableError
@@ -812,3 +813,23 @@ def test_build_index_deletes_chunks_for_a_source_that_becomes_empty(tmp_path, mo
     build_index([doc_v2_now_empty], settings)
 
     assert get_all_chunks(settings) == []
+
+
+def test_list_sources_returns_sorted_distinct_sources(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    docs = [
+        Document(page_content="first b doc", metadata={"source": "b.pdf", "source_doc_id": "docB1"}),
+        Document(page_content="an a doc", metadata={"source": "a.md", "source_doc_id": "docA"}),
+        Document(page_content="second b doc", metadata={"source": "b.pdf", "source_doc_id": "docB2"}),
+    ]
+    build_index(docs, settings)
+
+    assert list_sources(settings) == ["a.md", "b.pdf"]
+
+
+def test_list_sources_empty_index_returns_empty_list(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+
+    assert list_sources(settings) == []

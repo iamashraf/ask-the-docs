@@ -261,6 +261,11 @@ def get_all_chunks(settings: Settings) -> list[Document]:
     ]
 
 
+def list_sources(settings: Settings) -> list[str]:
+    result = load_index(settings).get(include=["metadatas"])
+    return sorted({metadata["source"] for metadata in result["metadatas"]})
+
+
 def get_chunks_by_refs(settings: Settings, refs: list[str]) -> list[Document]:
     """Targeted fetch of "source_doc_id:chunk_index" refs; Chroma rejects $or/$and with fewer than two clauses."""
     if not refs:
