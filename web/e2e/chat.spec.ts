@@ -48,6 +48,7 @@ test("refuses a deliberately out-of-corpus question", async ({ page }) => {
 });
 
 test("answers a follow-up that depends on the previous turn", async ({ page }) => {
+  test.setTimeout(120_000); // two sequential cold-model round trips
   await page.goto("/");
   await page.getByRole("textbox").fill("What is the attention mechanism?");
   await page.getByRole("button", { name: /send/i }).click();
