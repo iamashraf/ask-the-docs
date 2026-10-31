@@ -19,6 +19,19 @@ logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 
+class RetrievedChunks(list):
+    """list[Document] that also carries the query actually used for
+    retrieval (the rewritten one, when query_rewrite_enabled) -- answer.py
+    reuses it for the generation prompt too, so a cleaned-up/expanded
+    query benefits generation, not just retrieval. Still a plain list for
+    every existing caller/test: equality, iteration, len(), indexing all
+    behave exactly as before."""
+
+    def __init__(self, chunks, search_query: str):
+        super().__init__(chunks)
+        self.search_query = search_query
+
+
 def _doc_key(doc: Document) -> tuple[str, int]:
     return (doc.metadata["source_doc_id"], doc.metadata["chunk_index"])
 
@@ -60,7 +73,7 @@ def hybrid_merge(
     return merged
 
 
-def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
+def retrieve(query: str, settings: Settings, k: int = 5) -> RetrievedChunks:
     """Up to k chunks most relevant to query via hybrid (vector + BM25)
     search with optional query rewrite and reranking, with a graph-aware
     "global" short-circuit and "local" candidate merge when graph_enabled;
@@ -86,7 +99,7 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
                 logger.warning("Global search failed; falling back to hybrid search.", exc_info=True)
                 global_results = []
             if global_results:
-                return global_results[:k]
+                return RetrievedChunks(global_results[:k], search_query)
 
     hybrid_start = time.monotonic()
     with tracer.start_as_current_span("hybrid_retrieve"):
@@ -140,5 +153,5 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
             reranked = get_reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
             logger.info("Rerank succeeded: %d results", len(reranked))
         metrics.rerank_latency_seconds.record(time.monotonic() - rerank_start)
-        return reranked
-    return candidates[:k]
+        return RetrievedChunks(reranked, search_query)
+    return RetrievedChunks(candidates[:k], search_query)

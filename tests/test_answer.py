@@ -19,6 +19,7 @@ from ask_the_docs.answer import (
 from ask_the_docs.cache import make_cache_key
 from ask_the_docs.config import REFUSAL_MESSAGE, ProviderConfig, Settings
 from ask_the_docs.llm import GenerationResult
+from ask_the_docs.retrieve import RetrievedChunks
 from tests.test_metrics import find_data_point, find_metric, get_metrics_data
 
 
@@ -743,3 +744,52 @@ def test_answer_passes_system_prompt_to_generate(monkeypatch):
     answer("q", settings)
 
     assert captured["system"] == settings.system_prompt_template
+
+
+def test_compute_answer_builds_prompt_from_the_rewritten_search_query(monkeypatch):
+    """retrieve() already cleans up a typo'd/malformed query for its own
+    search -- without this, the LLM generating the final answer still saw
+    the raw original, which measurably hurt citation-guardrail pass rates
+    on rough input."""
+    chunks = RetrievedChunks(
+        [Document(page_content="chunk one", metadata={"source": "a.pdf"})],
+        search_query="what is Chain-of-Thought prompting?",
+    )
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+
+    captured = {}
+
+    class FakeClient:
+        def generate_with_usage(self, prompt, system=None):
+            captured["prompt"] = prompt
+            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
+    settings = make_settings()
+
+    answer("wut id cot", settings)
+
+    assert "what is Chain-of-Thought prompting?" in captured["prompt"]
+    assert "wut id cot" not in captured["prompt"]
+
+
+def test_compute_answer_falls_back_to_raw_query_when_retrieve_returns_a_plain_list(monkeypatch):
+    """A mocked/older retrieve() returning a plain list (no .search_query
+    attribute) must not crash -- falls back to the original query, same as
+    today's behavior."""
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+
+    captured = {}
+
+    class FakeClient:
+        def generate_with_usage(self, prompt, system=None):
+            captured["prompt"] = prompt
+            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
+    settings = make_settings()
+
+    answer("the raw query", settings)
+
+    assert "the raw query" in captured["prompt"]

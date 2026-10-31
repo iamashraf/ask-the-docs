@@ -78,7 +78,13 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
 
     context = format_context(chunks)
     client = get_llm_client(settings.generator)
-    prompt = build_prompt(query, context)
+    # retrieve() cleans the query up (typos, grammar) for its own search --
+    # reuse that for generation too, so a malformed input doesn't throw off
+    # the model's citation formatting even though the right context was
+    # found. Falls back to the raw query if retrieve() is mocked/old and
+    # returns a plain list with no .search_query.
+    generation_query = getattr(chunks, "search_query", query)
+    prompt = build_prompt(generation_query, context)
     logger.debug("LLM call -- system=%r, prompt=%r", settings.system_prompt_template, prompt)
 
     for attempt in range(1, MAX_GENERATION_ATTEMPTS + 1):

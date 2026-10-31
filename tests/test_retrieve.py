@@ -245,6 +245,50 @@ def test_retrieve_falls_back_to_raw_query_when_rewrite_fails(tmp_path, monkeypat
     assert results[0].page_content == "apples are red fruit"
 
 
+def test_retrieve_result_carries_the_rewritten_search_query(tmp_path, monkeypatch):
+    """answer.py reuses this for the generation prompt too -- without it,
+    a typo'd/malformed query gets cleaned up for retrieval but the LLM
+    still sees the raw, confusing original when generating the answer."""
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda settings: FakeCache())
+    monkeypatch.setattr("ask_the_docs.retrieve.rewrite_query", lambda query, settings: "cleaned up query")
+    monkeypatch.setitem(VECTORS, "cleaned up query", VECTORS["apples are red fruit"])
+
+    settings = Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+        index_dir=tmp_path / "index",
+        query_rewrite_enabled=True,
+        rerank_enabled=False,
+    )
+    docs = [Document(page_content="apples are red fruit", metadata={"source": "a.txt", "source_doc_id": "a"})]
+    build_index(docs, settings)
+
+    results = retrieve("wut r apls", settings, k=1)
+
+    assert results.search_query == "cleaned up query"
+    assert len(results) == 1
+
+
+def test_retrieve_result_search_query_matches_original_when_rewrite_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda settings: FakeCache())
+
+    settings = Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+        index_dir=tmp_path / "index",
+        query_rewrite_enabled=False,
+        rerank_enabled=False,
+    )
+    docs = [Document(page_content="apples are red fruit", metadata={"source": "a.txt", "source_doc_id": "a"})]
+    build_index(docs, settings)
+
+    results = retrieve("apples are red fruit", settings, k=1)
+
+    assert results.search_query == "apples are red fruit"
+
+
 def test_retrieve_skips_classification_when_graph_disabled(tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr("ask_the_docs.retrieve.classify_query", lambda *a, **k: called.append(1))
