@@ -9,23 +9,36 @@ from langchain_core.documents import Document
 from ask_the_docs import metrics
 from ask_the_docs.answer import (
     MAX_GENERATION_ATTEMPTS,
+    STRUCTURED_SYSTEM_PROMPT_TEMPLATE,
     AnswerResult,
     _compute_answer,
     answer,
     build_prompt,
     citation_guardrail_passes,
     format_context,
+    structured_answer_passes,
 )
 from ask_the_docs.cache import make_cache_key
 from ask_the_docs.config import REFUSAL_MESSAGE, ProviderConfig, Settings
-from ask_the_docs.llm import GenerationResult
+from ask_the_docs.llm import GenerationResult, StructuredGenerationResult
 from ask_the_docs.retrieve import RetrievedChunks
 from tests.test_metrics import find_data_point, find_metric, get_metrics_data
 
 
 def make_settings() -> Settings:
+    """ollama is the generator in production, and the one structured output
+    applies to -- most tests below exercise that path."""
     return Settings(
         generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+    )
+
+
+def make_freetext_settings() -> Settings:
+    """A non-ollama generator -- still uses generate_with_usage +
+    citation_guardrail_passes, since structured output is Ollama-only."""
+    return Settings(
+        generator=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
         judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
     )
 
@@ -137,9 +150,11 @@ def test_answer_calls_generator_with_context_and_returns_citations(monkeypatch, 
     captured_prompts = []
 
     class FakeClient:
-        def generate_with_usage(self, prompt, system=None):
+        def generate_structured(self, prompt, schema, system=None):
             captured_prompts.append(prompt)
-            return GenerationResult(text="the answer [1][2]", input_tokens=None, output_tokens=None)
+            return StructuredGenerationResult(
+                grounded=True, answer="the answer [1][2]", citations=[1, 2], input_tokens=None, output_tokens=None
+            )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
 
@@ -165,9 +180,13 @@ def test_answer_dedupes_citations_preserving_order(monkeypatch):
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
-            generate_with_usage=Mock(
-                return_value=GenerationResult(
-                    text="the answer [1][2][3]", input_tokens=None, output_tokens=None
+            generate_structured=Mock(
+                return_value=StructuredGenerationResult(
+                    grounded=True,
+                    answer="the answer [1][2][3]",
+                    citations=[1, 2, 3],
+                    input_tokens=None,
+                    output_tokens=None,
                 )
             )
         ),
@@ -182,13 +201,13 @@ def test_answer_returns_refusal_message_when_guardrail_fails(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
     fake_generate = Mock(
-        return_value=GenerationResult(
-            text="an answer with no citation markers", input_tokens=None, output_tokens=None
+        return_value=StructuredGenerationResult(
+            grounded=False, answer="", citations=[], input_tokens=None, output_tokens=None
         )
     )
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
-        lambda config: Mock(generate_with_usage=fake_generate),
+        lambda config: Mock(generate_structured=fake_generate),
     )
 
     result = answer("some question", make_settings())
@@ -208,15 +227,17 @@ def test_answer_retries_once_when_first_attempt_fails_the_guardrail(monkeypatch)
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
     fake_generate = Mock(
         side_effect=[
-            GenerationResult(
-                text="an answer with no citation markers", input_tokens=None, output_tokens=None
+            StructuredGenerationResult(
+                grounded=False, answer="", citations=[], input_tokens=None, output_tokens=None
             ),
-            GenerationResult(text="a grounded answer [1]", input_tokens=None, output_tokens=None),
+            StructuredGenerationResult(
+                grounded=True, answer="a grounded answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            ),
         ]
     )
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
-        lambda config: Mock(generate_with_usage=fake_generate),
+        lambda config: Mock(generate_structured=fake_generate),
     )
 
     result = answer("some question", make_settings())
@@ -224,6 +245,35 @@ def test_answer_retries_once_when_first_attempt_fails_the_guardrail(monkeypatch)
     assert result.text == "a grounded answer [1]"
     assert result.citations == ["a.pdf"]
     assert fake_generate.call_count == 2
+
+
+def test_answer_retry_includes_corrective_feedback_not_identical_prompt(monkeypatch):
+    """The retry must differ from the first attempt's prompt -- corrective,
+    not a blind resend of the exact same text."""
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    captured_prompts = []
+
+    def fake_generate(prompt, schema, system=None):
+        captured_prompts.append(prompt)
+        if len(captured_prompts) == 1:
+            return StructuredGenerationResult(
+                grounded=False, answer="", citations=[], input_tokens=None, output_tokens=None
+            )
+        return StructuredGenerationResult(
+            grounded=True, answer="a grounded answer [1]", citations=[1], input_tokens=None, output_tokens=None
+        )
+
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(generate_structured=fake_generate),
+    )
+
+    answer("some question", make_settings())
+
+    assert len(captured_prompts) == 2
+    assert captured_prompts[0] != captured_prompts[1]
+    assert captured_prompts[0] in captured_prompts[1]
 
 
 def test_compute_answer_records_the_guardrail_result_on_the_generate_span(monkeypatch):
@@ -256,8 +306,10 @@ def test_compute_answer_records_the_guardrail_result_on_the_generate_span(monkey
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
-            generate_with_usage=Mock(
-                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            generate_structured=Mock(
+                return_value=StructuredGenerationResult(
+                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                )
             )
         ),
     )
@@ -297,9 +349,11 @@ def test_compute_answer_sets_gen_ai_span_attributes(monkeypatch):
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
-            generate_with_usage=Mock(
-                return_value=GenerationResult(
-                    text="the answer [1]",
+            generate_structured=Mock(
+                return_value=StructuredGenerationResult(
+                    grounded=True,
+                    answer="the answer [1]",
+                    citations=[1],
                     input_tokens=12,
                     output_tokens=34,
                     response_model="llama3.1:8b-instruct-q4_K_M",
@@ -352,8 +406,10 @@ def test_compute_answer_omits_usage_attributes_when_token_counts_are_none(monkey
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
-            generate_with_usage=Mock(
-                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            generate_structured=Mock(
+                return_value=StructuredGenerationResult(
+                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                )
             )
         ),
     )
@@ -375,8 +431,10 @@ def test_compute_answer_increments_citation_guardrail_counter(monkeypatch):
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
-            generate_with_usage=Mock(
-                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            generate_structured=Mock(
+                return_value=StructuredGenerationResult(
+                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                )
             )
         ),
     )
@@ -404,9 +462,9 @@ def test_compute_answer_increments_refusal_counter_when_guardrail_fails_after_re
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
-            generate_with_usage=Mock(
-                return_value=GenerationResult(
-                    text="an answer with no citation markers", input_tokens=None, output_tokens=None
+            generate_structured=Mock(
+                return_value=StructuredGenerationResult(
+                    grounded=False, answer="", citations=[], input_tokens=None, output_tokens=None
                 )
             )
         ),
@@ -426,8 +484,10 @@ def test_compute_answer_observes_gen_ai_token_usage_and_duration_histograms(monk
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
-            generate_with_usage=Mock(
-                return_value=GenerationResult(text="the answer [1]", input_tokens=12, output_tokens=34)
+            generate_structured=Mock(
+                return_value=StructuredGenerationResult(
+                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=12, output_tokens=34
+                )
             )
         ),
     )
@@ -457,8 +517,10 @@ def test_compute_answer_skips_token_usage_histogram_when_tokens_are_none(monkeyp
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
-            generate_with_usage=Mock(
-                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            generate_structured=Mock(
+                return_value=StructuredGenerationResult(
+                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                )
             )
         ),
     )
@@ -482,8 +544,10 @@ def test_answer_logs_prompt_at_debug_level(monkeypatch, caplog):
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
-            generate_with_usage=Mock(
-                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            generate_structured=Mock(
+                return_value=StructuredGenerationResult(
+                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                )
             )
         ),
     )
@@ -516,6 +580,7 @@ def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
         settings.graph_traversal_hop_depth,
         settings.global_search_top_communities,
         1,
+        STRUCTURED_SYSTEM_PROMPT_TEMPLATE,
     )
     fake_cache.set(key, json.dumps(dataclasses.asdict(cached_result)).encode())
 
@@ -540,8 +605,10 @@ def test_answer_increments_cache_miss_counter_on_cache_miss(monkeypatch):
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
-            generate_with_usage=Mock(
-                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            generate_structured=Mock(
+                return_value=StructuredGenerationResult(
+                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                )
             )
         ),
     )
@@ -558,8 +625,10 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
-            generate_with_usage=Mock(
-                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            generate_structured=Mock(
+                return_value=StructuredGenerationResult(
+                    grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+                )
             )
         ),
     )
@@ -581,6 +650,7 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
         make_settings().graph_traversal_hop_depth,
         make_settings().global_search_top_communities,
         0,
+        STRUCTURED_SYSTEM_PROMPT_TEMPLATE,
     )
     fake_cache.set(key, b"not valid json")
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: fake_cache)
@@ -606,9 +676,11 @@ def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
     calls = {"count": 0}
 
     class FakeClient:
-        def generate_with_usage(self, prompt, system=None):
+        def generate_structured(self, prompt, schema, system=None):
             calls["count"] += 1
-            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            return StructuredGenerationResult(
+                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
     settings = make_settings()
@@ -629,9 +701,11 @@ def test_answer_cache_key_changes_when_system_prompt_template_changes(monkeypatc
     calls = {"count": 0}
 
     class FakeClient:
-        def generate_with_usage(self, prompt, system=None):
+        def generate_structured(self, prompt, schema, system=None):
             calls["count"] += 1
-            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            return StructuredGenerationResult(
+                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
 
@@ -654,9 +728,11 @@ def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
     calls = {"count": 0}
 
     class FakeClient:
-        def generate_with_usage(self, prompt, system=None):
+        def generate_structured(self, prompt, schema, system=None):
             calls["count"] += 1
-            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            return StructuredGenerationResult(
+                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
 
@@ -687,9 +763,11 @@ def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field,
     calls = {"count": 0}
 
     class FakeClient:
-        def generate_with_usage(self, prompt, system=None):
+        def generate_structured(self, prompt, schema, system=None):
             calls["count"] += 1
-            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            return StructuredGenerationResult(
+                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
 
@@ -714,9 +792,11 @@ def test_answer_cache_key_changes_when_index_generation_changes(monkeypatch):
     calls = {"count": 0}
 
     class FakeClient:
-        def generate_with_usage(self, prompt, system=None):
+        def generate_structured(self, prompt, schema, system=None):
             calls["count"] += 1
-            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            return StructuredGenerationResult(
+                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
     settings = make_settings()
@@ -728,6 +808,8 @@ def test_answer_cache_key_changes_when_index_generation_changes(monkeypatch):
 
 
 def test_answer_passes_system_prompt_to_generate(monkeypatch):
+    """Free-text providers (non-ollama) still use settings.system_prompt_template --
+    the structured path below has its own, separate system prompt constant."""
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
 
@@ -739,7 +821,7 @@ def test_answer_passes_system_prompt_to_generate(monkeypatch):
             return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
-    settings = make_settings()
+    settings = make_freetext_settings()
 
     answer("q", settings)
 
@@ -749,8 +831,8 @@ def test_answer_passes_system_prompt_to_generate(monkeypatch):
 def test_compute_answer_builds_prompt_from_the_rewritten_search_query(monkeypatch):
     """retrieve() already cleans up a typo'd/malformed query for its own
     search -- without this, the LLM generating the final answer still saw
-    the raw original, which measurably hurt citation-guardrail pass rates
-    on rough input."""
+    the raw original. ollama is the production generator and now uses
+    structured output, so the fake client implements generate_structured."""
     chunks = RetrievedChunks(
         [Document(page_content="chunk one", metadata={"source": "a.pdf"})],
         search_query="what is Chain-of-Thought prompting?",
@@ -760,9 +842,11 @@ def test_compute_answer_builds_prompt_from_the_rewritten_search_query(monkeypatc
     captured = {}
 
     class FakeClient:
-        def generate_with_usage(self, prompt, system=None):
+        def generate_structured(self, prompt, schema, system=None):
             captured["prompt"] = prompt
-            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            return StructuredGenerationResult(
+                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
     settings = make_settings()
@@ -783,9 +867,11 @@ def test_compute_answer_falls_back_to_raw_query_when_retrieve_returns_a_plain_li
     captured = {}
 
     class FakeClient:
-        def generate_with_usage(self, prompt, system=None):
+        def generate_structured(self, prompt, schema, system=None):
             captured["prompt"] = prompt
-            return GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            return StructuredGenerationResult(
+                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
     settings = make_settings()
@@ -793,3 +879,105 @@ def test_compute_answer_falls_back_to_raw_query_when_retrieve_returns_a_plain_li
     answer("the raw query", settings)
 
     assert "the raw query" in captured["prompt"]
+
+
+def test_answer_passes_structured_system_prompt_for_ollama(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+
+    captured = {}
+
+    class FakeClient:
+        def generate_structured(self, prompt, schema, system=None):
+            captured["system"] = system
+            captured["schema"] = schema
+            return StructuredGenerationResult(
+                grounded=True, answer="the answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            )
+
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
+
+    answer("q", make_settings())
+
+    assert captured["system"] == STRUCTURED_SYSTEM_PROMPT_TEMPLATE
+    assert captured["schema"]["required"] == ["grounded", "answer", "citations"]
+
+
+def test_structured_answer_passes_requires_grounded_and_citations():
+    assert (
+        structured_answer_passes(
+            StructuredGenerationResult(
+                grounded=True, answer="x", citations=[1], input_tokens=None, output_tokens=None
+            ),
+            num_chunks=3,
+        )
+        is True
+    )
+    assert (
+        structured_answer_passes(
+            StructuredGenerationResult(
+                grounded=False, answer="x", citations=[1], input_tokens=None, output_tokens=None
+            ),
+            num_chunks=3,
+        )
+        is False
+    )
+    assert (
+        structured_answer_passes(
+            StructuredGenerationResult(
+                grounded=True, answer="x", citations=[], input_tokens=None, output_tokens=None
+            ),
+            num_chunks=3,
+        )
+        is False
+    )
+
+
+def test_structured_answer_passes_fails_on_out_of_range_citation():
+    result = StructuredGenerationResult(
+        grounded=True, answer="x", citations=[1, 9], input_tokens=None, output_tokens=None
+    )
+    assert structured_answer_passes(result, num_chunks=3) is False
+
+
+def test_answer_uses_freetext_path_for_non_ollama_provider(monkeypatch):
+    """Anthropic/OpenAI structured output is out of scope -- they keep the
+    free-text + regex guardrail unchanged."""
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_with_usage=Mock(
+                return_value=GenerationResult(text="the answer [1]", input_tokens=None, output_tokens=None)
+            )
+        ),
+    )
+
+    result = answer("q", make_freetext_settings())
+
+    assert result.text == "the answer [1]"
+
+
+def test_answer_retries_freetext_provider_on_guardrail_failure_without_feedback(monkeypatch):
+    """The free-text fallback keeps its original blind retry (same prompt,
+    no corrective note) -- only the structured/ollama path is corrective."""
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    captured_prompts = []
+
+    def fake_generate(prompt, system=None):
+        captured_prompts.append(prompt)
+        if len(captured_prompts) == 1:
+            return GenerationResult(text="no citation markers here", input_tokens=None, output_tokens=None)
+        return GenerationResult(text="a grounded answer [1]", input_tokens=None, output_tokens=None)
+
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(generate_with_usage=fake_generate),
+    )
+
+    result = answer("q", make_freetext_settings())
+
+    assert result.text == "a grounded answer [1]"
+    assert captured_prompts[0] == captured_prompts[1]
