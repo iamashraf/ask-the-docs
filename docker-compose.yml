@@ -23,7 +23,7 @@ services:
         condition: service_healthy
     environment:
       - OLLAMA_HOST=http://ollama:11434
-    entrypoint: ["sh", "-c", "ollama pull llama3.1:8b && ollama pull nomic-embed-text"]
+    entrypoint: ["sh", "-c", "ollama pull llama3.1:8b && ollama pull nomic-embed-text && ollama pull qwen3-coder:30b"]
 
   valkey:
     image: valkey/valkey
