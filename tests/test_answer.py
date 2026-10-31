@@ -146,7 +146,7 @@ def test_citation_guardrail_fails_gracefully_on_absurdly_large_citation_number()
 
 
 def test_answer_returns_refusal_message_without_calling_llm(monkeypatch):
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: [])
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: [])
     mock_get_llm_client = Mock()
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", mock_get_llm_client)
 
@@ -161,7 +161,7 @@ def test_answer_calls_generator_with_context_and_returns_citations(monkeypatch, 
         Document(page_content="chunk one", metadata={"source": "a.pdf"}),
         Document(page_content="chunk two", metadata={"source": "b.pdf"}),
     ]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
 
     captured_prompts = []
 
@@ -194,7 +194,7 @@ def test_answer_dedupes_citations_preserving_order(monkeypatch):
         Document(page_content="chunk two", metadata={"source": "b.pdf"}),
         Document(page_content="chunk three", metadata={"source": "a.pdf"}),
     ]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
@@ -215,7 +215,7 @@ def test_answer_dedupes_citations_preserving_order(monkeypatch):
 
 def test_answer_returns_refusal_message_when_guardrail_fails(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     fake_generate = Mock(
         return_value=StructuredJSONResult(
             data={"grounded": False, "answer": "", "citations": []},
@@ -242,7 +242,7 @@ def test_answer_retries_once_when_first_attempt_fails_the_guardrail(monkeypatch)
     malformed/uncited response must not immediately refuse a genuinely
     answerable question; one retry should recover it."""
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     fake_generate = Mock(
         side_effect=[
             StructuredJSONResult(
@@ -273,7 +273,7 @@ def test_answer_retry_includes_corrective_feedback_not_identical_prompt(monkeypa
     """The retry must differ from the first attempt's prompt -- corrective,
     not a blind resend of the exact same text."""
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     captured_prompts = []
 
     def fake_generate(prompt, schema, system=None):
@@ -305,7 +305,7 @@ def test_answer_retry_includes_corrective_feedback_not_identical_prompt(monkeypa
 def test_answer_recovers_when_first_structured_reply_is_malformed_json(monkeypatch):
     """A parse failure is a failed attempt to retry, not a crash."""
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     fake_generate = Mock(
         side_effect=[
             StructuredOutputError("not valid json"),
@@ -329,7 +329,7 @@ def test_answer_recovers_when_first_structured_reply_is_malformed_json(monkeypat
 
 def test_answer_returns_refusal_when_every_structured_reply_is_malformed_json(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     fake_generate = Mock(side_effect=StructuredOutputError("not valid json"))
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
@@ -383,7 +383,7 @@ def test_compute_answer_records_the_guardrail_result_on_the_generate_span(monkey
     fake_tracer = FakeTracer()
     monkeypatch.setattr("ask_the_docs.answer.tracer", fake_tracer)
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
@@ -428,7 +428,7 @@ def test_compute_answer_sets_gen_ai_span_attributes(monkeypatch):
     fake_tracer = FakeTracer()
     monkeypatch.setattr("ask_the_docs.answer.tracer", fake_tracer)
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
@@ -483,7 +483,7 @@ def test_compute_answer_omits_usage_attributes_when_token_counts_are_none(monkey
     fake_tracer = FakeTracer()
     monkeypatch.setattr("ask_the_docs.answer.tracer", fake_tracer)
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
@@ -510,7 +510,7 @@ def test_compute_answer_omits_usage_attributes_when_token_counts_are_none(monkey
 
 def test_compute_answer_increments_citation_guardrail_counter(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
@@ -532,7 +532,7 @@ def test_compute_answer_increments_citation_guardrail_counter(monkeypatch):
 
 
 def test_compute_answer_increments_refusal_counter_when_no_chunks_retrieved(monkeypatch):
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: [])
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: [])
     before = _counter_value("refusal")
 
     _compute_answer("anything", make_settings(), k=5)
@@ -543,7 +543,7 @@ def test_compute_answer_increments_refusal_counter_when_no_chunks_retrieved(monk
 
 def test_compute_answer_increments_refusal_counter_when_guardrail_fails_after_retries(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
@@ -566,7 +566,7 @@ def test_compute_answer_increments_refusal_counter_when_guardrail_fails_after_re
 
 def test_compute_answer_observes_gen_ai_token_usage_and_duration_histograms(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     settings = make_settings()
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
@@ -601,7 +601,7 @@ def test_compute_answer_observes_gen_ai_token_usage_and_duration_histograms(monk
 
 def test_compute_answer_skips_token_usage_histogram_when_tokens_are_none(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     settings = make_settings()
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
@@ -631,7 +631,7 @@ def test_compute_answer_skips_token_usage_histogram_when_tokens_are_none(monkeyp
 
 def test_answer_logs_prompt_at_debug_level(monkeypatch, caplog):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
@@ -701,7 +701,7 @@ def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
 
 def test_answer_increments_cache_miss_counter_on_cache_miss(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
@@ -723,7 +723,7 @@ def test_answer_increments_cache_miss_counter_on_cache_miss(monkeypatch):
 
 def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
@@ -779,7 +779,7 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
 
 def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
@@ -806,7 +806,7 @@ def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
 
 def test_answer_cache_key_changes_when_system_prompt_template_changes(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
@@ -835,7 +835,7 @@ def test_answer_cache_key_changes_when_system_prompt_template_changes(monkeypatc
 
 def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
@@ -873,7 +873,7 @@ def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
 )
 def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field, value_a, value_b):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
@@ -902,7 +902,7 @@ def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field,
 
 def test_answer_cache_key_changes_when_index_generation_changes(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
 
     generations = [2, 3]
     monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: generations.pop(0))
@@ -931,7 +931,7 @@ def test_answer_cache_key_changes_when_index_generation_changes(monkeypatch):
 
 def test_answer_cache_key_changes_with_history(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
@@ -980,7 +980,7 @@ def test_answer_use_cache_false_skips_cache(monkeypatch):
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     mock_route = Mock(return_value=Route(intent="doc", standalone_query="What is X?", reply="", source="llm"))
     monkeypatch.setattr("ask_the_docs.answer.route", mock_route)
 
@@ -1016,7 +1016,7 @@ def test_answer_passes_system_prompt_to_generate(monkeypatch):
     """Free-text providers (non-ollama) still use settings.system_prompt_template --
     the structured path below has its own, separate system prompt constant."""
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
 
     captured = {}
 
@@ -1131,14 +1131,14 @@ def test_answer_doc_retrieves_and_prompts_with_standalone_query(monkeypatch):
 
 
 def test_answer_refusal_kind(monkeypatch):
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: [])
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: [])
 
     no_chunks_result = answer("anything", make_settings())
 
     assert no_chunks_result.kind == "refusal"
 
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
@@ -1165,7 +1165,7 @@ def test_answer_passes_trimmed_history_to_route(monkeypatch):
         return Route(intent="doc", standalone_query=query, reply="", source="llm")
 
     monkeypatch.setattr("ask_the_docs.answer.route", fake_route)
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: [])
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: [])
 
     settings = make_settings().model_copy(update={"history_max_turns": 1})
     history = [Turn(role="user", content="first"), Turn(role="assistant", content="second")]
@@ -1207,7 +1207,7 @@ def test_answer_falls_back_to_doc_with_raw_query_when_route_raises(monkeypatch):
 
 def test_answer_passes_structured_system_prompt_for_ollama(monkeypatch):
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
 
     captured = {}
 
@@ -1262,7 +1262,7 @@ def test_answer_uses_freetext_path_for_non_ollama_provider(monkeypatch):
     """Anthropic/OpenAI structured output is out of scope -- they keep the
     free-text + regex guardrail unchanged."""
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     monkeypatch.setattr(
         "ask_the_docs.answer.get_llm_client",
         lambda config: Mock(
@@ -1281,7 +1281,7 @@ def test_answer_retries_freetext_provider_on_guardrail_failure_without_feedback(
     """The free-text fallback keeps its original blind retry (same prompt,
     no corrective note) -- only the structured/ollama path is corrective."""
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     captured_prompts = []
 
     def fake_generate(prompt, system=None):

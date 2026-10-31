@@ -153,11 +153,11 @@ def _structured_retry_feedback(result: StructuredAnswer | None) -> str:
     )
 
 
-def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
+def _compute_answer(query: str, settings: Settings, k: int, search_query: str | None = None) -> AnswerResult:
     """Retrieves context and generates a grounded answer; skips the LLM
     call entirely if nothing relevant was found, and refuses if the model's
     answer isn't actually grounded in what was retrieved."""
-    chunks = retrieve(query, settings, k=k)
+    chunks = retrieve(query, settings, k=k, search_query=search_query)
     if not chunks:
         metrics.refusal_total.add(1)
         return AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal")
@@ -270,7 +270,7 @@ def _dispatch(query: str, trimmed_history: list[Turn], settings: Settings, k: in
             return _compute_answer(query, settings, k)
         return AnswerResult(text=build_meta_reply(sources), citations=[], kind="meta")
 
-    return _compute_answer(result.standalone_query, settings, k)
+    return _compute_answer(result.standalone_query, settings, k, search_query=result.search_query or None)
 
 
 def answer(

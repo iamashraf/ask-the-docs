@@ -216,6 +216,26 @@ def test_build_analyze_prompt_with_history():
     assert build_analyze_prompt("explain that more simply", history) == expected
 
 
+def test_build_analyze_prompt_caps_long_history_turn_content():
+    long_content = "x" * 650
+    history = [Turn(role="user", content=long_content)]
+
+    prompt = build_analyze_prompt("latest message", history)
+
+    assert (long_content[:600] + "...") in prompt
+    assert long_content not in prompt
+
+
+def test_build_analyze_prompt_leaves_short_history_turn_content_unchanged():
+    short_content = "a short turn"
+    history = [Turn(role="user", content=short_content)]
+
+    prompt = build_analyze_prompt("latest message", history)
+
+    assert f"user: {short_content}" in prompt
+    assert "..." not in prompt
+
+
 def test_analyze_ollama_uses_structured_output(monkeypatch):
     fake_client = FakeStructuredClient(
         data={"intent": "doc", "standalone_query": "LoRA low-rank adaptation", "reply": ""}
@@ -238,6 +258,36 @@ def test_analyze_hosted_provider_parses_fenced_json(monkeypatch):
 
     assert result == Route("doc", "LoRA low-rank adaptation", "", "llm")
     assert fake_client.captured_system == ANALYZE_SYSTEM_PROMPT
+
+
+def test_analyze_parses_distinct_search_query(monkeypatch):
+    fake_client = FakeStructuredClient(
+        data={
+            "intent": "doc",
+            "standalone_query": "what is LoRA?",
+            "search_query": "LoRA low-rank adaptation fine-tuning PEFT",
+            "reply": "",
+        }
+    )
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", lambda _: fake_client)
+
+    result = analyze("what is LoRA?", [], make_settings())
+
+    assert result.search_query == "LoRA low-rank adaptation fine-tuning PEFT"
+    assert result.standalone_query == "what is LoRA?"
+
+
+def test_analyze_hosted_provider_parses_distinct_search_query(monkeypatch):
+    text = (
+        '```json\n{"intent": "doc", "standalone_query": "what is LoRA?", '
+        '"search_query": "LoRA low-rank adaptation fine-tuning PEFT", "reply": ""}\n```'
+    )
+    fake_client = FakeTextClient(text)
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", lambda _: fake_client)
+
+    result = analyze("what is LoRA?", [], make_settings(provider="anthropic", model="claude-sonnet-5-5"))
+
+    assert result.search_query == "LoRA low-rank adaptation fine-tuning PEFT"
 
 
 def test_analyze_normalizes_intent_casing(monkeypatch):

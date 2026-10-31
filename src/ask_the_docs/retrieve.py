@@ -60,8 +60,9 @@ def hybrid_merge(
     return merged
 
 
-def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
-    """Up to k chunks via hybrid (vector + BM25) search, optional rerank, and graph-aware global/local merge; [] if the index is empty."""
+def retrieve(query: str, settings: Settings, k: int = 5, search_query: str | None = None) -> list[Document]:
+    """Up to k chunks via hybrid (vector + BM25) search using search_query (falls back to query), optional rerank and classification/graph search using query, and graph-aware global/local merge; [] if the index is empty."""
+    effective_search_query = search_query if search_query is not None else query
     classification = QueryClassification(label="local", entities=[])
     if settings.graph_enabled:
         try:
@@ -87,7 +88,9 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
             # "higher = more relevant" scores, instead of inverting the ranking.
             vector_hits = [
                 (doc, -distance)
-                for doc, distance in index.similarity_search_with_score(query, k=settings.candidate_pool_size)
+                for doc, distance in index.similarity_search_with_score(
+                    effective_search_query, k=settings.candidate_pool_size
+                )
             ]
         except Exception:
             logger.warning("Vector search failed; falling back to BM25-only results.", exc_info=True)
@@ -98,7 +101,7 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
         # crowding out real vector matches.
         bm25_hits = [
             hit
-            for hit in sorted(bm25_score(query, settings), key=lambda pair: pair[1], reverse=True)
+            for hit in sorted(bm25_score(effective_search_query, settings), key=lambda pair: pair[1], reverse=True)
             if hit[1] > 0
         ][: settings.candidate_pool_size]
 

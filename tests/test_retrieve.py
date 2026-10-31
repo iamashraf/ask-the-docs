@@ -249,6 +249,83 @@ def test_retrieve_searches_with_the_given_query_and_never_calls_an_llm(tmp_path,
     mock_get_llm_client.assert_not_called()
 
 
+def test_retrieve_uses_search_query_for_vector_and_bm25_but_raw_query_for_rerank(tmp_path, monkeypatch):
+    recorded = {}
+
+    class FakeIndex:
+        def similarity_search_with_score(self, query, k):
+            recorded["vector_query"] = query
+            return [(_doc("a"), 0.1)]
+
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
+
+    def fake_bm25_score(query, settings):
+        recorded["bm25_query"] = query
+        return []
+
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", fake_bm25_score)
+
+    class CapturingReranker:
+        def rerank(self, query, candidates, k):
+            recorded["rerank_query"] = query
+            return candidates[:k]
+
+    monkeypatch.setattr("ask_the_docs.retrieve.get_reranker", lambda model_name: CapturingReranker())
+    monkeypatch.setattr("ask_the_docs.retrieve.classify_query", lambda q, s: pytest.fail("classify_query must not be called when graph is disabled"))
+
+    settings = make_settings(tmp_path).model_copy(update={"rerank_enabled": True, "graph_enabled": False})
+    retrieve("natural question", settings, k=5, search_query="expanded keywords")
+
+    assert recorded["vector_query"] == "expanded keywords"
+    assert recorded["bm25_query"] == "expanded keywords"
+    assert recorded["rerank_query"] == "natural question"
+
+
+def test_retrieve_uses_raw_query_for_classification_and_global_search_even_with_search_query(tmp_path, monkeypatch):
+    recorded = {}
+
+    def fake_classify(query, settings):
+        recorded["classify_query"] = query
+        return QueryClassification(label="global", entities=[])
+
+    monkeypatch.setattr("ask_the_docs.retrieve.classify_query", fake_classify)
+
+    def fake_global_search(query, settings):
+        recorded["global_search_query"] = query
+        return [make_chunk("community-0", 0, "a theme summary")]
+
+    monkeypatch.setattr("ask_the_docs.retrieve.global_search", fake_global_search)
+
+    settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
+    retrieve("natural question", settings, k=5, search_query="expanded keywords")
+
+    assert recorded["classify_query"] == "natural question"
+    assert recorded["global_search_query"] == "natural question"
+
+
+def test_retrieve_falls_back_to_query_when_search_query_is_none(tmp_path, monkeypatch):
+    recorded = {}
+
+    class FakeIndex:
+        def similarity_search_with_score(self, query, k):
+            recorded["vector_query"] = query
+            return []
+
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
+
+    def fake_bm25_score(query, settings):
+        recorded["bm25_query"] = query
+        return []
+
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", fake_bm25_score)
+
+    settings = make_settings(tmp_path)
+    retrieve("natural question", settings, k=5)
+
+    assert recorded["vector_query"] == "natural question"
+    assert recorded["bm25_query"] == "natural question"
+
+
 def test_retrieve_skips_classification_when_graph_disabled(tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr("ask_the_docs.retrieve.classify_query", lambda *a, **k: called.append(1))
