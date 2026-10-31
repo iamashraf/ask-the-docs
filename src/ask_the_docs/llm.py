@@ -153,6 +153,11 @@ class AnthropicLLMClient:
     def generate_with_usage(self, prompt: str, system: str | None = None) -> GenerationResult:
         kwargs = {"model": self.model, "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]}
         if system is not None:
+            # Anthropic requires roughly 1024+ tokens (model-dependent) before a
+            # cache_control block actually caches anything; below that it's a
+            # silent no-op (cache_creation_input_tokens stays 0), not an error.
+            # This project's static system prompts are currently all smaller
+            # than that, so this is dormant until one of them grows past it.
             kwargs["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
         response = self._client.messages.create(**kwargs)
         usage = getattr(response, "usage", None)
