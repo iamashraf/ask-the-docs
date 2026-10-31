@@ -115,6 +115,7 @@ class OllamaLLMClient:
                     "messages": messages,
                     "stream": False,
                     "format": schema,
+                    "keep_alive": OLLAMA_KEEP_ALIVE,
                 },
                 timeout=OLLAMA_CHAT_TIMEOUT_SECONDS,
             )

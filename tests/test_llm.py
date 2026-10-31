@@ -447,6 +447,28 @@ def test_ollama_generate_structured_raises_clear_error_on_connection_failure(mon
         client.generate_structured("prompt", STRUCTURED_SCHEMA)
 
 
+def test_ollama_generate_structured_sends_keep_alive_to_avoid_idle_model_eviction(monkeypatch):
+    """Same reasoning as the generate_with_usage keep_alive test above --
+    this is the call path answer.py actually uses for every Ollama
+    generation, so a missing keep_alive here is the one that bites."""
+    captured = {}
+    content = json.dumps({"grounded": True, "answer": "a", "citations": [1]})
+
+    def fake_post(url, json, timeout):
+        captured["json"] = json
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"message": {"content": content}},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    client.generate_structured("prompt", STRUCTURED_SCHEMA)
+
+    assert captured["json"]["keep_alive"] == OLLAMA_KEEP_ALIVE
+
+
 def test_ollama_generate_structured_defaults_to_none_when_counts_absent(monkeypatch):
     content = json.dumps({"grounded": True, "answer": "a", "citations": [1]})
 
