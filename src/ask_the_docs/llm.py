@@ -5,6 +5,7 @@ and once as the judge (evaluate.py).
 """
 
 import dataclasses
+import json
 from typing import Protocol
 
 import requests
@@ -24,9 +25,28 @@ class OllamaUnavailableError(RuntimeError):
     pass
 
 
+class StructuredOutputError(RuntimeError):
+    """Ollama's response didn't parse as the requested JSON schema -- a
+    model-reliability failure, not a transport one, so it's kept distinct
+    from OllamaUnavailableError."""
+
+
 @dataclasses.dataclass
 class GenerationResult:
     text: str
+    input_tokens: int | None
+    output_tokens: int | None
+    response_model: str | None = None
+
+
+@dataclasses.dataclass
+class StructuredGenerationResult:
+    """Parsed JSON from Ollama's schema-constrained output -- the caller
+    reads grounded/citations directly instead of regexing free text."""
+
+    grounded: bool
+    answer: str
+    citations: list[int]
     input_tokens: int | None
     output_tokens: int | None
     response_model: str | None = None
@@ -80,6 +100,52 @@ class OllamaLLMClient:
             output_tokens=body.get("eval_count"),
             response_model=body.get("model"),
         )
+
+    def generate_structured(
+        self, prompt: str, schema: dict, system: str | None = None
+    ) -> StructuredGenerationResult:
+        """Like generate_with_usage, but constrains Ollama's output to `schema`
+        via the `format` field instead of leaving citation formatting to the
+        model's free-text discipline."""
+        messages = []
+        if system is not None:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "stream": False,
+                    "format": schema,
+                },
+                timeout=OLLAMA_CHAT_TIMEOUT_SECONDS,
+            )
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            raise OllamaUnavailableError(
+                f"Could not reach Ollama at {self.base_url}. "
+                "Is it running? Check OLLAMA_BASE_URL / GENERATOR__BASE_URL."
+            ) from exc
+
+        response.raise_for_status()
+        body = response.json()
+        raw_content = body["message"]["content"]
+        try:
+            parsed = json.loads(raw_content)
+            return StructuredGenerationResult(
+                grounded=bool(parsed["grounded"]),
+                answer=str(parsed["answer"]),
+                citations=[int(c) for c in parsed["citations"]],
+                input_tokens=body.get("prompt_eval_count"),
+                output_tokens=body.get("eval_count"),
+                response_model=body.get("model"),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise StructuredOutputError(
+                f"Ollama's response didn't match the requested schema: {raw_content!r}"
+            ) from exc
 
 
 class AnthropicLLMClient:

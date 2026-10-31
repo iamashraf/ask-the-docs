@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -11,8 +12,20 @@ from ask_the_docs.llm import (
     OllamaLLMClient,
     OllamaUnavailableError,
     OpenAILLMClient,
+    StructuredGenerationResult,
+    StructuredOutputError,
     get_llm_client,
 )
+
+STRUCTURED_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "grounded": {"type": "boolean"},
+        "answer": {"type": "string"},
+        "citations": {"type": "array", "items": {"type": "integer"}},
+    },
+    "required": ["grounded", "answer", "citations"],
+}
 
 
 def test_get_llm_client_returns_ollama_client():
@@ -336,3 +349,117 @@ def test_openai_client_generate_prepends_system_message_when_given(monkeypatch):
 
     assert captured["messages"][0] == {"role": "system", "content": "be terse"}
     assert captured["messages"][1] == {"role": "user", "content": "hi"}
+
+
+def test_ollama_generate_structured_sends_format_schema_and_parses_response(monkeypatch):
+    captured = {}
+    content = json.dumps({"grounded": True, "answer": "the answer [1]", "citations": [1]})
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {
+                "message": {"content": content},
+                "prompt_eval_count": 12,
+                "eval_count": 34,
+                "model": "llama3.1:8b-instruct-q4_K_M",
+            },
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    result = client.generate_structured("prompt", STRUCTURED_SCHEMA, system="be grounded")
+
+    assert captured["url"] == "http://localhost:11434/api/chat"
+    assert captured["json"]["format"] == STRUCTURED_SCHEMA
+    assert captured["json"]["messages"][0] == {"role": "system", "content": "be grounded"}
+    assert captured["json"]["messages"][1] == {"role": "user", "content": "prompt"}
+    assert result == StructuredGenerationResult(
+        grounded=True,
+        answer="the answer [1]",
+        citations=[1],
+        input_tokens=12,
+        output_tokens=34,
+        response_model="llama3.1:8b-instruct-q4_K_M",
+    )
+
+
+def test_ollama_generate_structured_omits_system_message_when_not_given(monkeypatch):
+    captured = {}
+    content = json.dumps({"grounded": False, "answer": "", "citations": []})
+
+    def fake_post(url, json, timeout):
+        captured["json"] = json
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"message": {"content": content}},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    client.generate_structured("prompt", STRUCTURED_SCHEMA)
+
+    assert captured["json"]["messages"] == [{"role": "user", "content": "prompt"}]
+
+
+def test_ollama_generate_structured_raises_on_malformed_json(monkeypatch):
+    def fake_post(url, json, timeout):
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"message": {"content": "not json at all"}},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    with pytest.raises(StructuredOutputError):
+        client.generate_structured("prompt", STRUCTURED_SCHEMA)
+
+
+def test_ollama_generate_structured_raises_when_required_field_missing(monkeypatch):
+    content = json.dumps({"grounded": True, "answer": "x"})
+
+    def fake_post(url, json, timeout):
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"message": {"content": content}},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    with pytest.raises(StructuredOutputError):
+        client.generate_structured("prompt", STRUCTURED_SCHEMA)
+
+
+def test_ollama_generate_structured_raises_clear_error_on_connection_failure(monkeypatch):
+    def fake_post(url, json, timeout):
+        raise requests.ConnectionError("boom")
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    with pytest.raises(OllamaUnavailableError, match="OLLAMA_BASE_URL"):
+        client.generate_structured("prompt", STRUCTURED_SCHEMA)
+
+
+def test_ollama_generate_structured_defaults_to_none_when_counts_absent(monkeypatch):
+    content = json.dumps({"grounded": True, "answer": "a", "citations": [1]})
+
+    def fake_post(url, json, timeout):
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"message": {"content": content}},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    result = client.generate_structured("prompt", STRUCTURED_SCHEMA)
+
+    assert result.input_tokens is None and result.output_tokens is None
+    assert result.response_model is None
