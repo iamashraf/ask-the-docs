@@ -248,6 +248,72 @@ def test_get_job_status_returns_404_for_an_unknown_job(monkeypatch):
     assert response.status_code == 404
 
 
+def test_list_jobs_returns_the_jobs_from_list_jobs(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    records = [
+        {
+            "job_id": "job-2", "kind": "index", "source": None, "status": "queued",
+            "result": None, "error": None, "created_at": "2026-01-02T00:00:00+00:00",
+            "updated_at": "2026-01-02T00:00:00+00:00",
+        },
+        {
+            "job_id": "job-1", "kind": "ingest", "source": "a.pdf", "status": "done",
+            "result": {"documents_ingested": 1}, "error": None,
+            "created_at": "2026-01-01T00:00:00+00:00", "updated_at": "2026-01-01T00:00:00+00:00",
+        },
+    ]
+    captured = {}
+
+    async def fake_list_jobs(client, limit):
+        captured["limit"] = limit
+        return records
+
+    monkeypatch.setattr("ask_the_docs.api.list_jobs", fake_list_jobs)
+    monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
+
+    response = TestClient(app).get("/v1/jobs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [job["job_id"] for job in body["jobs"]] == ["job-2", "job-1"]
+    assert captured["limit"] == 50
+
+
+def test_list_jobs_passes_through_a_custom_limit(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    captured = {}
+
+    async def fake_list_jobs(client, limit):
+        captured["limit"] = limit
+        return []
+
+    monkeypatch.setattr("ask_the_docs.api.list_jobs", fake_list_jobs)
+    monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
+
+    response = TestClient(app).get("/v1/jobs?limit=5")
+
+    assert response.status_code == 200
+    assert captured["limit"] == 5
+
+
+def test_list_jobs_rejects_a_limit_above_the_cap(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
+
+    response = TestClient(app).get("/v1/jobs?limit=201")
+
+    assert response.status_code == 422
+
+
+def test_list_jobs_rejects_a_non_positive_limit(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
+
+    response = TestClient(app).get("/v1/jobs?limit=0")
+
+    assert response.status_code == 422
+
+
 def test_ask_returns_answer_and_citations(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
     captured = {}
