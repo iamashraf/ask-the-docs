@@ -32,6 +32,7 @@ from ask_the_docs.ingest import (
 from ask_the_docs.jobs import JobStoreError, create_job, get_async_cache_client, get_job, list_jobs, update_job
 from ask_the_docs.llm import OllamaUnavailableError
 from ask_the_docs.queue import QueuePublishError, publish_ingest_job
+from ask_the_docs.reranker import DEFAULT_RERANKER_MODEL, get_reranker
 from ask_the_docs.seed import seed_if_needed
 from ask_the_docs.tracing import configure_logging, configure_metrics, configure_tracing
 
@@ -55,7 +56,13 @@ async def lifespan(app: FastAPI):
     configure_tracing("ask-the-docs-app", get_settings())
     configure_logging("ask-the-docs-app", get_settings())
     configure_metrics("ask-the-docs-app", get_settings())
-    seed_if_needed(get_settings())
+    settings = get_settings()
+    seed_if_needed(settings)
+    if settings.rerank_enabled:
+        # Loads the CrossEncoder model once at startup instead of on the
+        # first real request -- get_reranker is itself lru_cache'd, so this
+        # just moves the one-time load cost off the user's first message.
+        get_reranker(DEFAULT_RERANKER_MODEL)
     yield
 
 GOLDEN_QUESTIONS_PATH = Path("evals/golden_questions.yaml")

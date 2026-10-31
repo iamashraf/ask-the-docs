@@ -13,6 +13,7 @@ from ask_the_docs.ingest import PathSecurityError, UnsupportedFileTypeError, Url
 from ask_the_docs.jobs import JobStoreError
 from ask_the_docs.llm import OllamaUnavailableError
 from ask_the_docs.queue import QueuePublishError
+from ask_the_docs.reranker import DEFAULT_RERANKER_MODEL
 
 
 def make_settings() -> Settings:
@@ -53,6 +54,46 @@ def test_startup_configures_tracing(monkeypatch):
         pass
 
     assert captured["service_name"] == "ask-the-docs-app"
+
+
+def test_startup_warms_the_reranker_when_rerank_enabled(monkeypatch):
+    """The reranker's CrossEncoder model is cached in-process but loaded
+    lazily on first use -- without this, the first real user request after
+    a restart pays that load cost instead of it happening at startup."""
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.seed_if_needed", lambda settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_tracing", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_logging", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_metrics", lambda service_name, settings: None)
+    captured = {}
+    monkeypatch.setattr(
+        "ask_the_docs.api.get_reranker", lambda model_name: captured.setdefault("model_name", model_name)
+    )
+
+    with TestClient(app):
+        pass
+
+    assert captured["model_name"] == DEFAULT_RERANKER_MODEL
+
+
+def test_startup_skips_reranker_warmup_when_rerank_disabled(monkeypatch):
+    def settings_with_rerank_disabled() -> Settings:
+        settings = make_settings()
+        settings.rerank_enabled = False
+        return settings
+
+    monkeypatch.setattr("ask_the_docs.api.get_settings", settings_with_rerank_disabled)
+    monkeypatch.setattr("ask_the_docs.api.seed_if_needed", lambda settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_tracing", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_logging", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_metrics", lambda service_name, settings: None)
+    called = []
+    monkeypatch.setattr("ask_the_docs.api.get_reranker", lambda model_name: called.append(model_name))
+
+    with TestClient(app):
+        pass
+
+    assert called == []
 
 
 def test_startup_configures_logging_and_metrics_alongside_tracing(monkeypatch):
