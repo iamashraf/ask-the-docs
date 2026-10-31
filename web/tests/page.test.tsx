@@ -73,6 +73,38 @@ describe("Page", () => {
     });
   });
 
+  test("truncates a long history turn's content but leaves a short one unchanged", async () => {
+    const longAnswer = "a".repeat(3500);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ answer: longAnswer, citations: [], kind: "answer" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ answer: "ok", citations: [], kind: "answer" }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Page />);
+    await userEvent.type(screen.getByRole("textbox"), "first question");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText(longAnswer);
+
+    await userEvent.type(screen.getByRole("textbox"), "second question");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText("ok");
+
+    const secondBody = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    expect(secondBody.history).toEqual([
+      { role: "user", content: "first question" },
+      { role: "assistant", content: "a".repeat(3000) + "... [truncated]" },
+    ]);
+  });
+
   test("excludes an error bubble from the history sent on the next request", async () => {
     const fetchMock = vi
       .fn()

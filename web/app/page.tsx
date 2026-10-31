@@ -4,6 +4,18 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ChatMessage, type Message } from "../components/ChatMessage";
 
+// The backend caps a history turn's content at 4000 chars (Turn.content in
+// router.py); truncate below that with margin so a long grounded answer
+// doesn't make the *next* request fail backend validation.
+const HISTORY_CONTENT_LIMIT = 3000;
+const TRUNCATION_MARKER = "... [truncated]";
+
+function truncateForHistory(text: string): string {
+  return text.length > HISTORY_CONTENT_LIMIT
+    ? text.slice(0, HISTORY_CONTENT_LIMIT) + TRUNCATION_MARKER
+    : text;
+}
+
 export default function Page() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -41,7 +53,7 @@ export default function Page() {
 
     const history = messages
       .filter((message) => message.role !== "error")
-      .map((message) => ({ role: message.role, content: message.text }));
+      .map((message) => ({ role: message.role, content: truncateForHistory(message.text) }));
 
     setMessages((prev) => [...prev, { role: "user", text: query }]);
     setInput("");
