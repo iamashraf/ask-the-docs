@@ -12,6 +12,7 @@ from ask_the_docs.answer import (
     STRUCTURED_SYSTEM_PROMPT_TEMPLATE,
     AnswerResult,
     _compute_answer,
+    _structured_retry_feedback,
     answer,
     build_prompt,
     citation_guardrail_passes,
@@ -20,7 +21,11 @@ from ask_the_docs.answer import (
 )
 from ask_the_docs.cache import make_cache_key
 from ask_the_docs.config import REFUSAL_MESSAGE, ProviderConfig, Settings
-from ask_the_docs.llm import GenerationResult, StructuredGenerationResult
+from ask_the_docs.llm import (
+    GenerationResult,
+    StructuredGenerationResult,
+    StructuredOutputError,
+)
 from ask_the_docs.retrieve import RetrievedChunks
 from tests.test_metrics import find_data_point, find_metric, get_metrics_data
 
@@ -274,6 +279,67 @@ def test_answer_retry_includes_corrective_feedback_not_identical_prompt(monkeypa
     assert len(captured_prompts) == 2
     assert captured_prompts[0] != captured_prompts[1]
     assert captured_prompts[0] in captured_prompts[1]
+
+
+def test_answer_recovers_when_first_structured_reply_is_malformed_json(monkeypatch):
+    """A parse failure is a failed attempt to retry, not a crash."""
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    fake_generate = Mock(
+        side_effect=[
+            StructuredOutputError("not valid json"),
+            StructuredGenerationResult(
+                grounded=True, answer="a grounded answer [1]", citations=[1], input_tokens=None, output_tokens=None
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(generate_structured=fake_generate),
+    )
+
+    result = answer("some question", make_settings())
+
+    assert result.text == "a grounded answer [1]"
+    assert fake_generate.call_count == 2
+
+
+def test_answer_returns_refusal_when_every_structured_reply_is_malformed_json(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    fake_generate = Mock(side_effect=StructuredOutputError("not valid json"))
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(generate_structured=fake_generate),
+    )
+
+    result = answer("some question", make_settings())
+
+    assert result == AnswerResult(text=REFUSAL_MESSAGE, citations=[])
+    assert fake_generate.call_count == MAX_GENERATION_ATTEMPTS
+
+
+def test_structured_retry_feedback_matches_the_failure_type():
+    assert "not valid JSON" in _structured_retry_feedback(None)
+    ungrounded = StructuredGenerationResult(
+        grounded=False, answer="", citations=[], input_tokens=None, output_tokens=None
+    )
+    assert "did not contain the answer" in _structured_retry_feedback(ungrounded)
+    empty_answer = StructuredGenerationResult(
+        grounded=True, answer="   ", citations=[1], input_tokens=None, output_tokens=None
+    )
+    assert "answer field was empty" in _structured_retry_feedback(empty_answer)
+    uncited = StructuredGenerationResult(
+        grounded=True, answer="a real answer", citations=[], input_tokens=None, output_tokens=None
+    )
+    assert "did not include valid citations" in _structured_retry_feedback(uncited)
+
+
+def test_structured_answer_passes_fails_on_blank_answer():
+    blank = StructuredGenerationResult(
+        grounded=True, answer="   ", citations=[1], input_tokens=None, output_tokens=None
+    )
+    assert structured_answer_passes(blank, num_chunks=3) is False
 
 
 def test_compute_answer_records_the_guardrail_result_on_the_generate_span(monkeypatch):

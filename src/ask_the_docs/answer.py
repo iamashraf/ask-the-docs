@@ -32,10 +32,7 @@ ANSWER_CACHE_TTL_SECONDS = 86400
 # without materially changing worst-case latency.
 MAX_GENERATION_ATTEMPTS = 2
 
-# Ollama-only: constrains the model's own output to this schema (via Ollama's
-# `format` field) instead of generating free text and regexing it for [n]
-# markers afterwards. Anthropic/OpenAI structured output is out of scope --
-# they keep using generate_with_usage + citation_guardrail_passes below.
+# Ollama-only -- Anthropic/OpenAI keep generate_with_usage + citation_guardrail_passes below.
 STRUCTURED_ANSWER_SCHEMA = {
     "type": "object",
     "properties": {
@@ -46,10 +43,7 @@ STRUCTURED_ANSWER_SCHEMA = {
     "required": ["grounded", "answer", "citations"],
 }
 
-# Separate from config.DEFAULT_SYSTEM_PROMPT_TEMPLATE -- that one is being
-# edited in parallel on another branch for the free-text path. This one
-# explains the structured schema's fields instead of [n]-marker conventions
-# in prose.
+# Separate from config.DEFAULT_SYSTEM_PROMPT_TEMPLATE -- explains the JSON schema's fields, not [n]-marker prose.
 STRUCTURED_SYSTEM_PROMPT_TEMPLATE = (
     "You answer questions using only the numbered context chunks the user provides. "
     "Respond with JSON matching the required schema.\n\n"
@@ -110,16 +104,14 @@ def citation_guardrail_passes(answer_text: str, num_chunks: int) -> bool:
 
 
 def structured_answer_passes(result: StructuredGenerationResult, num_chunks: int) -> bool:
-    """Structured-output counterpart to citation_guardrail_passes: trusts the
-    model's own grounded/citations fields instead of regexing its prose."""
-    if not result.grounded or not result.citations:
+    """Structured-output counterpart to citation_guardrail_passes."""
+    if not result.grounded or not result.citations or not result.answer.strip():
         return False
     return all(1 <= c <= num_chunks for c in result.citations)
 
 
 def _structured_retry_feedback(result: StructuredGenerationResult | None) -> str:
-    """Corrective, not blind: tells the model what was specifically wrong
-    with its last attempt instead of resending the identical prompt."""
+    """Tells the model what was specifically wrong, instead of a blind resend."""
     if result is None:
         return "Your previous reply was not valid JSON. Reply again as JSON matching the schema exactly."
     if not result.grounded:
@@ -129,6 +121,8 @@ def _structured_retry_feedback(result: StructuredGenerationResult | None) -> str
             "If they genuinely do not answer the question, set grounded to false "
             "again -- do not guess."
         )
+    if not result.answer.strip():
+        return "Your previous reply's answer field was empty. Answer again with a real, substantive explanation."
     return (
         "Your previous reply did not include valid citations. Answer again, "
         "marking every claim with the [n] marker of the context chunk it came "
@@ -154,12 +148,11 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
     # returns a plain list with no .search_query.
     generation_query = getattr(chunks, "search_query", query)
     prompt = build_prompt(generation_query, context)
-    logger.debug("LLM call -- system=%r, prompt=%r", settings.system_prompt_template, prompt)
 
-    # Ollama gets schema-constrained structured output (grounded/answer/citations
-    # read directly); other providers keep the free-text + regex guardrail, since
-    # Anthropic/OpenAI structured output is out of scope here.
+    # Ollama uses schema-constrained structured output; other providers keep the free-text + regex guardrail.
     use_structured = settings.generator.provider == "ollama"
+    system_prompt = STRUCTURED_SYSTEM_PROMPT_TEMPLATE if use_structured else settings.system_prompt_template
+    logger.debug("LLM call -- system=%r, prompt=%r", system_prompt, prompt)
     structured: StructuredGenerationResult | None = None
     feedback: str | None = None
 
@@ -171,7 +164,7 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
             if use_structured:
                 try:
                     structured = client.generate_structured(
-                        attempt_prompt, STRUCTURED_ANSWER_SCHEMA, system=STRUCTURED_SYSTEM_PROMPT_TEMPLATE
+                        attempt_prompt, STRUCTURED_ANSWER_SCHEMA, system=system_prompt
                     )
                 except StructuredOutputError:
                     logger.warning(
@@ -186,7 +179,7 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
                 output_tokens = structured.output_tokens if structured is not None else None
                 response_model = structured.response_model if structured is not None else None
             else:
-                result = client.generate_with_usage(attempt_prompt, system=settings.system_prompt_template)
+                result = client.generate_with_usage(attempt_prompt, system=system_prompt)
                 text = result.text
                 passed = citation_guardrail_passes(text, num_chunks=len(chunks))
                 input_tokens = result.input_tokens
@@ -264,10 +257,7 @@ def answer(query: str, settings: Settings, k: int = 5) -> AnswerResult:
         settings.graph_traversal_hop_depth,
         settings.global_search_top_communities,
         get_index_generation(settings),
-        # Not settings-controlled, but the Ollama path's actual generation
-        # behavior changed with its introduction -- included so a pre-existing
-        # cached entry (e.g. a stale refusal from the old regex guardrail)
-        # never shadows it.
+        # Not settings-controlled, but invalidates cached entries from before the structured-output path existed.
         STRUCTURED_SYSTEM_PROMPT_TEMPLATE,
     )
 

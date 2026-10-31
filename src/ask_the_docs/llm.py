@@ -26,9 +26,7 @@ class OllamaUnavailableError(RuntimeError):
 
 
 class StructuredOutputError(RuntimeError):
-    """Ollama's response didn't parse as the requested JSON schema -- a
-    model-reliability failure, not a transport one, so it's kept distinct
-    from OllamaUnavailableError."""
+    """Ollama's response didn't parse as the requested JSON schema -- distinct from OllamaUnavailableError."""
 
 
 @dataclasses.dataclass
@@ -41,8 +39,7 @@ class GenerationResult:
 
 @dataclasses.dataclass
 class StructuredGenerationResult:
-    """Parsed JSON from Ollama's schema-constrained output -- the caller
-    reads grounded/citations directly instead of regexing free text."""
+    """Parsed JSON from Ollama's schema-constrained output."""
 
     grounded: bool
     answer: str
@@ -104,9 +101,7 @@ class OllamaLLMClient:
     def generate_structured(
         self, prompt: str, schema: dict, system: str | None = None
     ) -> StructuredGenerationResult:
-        """Like generate_with_usage, but constrains Ollama's output to `schema`
-        via the `format` field instead of leaving citation formatting to the
-        model's free-text discipline."""
+        """Like generate_with_usage, but constrains Ollama's output to `schema` via the `format` field."""
         messages = []
         if system is not None:
             messages.append({"role": "system", "content": system})
