@@ -1,12 +1,33 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Status = { kind: "ok"; text: string } | { kind: "error"; text: string };
 
+type JobResult = { documents_ingested?: number; files_found?: number } | null;
+
+type JobListItem = {
+  job_id: string;
+  kind: string;
+  source: string | null;
+  status: string;
+  result: JobResult;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+const JOB_LIST_POLL_MS = 3000;
+
+function formatJobResult(result: JobResult): string {
+  if (!result) return "";
+  return "files_found" in result
+    ? `${result.documents_ingested} documents ingested, ${result.files_found} files found.`
+    : `${result.documents_ingested} documents ingested.`;
+}
 
 export async function pollJob(jobId: string): Promise<Status> {
   const deadline = Date.now() + POLL_TIMEOUT_MS;
@@ -40,8 +61,40 @@ export default function IngestPage() {
   const [sourceStatus, setSourceStatus] = useState<Status | null>(null);
   const [reindexLoading, setReindexLoading] = useState(false);
   const [reindexStatus, setReindexStatus] = useState<Status | null>(null);
+  const [jobs, setJobs] = useState<JobListItem[]>([]);
 
   const canIngest = source.trim().length > 0 && !loading;
+
+  useEffect(() => {
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    async function tick() {
+      try {
+        const res = await fetch("/api/jobs");
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const list: JobListItem[] = data.jobs ?? [];
+        if (cancelled) return;
+        setJobs(list);
+        const inFlight = list.some((job) => job.status === "queued" || job.status === "processing");
+        if (!inFlight && interval) {
+          clearInterval(interval);
+          interval = null;
+        }
+      } catch {
+        // Keep showing the last known list rather than surfacing a loud error here.
+      }
+    }
+
+    tick();
+    interval = setInterval(tick, JOB_LIST_POLL_MS);
+
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
+  }, []);
 
   async function ingestSource() {
     const value = source.trim();
@@ -146,6 +199,30 @@ export default function IngestPage() {
           >
             {reindexStatus.kind === "error" ? `Error: ${reindexStatus.text}` : reindexStatus.text}
           </p>
+        )}
+      </section>
+      <section className="ingest-section">
+        <h2>Recent jobs</h2>
+        {jobs.length === 0 ? (
+          <p className="ingest-section__hint">No ingestion jobs yet.</p>
+        ) : (
+          <ul className="job-list">
+            {jobs.map((job) => (
+              <li key={job.job_id} className="job-list__item">
+                <div className="job-list__row">
+                  <span className="job-list__source">{job.source ?? job.kind}</span>
+                  <span className={`status-badge status-badge--${job.status}`}>{job.status}</span>
+                </div>
+                <div className="job-list__meta">
+                  <span className="job-list__time">{new Date(job.created_at).toLocaleString()}</span>
+                  {job.status === "done" && job.result && <span>{formatJobResult(job.result)}</span>}
+                  {job.status === "failed" && job.error && (
+                    <span className="status status--error">{job.error}</span>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
         )}
       </section>
     </div>

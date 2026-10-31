@@ -14,6 +14,7 @@ describe("IngestPage", () => {
   });
 
   test("renders a heading and a link back to the chat page", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ jobs: [] })));
     render(<IngestPage />);
     expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /chat/i })).toHaveAttribute("href", "/");
@@ -22,6 +23,7 @@ describe("IngestPage", () => {
   test("ingests a single source and shows the result once the job finishes", async () => {
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce(jsonResponse({ jobs: [] }))
       .mockResolvedValueOnce(jsonResponse({ job_id: "job-1", status: "queued" }, 202))
       .mockResolvedValueOnce(jsonResponse({ status: "done", result: { documents_ingested: 2 } }));
     vi.stubGlobal("fetch", fetchMock);
@@ -34,7 +36,7 @@ describe("IngestPage", () => {
     await userEvent.click(screen.getByRole("button", { name: /^ingest$/i }));
 
     expect(await screen.findByText(/2 documents ingested/i)).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/jobs/job-1");
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/jobs/job-1");
   });
 
   test("shows a visible error when the initial ingest request fails", async () => {
@@ -50,6 +52,7 @@ describe("IngestPage", () => {
   test("shows a visible error when the job itself fails", async () => {
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce(jsonResponse({ jobs: [] }))
       .mockResolvedValueOnce(jsonResponse({ job_id: "job-1", status: "queued" }, 202))
       .mockResolvedValueOnce(jsonResponse({ status: "failed", error: "Unsupported file type" }));
     vi.stubGlobal("fetch", fetchMock);
@@ -62,6 +65,7 @@ describe("IngestPage", () => {
   });
 
   test("the ingest button is disabled for empty input", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ jobs: [] })));
     render(<IngestPage />);
     expect(screen.getByRole("button", { name: /^ingest$/i })).toBeDisabled();
   });
@@ -69,6 +73,7 @@ describe("IngestPage", () => {
   test("re-indexes everything and shows the result once the job finishes", async () => {
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce(jsonResponse({ jobs: [] }))
       .mockResolvedValueOnce(jsonResponse({ job_id: "job-2", status: "queued" }, 202))
       .mockResolvedValueOnce(
         jsonResponse({ status: "done", result: { documents_ingested: 10, files_found: 12 } }),
@@ -85,6 +90,7 @@ describe("IngestPage", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const fetchMock = vi
       .fn()
+      .mockResolvedValueOnce(jsonResponse({ jobs: [] }))
       .mockResolvedValueOnce(jsonResponse({ job_id: "job-3", status: "queued" }, 202))
       .mockResolvedValueOnce(jsonResponse({ status: "queued" }))
       .mockResolvedValueOnce(jsonResponse({ status: "processing" }))
@@ -115,6 +121,90 @@ describe("IngestPage", () => {
     expect(await screen.findByText(/couldn't reach the server/i)).toBeInTheDocument();
   });
 
+});
+
+describe("IngestPage recent jobs list", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  test("renders fetched jobs with their status and result", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          jobs: [
+            {
+              job_id: "job-1", kind: "ingest", source: "a.pdf", status: "done",
+              result: { documents_ingested: 2 }, error: null,
+              created_at: "2026-01-01T00:00:00+00:00", updated_at: "2026-01-01T00:00:00+00:00",
+            },
+            {
+              job_id: "job-2", kind: "index", source: null, status: "failed",
+              result: null, error: "boom",
+              created_at: "2026-01-02T00:00:00+00:00", updated_at: "2026-01-02T00:00:00+00:00",
+            },
+          ],
+        }),
+      ),
+    );
+
+    render(<IngestPage />);
+
+    expect(await screen.findByText("a.pdf")).toBeInTheDocument();
+    expect(screen.getByText("done")).toBeInTheDocument();
+    expect(screen.getByText(/2 documents ingested/i)).toBeInTheDocument();
+    expect(screen.getByText("index")).toBeInTheDocument();
+    expect(screen.getByText("failed")).toBeInTheDocument();
+    expect(screen.getByText("boom")).toBeInTheDocument();
+  });
+
+  test("shows a message when there are no jobs yet", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ jobs: [] })));
+
+    render(<IngestPage />);
+
+    expect(await screen.findByText(/no ingestion jobs yet/i)).toBeInTheDocument();
+  });
+
+  test("polls again while a job is queued, then stops once it's done", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          jobs: [
+            {
+              job_id: "job-1", kind: "ingest", source: "a.pdf", status: "queued",
+              result: null, error: null,
+              created_at: "2026-01-01T00:00:00+00:00", updated_at: "2026-01-01T00:00:00+00:00",
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          jobs: [
+            {
+              job_id: "job-1", kind: "ingest", source: "a.pdf", status: "done",
+              result: { documents_ingested: 1 }, error: null,
+              created_at: "2026-01-01T00:00:00+00:00", updated_at: "2026-01-01T00:00:01+00:00",
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<IngestPage />);
+
+    expect(await screen.findByText("queued")).toBeInTheDocument();
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(await screen.findByText("done")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("pollJob", () => {
