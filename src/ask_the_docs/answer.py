@@ -322,6 +322,6 @@ def answer(
 
     result = _dispatch(query, trimmed_history, settings, k)
 
-    if use_cache:
+    if use_cache and result.kind not in ("chitchat", "meta"):
         cache_set(cache_client, cache_key, json.dumps(dataclasses.asdict(result)).encode(), ttl_seconds=ANSWER_CACHE_TTL_SECONDS)
     return result

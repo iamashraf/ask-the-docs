@@ -28,7 +28,15 @@ from ask_the_docs.llm import (
     StructuredJSONResult,
     StructuredOutputError,
 )
-from ask_the_docs.router import ANALYZE_SYSTEM_PROMPT, GREETING_REPLY, Route, Turn, build_meta_reply, trim_history
+from ask_the_docs.router import (
+    ANALYZE_SYSTEM_PROMPT,
+    GREETING_REPLY,
+    Route,
+    Turn,
+    build_meta_reply,
+    route as real_route,
+    trim_history,
+)
 from tests.test_metrics import find_data_point, find_metric, get_metrics_data
 
 
@@ -957,20 +965,22 @@ def test_answer_cache_key_changes_with_history(monkeypatch):
 
 
 def test_answer_cache_round_trips_kind(monkeypatch):
+    # Uses a refusal (not chitchat) here: chitchat/meta results are never
+    # cached (Fix 3), so a chitchat round trip wouldn't prove kind survives
+    # serialization -- "answer" wouldn't either, since it's the default.
     monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
     shared_cache = FakeCacheClient()
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
-    mock_route = Mock(
-        return_value=Route(intent="chitchat", standalone_query="", reply=GREETING_REPLY, source="rules")
-    )
+    mock_route = Mock(return_value=Route(intent="doc", standalone_query="hi", reply="", source="llm"))
     monkeypatch.setattr("ask_the_docs.answer.route", mock_route)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: [])
     settings = make_settings()
 
     first = answer("hi", settings)
     second = answer("hi", settings)
 
-    assert first.kind == "chitchat"
-    assert second.kind == "chitchat"
+    assert first.kind == "refusal"
+    assert second.kind == "refusal"
     # The second call was a cache hit -- routing only ran once.
     assert mock_route.call_count == 1
 
@@ -1175,6 +1185,69 @@ def test_answer_passes_trimmed_history_to_route(monkeypatch):
     assert captured["history"] == trim_history(history, settings.history_max_turns)
 
 
+def test_answer_doc_retrieves_with_distinct_search_query(monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.answer.route",
+        lambda query, history, settings: Route(
+            intent="doc",
+            standalone_query="LoRA low-rank adaptation",
+            reply="",
+            source="llm",
+            search_query="LoRA low-rank adaptation fine-tuning PEFT synonyms",
+        ),
+    )
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    mock_retrieve = Mock(return_value=chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", mock_retrieve)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_structured=Mock(
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
+                )
+            )
+        ),
+    )
+
+    answer("what's lora?", make_settings())
+
+    assert mock_retrieve.call_args.kwargs["search_query"] == "LoRA low-rank adaptation fine-tuning PEFT synonyms"
+    assert mock_retrieve.call_args.args[0] == "LoRA low-rank adaptation"
+
+
+def test_answer_doc_passes_none_not_empty_string_when_search_query_is_blank(monkeypatch):
+    """Route.search_query defaults to "" for every non-LLM-sourced route; retrieve()
+    treats "" as a literal empty search, so _compute_answer must turn it into None."""
+    monkeypatch.setattr(
+        "ask_the_docs.answer.route",
+        lambda query, history, settings: Route(
+            intent="doc", standalone_query="what is LoRA?", reply="", source="llm", search_query=""
+        ),
+    )
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    mock_retrieve = Mock(return_value=chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", mock_retrieve)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_structured=Mock(
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
+                )
+            )
+        ),
+    )
+
+    answer("what is LoRA?", make_settings())
+
+    assert mock_retrieve.call_args.kwargs["search_query"] is None
+
+
 def test_answer_falls_back_to_doc_with_raw_query_when_route_raises(monkeypatch):
     """route() never raises per its own contract, but answer() defends against it anyway."""
 
@@ -1203,6 +1276,61 @@ def test_answer_falls_back_to_doc_with_raw_query_when_route_raises(monkeypatch):
     assert result.text == "the answer [1]"
     mock_retrieve.assert_called_once()
     assert mock_retrieve.call_args.args[0] == "the raw query"
+
+
+def test_answer_does_not_cache_chitchat_result(monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.answer.route",
+        lambda query, history, settings: Route(
+            intent="chitchat", standalone_query="", reply=GREETING_REPLY, source="rules"
+        ),
+    )
+    mock_cache_set = Mock()
+    monkeypatch.setattr("ask_the_docs.answer.cache_set", mock_cache_set)
+
+    result = answer("hi", make_settings(), use_cache=True)
+
+    assert result.kind == "chitchat"
+    mock_cache_set.assert_not_called()
+
+
+def test_answer_does_not_cache_meta_result(monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.answer.route",
+        lambda query, history, settings: Route(intent="meta", standalone_query="", reply="", source="llm"),
+    )
+    monkeypatch.setattr("ask_the_docs.answer.list_sources", lambda settings: ["a.pdf"])
+    mock_cache_set = Mock()
+    monkeypatch.setattr("ask_the_docs.answer.cache_set", mock_cache_set)
+
+    result = answer("what documents do you have?", make_settings(), use_cache=True)
+
+    assert result.kind == "meta"
+    mock_cache_set.assert_not_called()
+
+
+def test_answer_caches_normal_doc_answer(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_structured=Mock(
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
+                )
+            )
+        ),
+    )
+    mock_cache_set = Mock()
+    monkeypatch.setattr("ask_the_docs.answer.cache_set", mock_cache_set)
+
+    result = answer("What is X?", make_settings(), use_cache=True)
+
+    assert result.kind == "answer"
+    mock_cache_set.assert_called_once()
 
 
 def test_answer_passes_structured_system_prompt_for_ollama(monkeypatch):
@@ -1299,6 +1427,77 @@ def test_answer_retries_freetext_provider_on_guardrail_failure_without_feedback(
 
     assert result.text == "a grounded answer [1]"
     assert captured_prompts[0] == captured_prompts[1]
+
+
+def test_routing_integration_doc_question_uses_analyzed_search_query(monkeypatch):
+    """Exercises the real chain: a mocked LLM client response -> analyze()
+    parses it -> route() returns it -> _dispatch acts on it -- unlike every
+    other test in this file, route() itself is not mocked."""
+    monkeypatch.setattr("ask_the_docs.answer.route", real_route)
+
+    analyze_response = StructuredJSONResult(
+        data={
+            "intent": "doc",
+            "standalone_query": "what is LoRA?",
+            "search_query": "LoRA low-rank adaptation fine-tuning PEFT",
+            "reply": "",
+        },
+        input_tokens=5,
+        output_tokens=7,
+    )
+    mock_analyze_client = Mock(generate_structured=Mock(return_value=analyze_response))
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", lambda config: mock_analyze_client)
+
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    mock_retrieve = Mock(return_value=chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", mock_retrieve)
+
+    mock_generate_client = Mock(
+        generate_structured=Mock(
+            return_value=StructuredJSONResult(
+                data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
+            )
+        )
+    )
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: mock_generate_client)
+
+    result = answer("what's lora?", make_settings(), use_cache=False)
+
+    mock_analyze_client.generate_structured.assert_called_once()
+    assert mock_retrieve.call_args.args[0] == "what is LoRA?"
+    assert mock_retrieve.call_args.kwargs["search_query"] == "LoRA low-rank adaptation fine-tuning PEFT"
+    assert result.kind == "answer"
+    assert result.text == "the answer [1]"
+
+
+def test_routing_integration_chitchat_question_skips_retrieval(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.answer.route", real_route)
+
+    analyze_response = StructuredJSONResult(
+        data={
+            "intent": "chitchat",
+            "standalone_query": "",
+            "search_query": "",
+            "reply": "Just saying hi! Ask me anything about the indexed documents.",
+        },
+        input_tokens=5,
+        output_tokens=7,
+    )
+    mock_analyze_client = Mock(generate_structured=Mock(return_value=analyze_response))
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", lambda config: mock_analyze_client)
+
+    mock_retrieve = Mock()
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", mock_retrieve)
+
+    # "tell me a joke" isn't matched by the rules fast path (match_smalltalk),
+    # so the result below can only come from the mocked analyze response.
+    result = answer("tell me a joke", make_settings(), use_cache=False)
+
+    assert result.kind == "chitchat"
+    assert result.text == "Just saying hi! Ask me anything about the indexed documents."
+    mock_retrieve.assert_not_called()
 
 
 def test_parse_structured_answer_reads_fields():
