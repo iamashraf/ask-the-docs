@@ -96,13 +96,18 @@ def test_judge_sends_instructions_as_a_separate_system_prompt(monkeypatch):
         }
     )
 
-    judge("q", "context", "answer", client)
+    judge("what is the capital of France?", "retrieved passage about Paris", "Paris is the capital", client)
 
     client.generate.assert_called_once()
     call_args, call_kwargs = client.generate.call_args
     prompt = call_args[0]
     assert call_kwargs["system"] == JUDGE_SYSTEM_PROMPT
-    assert "q" in prompt and "context" in prompt and "answer" in prompt
+    # Distinctive values, not generic words like "context"/"answer" that the
+    # template's own static labels ("Retrieved context:", "Generated answer:")
+    # would already contain regardless of what's actually interpolated.
+    assert "what is the capital of France?" in prompt
+    assert "retrieved passage about Paris" in prompt
+    assert "Paris is the capital" in prompt
     assert "You are evaluating a RAG system's answer." not in prompt
     assert "Respond with ONLY a JSON object" not in prompt
 
