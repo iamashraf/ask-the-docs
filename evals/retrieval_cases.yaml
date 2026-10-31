@@ -24,13 +24,13 @@
 # Training LMs to Follow Instructions with Human Feedback (InstructGPT/RLHF)
 - question: "How does InstructGPT use reinforcement learning from human feedback to align with user intent?"
   expected_source: "https://arxiv.org/pdf/2203.02155"
-- question: "How can human preference ratings be used to make a model's outputs more helpful and less harmful?"
+- question: "How can people's rankings of different model outputs be used as a training signal to make responses more helpful and less harmful?"
   expected_source: "https://arxiv.org/pdf/2203.02155"
 
 # LoRA: Low-Rank Adaptation of Large Language Models
 - question: "How does LoRA use low-rank matrices to fine-tune large language models efficiently?"
   expected_source: "https://arxiv.org/pdf/2106.09685"
-- question: "What's a way to adapt a huge pretrained model to a new task while only training a small number of extra parameters?"
+- question: "How can you give a large pretrained model new task-specific behavior by training only a tiny set of additional weights, instead of updating the whole model?"
   expected_source: "https://arxiv.org/pdf/2106.09685"
 
 # Chain-of-Thought Prompting Elicits Reasoning in LLMs
@@ -72,7 +72,7 @@
 # Quantifying LLM Sensitivity to Spurious Features in Prompt Design
 - question: "How sensitive are large language models to spurious features in prompt design, like formatting?"
   expected_source: "https://arxiv.org/pdf/2310.11324"
-- question: "Can small, meaningless changes to how a prompt is formatted cause a model's answer to change a lot?"
+- question: "Can small, meaningless changes in how you phrase or lay out a question cause a model's answer to change a lot?"
   expected_source: "https://arxiv.org/pdf/2310.11324"
 
 # What is In-context Learning? (lakera.ai blog)
