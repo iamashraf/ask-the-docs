@@ -33,6 +33,7 @@ from ask_the_docs.jobs import JobStoreError, create_job, get_async_cache_client,
 from ask_the_docs.llm import OllamaUnavailableError
 from ask_the_docs.queue import QueuePublishError, publish_ingest_job
 from ask_the_docs.reranker import DEFAULT_RERANKER_MODEL, get_reranker
+from ask_the_docs.router import Turn
 from ask_the_docs.seed import seed_if_needed
 from ask_the_docs.tracing import configure_logging, configure_metrics, configure_tracing
 
@@ -206,17 +207,19 @@ async def get_job_status(job_id: str) -> JobStatusResponse:
 class AskRequest(BaseModel):
     query: str = Field(min_length=1)
     k: int = Field(default=5, ge=1)
+    history: list[Turn] = []
 
 
 class AskResponse(BaseModel):
     answer: str
     citations: list[str]
+    kind: Literal["answer", "refusal", "chitchat", "meta"]
 
 
 @app.post("/v1/ask")
 def ask(request: AskRequest) -> AskResponse:
-    result = answer(request.query, get_settings(), k=request.k)
-    return AskResponse(answer=result.text, citations=result.citations)
+    result = answer(request.query, get_settings(), k=request.k, history=request.history)
+    return AskResponse(answer=result.text, citations=result.citations, kind=result.kind)
 
 
 class EvaluateRequest(BaseModel):

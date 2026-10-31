@@ -14,6 +14,7 @@ from ask_the_docs.jobs import JobStoreError
 from ask_the_docs.llm import OllamaUnavailableError
 from ask_the_docs.queue import QueuePublishError
 from ask_the_docs.reranker import DEFAULT_RERANKER_MODEL
+from ask_the_docs.router import Turn
 
 
 def make_settings() -> Settings:
@@ -359,7 +360,7 @@ def test_ask_returns_answer_and_citations(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
     captured = {}
 
-    def fake_answer(query, settings, k):
+    def fake_answer(query, settings, k, history=None):
         captured["query"] = query
         captured["k"] = k
         return AnswerResult(text="42", citations=["a.pdf"], context="ctx")
@@ -369,9 +370,81 @@ def test_ask_returns_answer_and_citations(monkeypatch):
     response = TestClient(app).post("/v1/ask", json={"query": "What is X?"})
 
     assert response.status_code == 200
-    assert response.json() == {"answer": "42", "citations": ["a.pdf"]}
+    assert response.json() == {"answer": "42", "citations": ["a.pdf"], "kind": "answer"}
     assert captured["query"] == "What is X?"
     assert captured["k"] == 5
+
+
+def test_ask_passes_history_to_answer(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    captured = {}
+
+    def fake_answer(query, settings, k, history=None):
+        captured["history"] = history
+        return AnswerResult(text="ok", citations=[])
+
+    monkeypatch.setattr("ask_the_docs.api.answer", fake_answer)
+
+    history = [
+        {"role": "user", "content": "What is X?"},
+        {"role": "assistant", "content": "X is a thing."},
+    ]
+    response = TestClient(app).post("/v1/ask", json={"query": "And Y?", "history": history})
+
+    assert response.status_code == 200
+    assert captured["history"] == [
+        Turn(role="user", content="What is X?"),
+        Turn(role="assistant", content="X is a thing."),
+    ]
+    assert all(isinstance(turn, Turn) for turn in captured["history"])
+
+
+def test_ask_without_history_passes_empty_list(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    captured = {}
+
+    def fake_answer(query, settings, k, history=None):
+        captured["history"] = history
+        return AnswerResult(text="ok", citations=[])
+
+    monkeypatch.setattr("ask_the_docs.api.answer", fake_answer)
+
+    response = TestClient(app).post("/v1/ask", json={"query": "hi"})
+
+    assert response.status_code == 200
+    assert captured["history"] == []
+
+
+def test_ask_returns_kind_for_chitchat(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+
+    def fake_answer(query, settings, k, history=None):
+        return AnswerResult(text="Hello!", citations=[], kind="chitchat")
+
+    monkeypatch.setattr("ask_the_docs.api.answer", fake_answer)
+
+    response = TestClient(app).post("/v1/ask", json={"query": "hi there"})
+
+    assert response.status_code == 200
+    assert response.json() == {"answer": "Hello!", "citations": [], "kind": "chitchat"}
+
+
+def test_ask_rejects_oversized_history_turn():
+    history = [{"role": "user", "content": "x" * 4001}]
+    response = TestClient(app).post("/v1/ask", json={"query": "hi", "history": history})
+    assert response.status_code == 422
+
+
+def test_ask_rejects_unknown_history_role():
+    history = [{"role": "system", "content": "hi"}]
+    response = TestClient(app).post("/v1/ask", json={"query": "hi", "history": history})
+    assert response.status_code == 422
+
+
+def test_ask_rejects_empty_history_content():
+    history = [{"role": "user", "content": ""}]
+    response = TestClient(app).post("/v1/ask", json={"query": "hi", "history": history})
+    assert response.status_code == 422
 
 
 def test_ask_rejects_empty_query():
@@ -387,7 +460,7 @@ def test_ask_rejects_non_positive_k():
 def test_ask_returns_503_when_ollama_unavailable(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
 
-    def raise_error(query, settings, k):
+    def raise_error(query, settings, k, history=None):
         raise OllamaUnavailableError("could not reach ollama")
 
     monkeypatch.setattr("ask_the_docs.api.answer", raise_error)
