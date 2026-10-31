@@ -87,7 +87,8 @@ curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" \
 ```json
 {
   "answer": "Tree of Thoughts (ToT) generalizes chain-of-thought prompting by letting the model explore multiple reasoning paths...",
-  "citations": ["https://arxiv.org/pdf/2305.10601"]
+  "citations": ["https://arxiv.org/pdf/2305.10601"],
+  "kind": "answer"
 }
 ```
 
@@ -152,38 +153,58 @@ podman compose run app ask "What is Tree of Thoughts and how does it differ from
 
 # API
 curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" \
-  -d '{"query": "What is Tree of Thoughts?", "k": 5}'
+  -d '{"query": "What is Tree of Thoughts?", "k": 5, "history": []}'
 ```
+
+`history` is optional (defaults to `[]`) and carries prior turns as
+`{"role": "user"|"assistant", "content": "..."}`, so a follow-up question
+like "how does it compare to chain-of-thought?" can be resolved into a
+standalone search query. It's an API-only field; the CLI's `ask` always
+sends an empty history.
 
 What happens:
 
-1. The query is optionally rewritten by the generator LLM into a more
-   effective search query (`query_rewrite_enabled`, on by default; falls
-   back to the raw query if the rewrite call fails).
-2. Retrieval is hybrid: vector similarity and BM25 keyword search each
-   run, get independently normalized, and are blended (`hybrid_alpha`);
-   the merged pool is optionally reranked by a cross-encoder
-   (`rerank_enabled`). If nothing has been indexed yet, or nothing
-   matches, this returns no results, not an error.
-3. If nothing relevant was found, the answer is the refusal message
-   below and the language model is never called — an empty-context
-   prompt risks a confident-sounding hallucination instead of an honest
-   "I don't know."
-4. Otherwise, the retrieved chunks are numbered and given to the
+1. The query is routed first (`query_rewrite_enabled`, on by default). A
+   bare greeting, thanks, or goodbye matches a free rules check;
+   anything else goes through one LLM call that classifies the query
+   `doc`, `chitchat`, or `meta`. For `doc`, that same call rewrites the
+   query into a standalone search query. It resolves follow-up
+   references using `history`, trimmed to the trailing
+   `HISTORY_MAX_TURNS` turns (default 6). It also expands abbreviations
+   and synonyms. If routing is disabled, or the routing call itself
+   fails, the query is treated as `doc` with the raw query text.
+2. `chitchat` returns a short reply and `meta` returns a deterministic
+   list of indexed sources. Both skip retrieval and generation entirely
+   (steps 3-6 below), with no citations. The response `kind` is
+   `"chitchat"` or `"meta"`.
+3. For `doc`, retrieval is hybrid on the standalone query: vector
+   similarity and BM25 keyword search each run, get independently
+   normalized, and are blended (`hybrid_alpha`); the merged pool is
+   optionally reranked by a cross-encoder (`rerank_enabled`). If nothing
+   has been indexed yet, or nothing matches, this returns no results,
+   not an error.
+4. If nothing relevant was found, the answer is the refusal message
+   below (`kind: "refusal"`) and the generator is never called. An
+   empty-context prompt risks a confident-sounding hallucination instead
+   of an honest "I don't know."
+5. Otherwise, the retrieved chunks are numbered and given to the
    generator, with grounding/citation instructions in a system prompt
    (kept separate from the question itself). A deterministic guardrail
    then checks every `[n]` citation the model used actually exists among
    the retrieved chunks — an answer with no citations, or one citing a
    chunk number that doesn't exist, gets the same refusal message instead
    of an ungrounded answer.
-5. Citations in a successful response come from the same chunks' source
-   metadata (deduplicated to unique sources, preserving order) — what the
-   model was told to cite and what gets reported can't drift apart.
-6. The refusal message, used in both cases above, is: `"I don't have
-   enough information in the available documents to answer that."`
-7. Repeated identical questions (same query, `k`, and retrieval/
-   generation config, against the same corpus state) are served from a
-   Valkey-backed cache instead of re-running retrieval and generation.
+6. Citations in a successful response (`kind: "answer"`) come from the
+   same chunks' source metadata (deduplicated to unique sources,
+   preserving order), so what the model was told to cite and what gets
+   reported can't drift apart.
+7. The refusal message, used whenever `kind` is `"refusal"`, is: `"I
+   don't have enough information in the available documents to answer
+   that."`
+8. Repeated identical requests (same query, `k`, `history`, and
+   retrieval/generation config, against the same corpus state) are
+   served from a Valkey-backed cache instead of re-running routing,
+   retrieval, and generation.
 
 ## Evaluate — score answer quality (LLM-as-judge)
 
@@ -211,6 +232,34 @@ strategies against the same golden questions. The `embeddings` override
 needs its own prior `ingest`/`index` run against that backend first,
 since collections are backend-specific; the others don't.
 
+## eval-routing: score intent classification against labeled cases
+
+CLI only.
+
+```bash
+podman compose run app eval-routing
+```
+
+Runs the labeled case set (default `evals/routing_cases.yaml`) through
+`route()`. Calls the configured generator live, not mocked, and prints
+per-category accuracy plus every misroute. A case expected to be `doc`
+that routes to anything else is "critical"; the command exits non-zero
+only if any misroute is critical.
+
+## eval-retrieval: score retrieval against labeled cases
+
+CLI only.
+
+```bash
+podman compose run app eval-retrieval
+```
+
+Runs the labeled case set (default `evals/retrieval_cases.yaml`, 30
+cases over the 15 seeded papers) through `retrieve()` against whatever is
+currently indexed, and prints hit@1, hit@k, and MRR. Exits non-zero if
+hit@k falls below `--min-hit-at-k` (default 0.9); `--k` controls how many
+chunks `retrieve()` returns per case (default 5).
+
 ## Bulk re-index — everything under `data/documents/`
 
 ```bash
@@ -235,7 +284,7 @@ The CLI prints errors as text; the API returns real HTTP status codes:
 |---|---|
 | Bad/unsafe `source` (path traversal, SSRF, unsupported extension) | 400 |
 | File not found | 404 |
-| Empty `source`/`query`, or `k <= 0` | 422 |
+| Empty `source`/`query`, `k <= 0`, or a malformed `history` turn | 422 |
 | Ollama unreachable | 503 |
 
 `GET /health` always returns `200 {"status": "ok"}` independent of

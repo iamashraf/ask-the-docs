@@ -24,14 +24,21 @@ flowchart TD
     subgraph Query["Query (online)"]
         Q[User query] --> CACHE{Answer cached?}
         CACHE -- hit --> ANS[Answer + citations]
-        CACHE -- miss --> RW[Query rewrite<br/>LLM, optional]
-        RW --> CLASSIFY{"graph_enabled?<br/>classify local/global, LLM"}
+        CACHE -- miss --> ROUTE{"Smalltalk rules match?"}
+        ROUTE -- yes --> CHITCHAT["Chitchat reply<br/>no retrieval"]
+        ROUTE -- no --> ANALYZE{"query_rewrite_enabled?<br/>analyze intent, LLM"}
+        ANALYZE -- disabled --> RESOLVED["Resolved query"]
+        ANALYZE -- doc --> RESOLVED
+        ANALYZE -- "call failed" --> RESOLVED
+        ANALYZE -- chitchat --> CHITCHAT
+        ANALYZE -- meta --> METAREPLY["Meta reply<br/>indexed sources, deterministic"]
+        RESOLVED --> CLASSIFY{"graph_enabled?<br/>classify local/global, LLM"}
         CLASSIFY -- "global" --> GLOBAL[Global search:<br/>map-score community summaries]
         GLOBAL -- found --> CTX
         GLOBAL -- "none / degraded" --> VSEARCH
         CLASSIFY -- "local / disabled" --> VSEARCH[Vector search]
         CLASSIFY -- "local" --> LOCAL[Local search:<br/>graph traversal from named entities]
-        RW --> BSEARCH[BM25 search]
+        RESOLVED --> BSEARCH[BM25 search]
         VSEARCH --> MERGE[Hybrid merge<br/>alpha-weighted blend]
         BSEARCH --> MERGE
         LOCAL -. "merged into pool" .-> MERGE
@@ -42,6 +49,9 @@ flowchart TD
         GUARD -- fails/no match --> REFUSE[Refusal, no retry]
         GUARD -- passes --> ANS
         ANS --> CACHESET[(Cache result)]
+        CHITCHAT --> CACHESET
+        METAREPLY --> CACHESET
+        REFUSE --> CACHESET
     end
 
     VEC --> VSEARCH
@@ -72,9 +82,12 @@ Both the CLI (`ingest`/`index`/`ask`/`evaluate`/`serve`) and the HTTP API
 - **Hybrid fusion** — both sides' scores are min-max normalized, then
   blended `alpha * vector + (1 - alpha) * bm25`; a chunk found by only one
   side still competes (missing side scores 0), nothing is dropped outright.
-- **Query rewriting** — an LLM call expands the user's question into a
-  better search query (acronyms, synonyms) before retrieval, not before
-  generation.
+- **Intent routing**: a free rules check catches bare greetings, thanks,
+  and goodbyes before anything else runs. Everything else goes through
+  one LLM call that classifies the query doc, chitchat, or meta, and for
+  doc rewrites it into a standalone search query using conversation
+  history. This decides what *kind* of input the query is, not whether
+  it's answerable: an off-topic question is still routed as doc.
 - **Cross-encoder reranking** — a separate, more expensive model scores
   (query, chunk) pairs jointly to re-sort the merged candidate pool before
   truncating to the final k.
