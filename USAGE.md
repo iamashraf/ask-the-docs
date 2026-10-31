@@ -232,6 +232,11 @@ strategies against the same golden questions. The `embeddings` override
 needs its own prior `ingest`/`index` run against that backend first,
 since collections are backend-specific; the others don't.
 
+`--query-rewrite false` also disables intent routing (not just query
+rewriting) for the whole run, so golden questions expecting
+`chitchat`/`meta` intent will show up as intent-mismatch errors instead
+of being evaluated normally.
+
 ## eval-routing: score intent classification against labeled cases
 
 CLI only.
