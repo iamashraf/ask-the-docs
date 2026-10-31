@@ -19,6 +19,11 @@ OLLAMA_CHAT_TIMEOUT_SECONDS = 60
 # a gap between requests longer than that forces the next call to pay a
 # full model-load cost on top of generation.
 OLLAMA_KEEP_ALIVE = "30m"
+# Decode time scales with output length, and CPU-only decode measured at
+# ~10-26 tok/s depending on context size -- an uncapped generation can run
+# to 600+ tokens for a question that needed a short answer. 500 is generous
+# for a cited, grounded explanation while bounding the worst-case tail.
+OLLAMA_MAX_OUTPUT_TOKENS = 500
 
 
 class OllamaUnavailableError(RuntimeError):
@@ -78,6 +83,7 @@ class OllamaLLMClient:
                     "messages": messages,
                     "stream": False,
                     "keep_alive": OLLAMA_KEEP_ALIVE,
+                    "options": {"num_predict": OLLAMA_MAX_OUTPUT_TOKENS},
                 },
                 timeout=OLLAMA_CHAT_TIMEOUT_SECONDS,
             )
@@ -114,6 +120,7 @@ class OllamaLLMClient:
                     "stream": False,
                     "format": schema,
                     "keep_alive": OLLAMA_KEEP_ALIVE,
+                    "options": {"num_predict": OLLAMA_MAX_OUTPUT_TOKENS},
                 },
                 timeout=OLLAMA_CHAT_TIMEOUT_SECONDS,
             )

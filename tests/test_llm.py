@@ -9,6 +9,7 @@ from ask_the_docs.llm import (
     AnthropicLLMClient,
     GenerationResult,
     OLLAMA_KEEP_ALIVE,
+    OLLAMA_MAX_OUTPUT_TOKENS,
     OllamaLLMClient,
     OllamaUnavailableError,
     OpenAILLMClient,
@@ -119,6 +120,28 @@ def test_ollama_client_sends_keep_alive_to_avoid_idle_model_eviction(monkeypatch
     client.generate("hi")
 
     assert captured["json"]["keep_alive"] == OLLAMA_KEEP_ALIVE
+
+
+def test_ollama_client_caps_output_tokens_to_bound_decode_time(monkeypatch):
+    """Decode time scales with output length (measured: ~10 tok/s at RAG-sized
+    context vs ~26 tok/s on a short prompt), and nothing previously stopped a
+    model from generating hundreds of tokens for a question that needed a
+    short answer -- this caps the worst-case tail."""
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["json"] = json
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"message": {"content": "hello world"}},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    client.generate("hi")
+
+    assert captured["json"]["options"]["num_predict"] == OLLAMA_MAX_OUTPUT_TOKENS
 
 
 def test_anthropic_client_generate_calls_sdk(monkeypatch):
@@ -480,6 +503,27 @@ def test_ollama_generate_structured_sends_keep_alive_to_avoid_idle_model_evictio
     client.generate_structured("prompt", STRUCTURED_SCHEMA)
 
     assert captured["json"]["keep_alive"] == OLLAMA_KEEP_ALIVE
+
+
+def test_ollama_generate_structured_caps_output_tokens_to_bound_decode_time(monkeypatch):
+    """Same reasoning as the generate_with_usage cap above -- this is the
+    call path answer.py actually uses for every Ollama generation."""
+    captured = {}
+    content = json.dumps({"grounded": True, "answer": "a", "citations": [1]})
+
+    def fake_post(url, json, timeout):
+        captured["json"] = json
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"message": {"content": content}},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    client.generate_structured("prompt", STRUCTURED_SCHEMA)
+
+    assert captured["json"]["options"]["num_predict"] == OLLAMA_MAX_OUTPUT_TOKENS
 
 
 def test_ollama_generate_structured_defaults_to_none_when_counts_absent(monkeypatch):
