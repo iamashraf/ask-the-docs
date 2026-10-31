@@ -28,7 +28,7 @@ from ask_the_docs.llm import (
     StructuredJSONResult,
     StructuredOutputError,
 )
-from ask_the_docs.retrieve import RetrievedChunks
+from ask_the_docs.router import ANALYZE_SYSTEM_PROMPT, GREETING_REPLY, Route, Turn, build_meta_reply, trim_history
 from tests.test_metrics import find_data_point, find_metric, get_metrics_data
 
 
@@ -117,6 +117,15 @@ def _no_real_cache_or_index(monkeypatch):
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: FakeCacheClient())
 
 
+@pytest.fixture(autouse=True)
+def _route_passes_through_by_default(monkeypatch):
+    """Without this, every test below would hit a real LLM via router.route(); tests exercising routing override it themselves."""
+    monkeypatch.setattr(
+        "ask_the_docs.answer.route",
+        lambda query, history, settings: Route(intent="doc", standalone_query=query, reply="", source="llm"),
+    )
+
+
 def test_citation_guardrail_fails_on_zero_citations():
     assert citation_guardrail_passes("just an unsupported claim", num_chunks=3) is False
 
@@ -143,7 +152,7 @@ def test_answer_returns_refusal_message_without_calling_llm(monkeypatch):
 
     result = answer("anything", make_settings())
 
-    assert result == AnswerResult(text=REFUSAL_MESSAGE, citations=[])
+    assert result == AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal")
     mock_get_llm_client.assert_not_called()
 
 
@@ -221,7 +230,7 @@ def test_answer_returns_refusal_message_when_guardrail_fails(monkeypatch):
 
     result = answer("some question", make_settings())
 
-    assert result == AnswerResult(text=REFUSAL_MESSAGE, citations=[])
+    assert result == AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal")
     # Every attempt failed the guardrail, so the retry loop must have
     # exhausted MAX_GENERATION_ATTEMPTS before falling back to refusal --
     # not just tried once.
@@ -329,7 +338,7 @@ def test_answer_returns_refusal_when_every_structured_reply_is_malformed_json(mo
 
     result = answer("some question", make_settings())
 
-    assert result == AnswerResult(text=REFUSAL_MESSAGE, citations=[])
+    assert result == AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal")
     assert fake_generate.call_count == MAX_GENERATION_ATTEMPTS
 
 
@@ -665,6 +674,9 @@ def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
         settings.global_search_top_communities,
         1,
         STRUCTURED_SYSTEM_PROMPT_TEMPLATE,
+        [],
+        settings.history_max_turns,
+        ANALYZE_SYSTEM_PROMPT,
     )
     fake_cache.set(key, json.dumps(dataclasses.asdict(cached_result)).encode())
 
@@ -672,6 +684,8 @@ def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
     monkeypatch.setattr("ask_the_docs.answer.retrieve", mock_retrieve)
     mock_get_llm_client = Mock()
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", mock_get_llm_client)
+    mock_route = Mock()
+    monkeypatch.setattr("ask_the_docs.answer.route", mock_route)
 
     before_hit = _counter_value("cache_result", result="hit")
 
@@ -680,6 +694,8 @@ def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
     assert result == cached_result
     mock_retrieve.assert_not_called()
     mock_get_llm_client.assert_not_called()
+    # A cache hit must skip routing entirely, not just retrieval/generation.
+    mock_route.assert_not_called()
     assert _counter_value("cache_result", result="hit") - before_hit == 1.0
 
 
@@ -722,36 +738,43 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
     )
 
     fake_cache = FakeCacheClient()
+    settings = make_settings()
     # Prime the cache with a value that would crash a naive json.loads/AnswerResult(**...).
     key = make_cache_key(
         "what is x?",
         5,
-        make_settings().embeddings_backend,
-        make_settings().generator.provider,
-        make_settings().generator.model,
-        make_settings().hybrid_alpha,
-        make_settings().rerank_enabled,
-        make_settings().query_rewrite_enabled,
-        make_settings().system_prompt_template,
-        make_settings().candidate_pool_size,
-        make_settings().graph_enabled,
-        make_settings().graph_traversal_hop_depth,
-        make_settings().global_search_top_communities,
+        settings.embeddings_backend,
+        settings.generator.provider,
+        settings.generator.model,
+        settings.hybrid_alpha,
+        settings.rerank_enabled,
+        settings.query_rewrite_enabled,
+        settings.system_prompt_template,
+        settings.candidate_pool_size,
+        settings.graph_enabled,
+        settings.graph_traversal_hop_depth,
+        settings.global_search_top_communities,
         0,
         STRUCTURED_SYSTEM_PROMPT_TEMPLATE,
+        [],
+        settings.history_max_turns,
+        ANALYZE_SYSTEM_PROMPT,
     )
     fake_cache.set(key, b"not valid json")
     monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: fake_cache)
     before_hit = _counter_value("cache_result", result="hit")
     before_miss = _counter_value("cache_result", result="miss")
 
-    result = answer("What is X?", make_settings(), k=5)
+    result = answer("What is X?", settings, k=5)
 
     assert result.text == "the answer [1]"
     # A corrupted cache value is treated as a miss, not a hit -- it was
     # never a usable AnswerResult to begin with.
     assert _counter_value("cache_result", result="hit") - before_hit == 0
     assert _counter_value("cache_result", result="miss") - before_miss == 1.0
+    # A diverged key would leave the corrupted entry and add a second one.
+    assert len(fake_cache._store) == 1
+    assert json.loads(fake_cache._store[key])["text"] == "the answer [1]"
 
 
 def test_answer_calls_generator_once_for_repeated_identical_calls(monkeypatch):
@@ -845,6 +868,7 @@ def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
         ("graph_enabled", False, True),
         ("graph_traversal_hop_depth", 1, 2),
         ("global_search_top_communities", 3, 5),
+        ("history_max_turns", 6, 2),
     ],
 )
 def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field, value_a, value_b):
@@ -905,6 +929,89 @@ def test_answer_cache_key_changes_when_index_generation_changes(monkeypatch):
     assert calls["count"] == 2
 
 
+def test_answer_cache_key_changes_with_history(monkeypatch):
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
+    shared_cache = FakeCacheClient()
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
+
+    calls = {"count": 0}
+
+    class FakeClient:
+        def generate_structured(self, prompt, schema, system=None):
+            calls["count"] += 1
+            return StructuredJSONResult(
+                data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                input_tokens=None,
+                output_tokens=None,
+            )
+
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
+    settings = make_settings()
+
+    answer("What is X?", settings, k=5, history=[Turn(role="user", content="first turn")])
+    answer("What is X?", settings, k=5, history=[Turn(role="user", content="a different turn")])
+
+    assert calls["count"] == 2
+
+
+def test_answer_cache_round_trips_kind(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
+    shared_cache = FakeCacheClient()
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
+    mock_route = Mock(
+        return_value=Route(intent="chitchat", standalone_query="", reply=GREETING_REPLY, source="rules")
+    )
+    monkeypatch.setattr("ask_the_docs.answer.route", mock_route)
+    settings = make_settings()
+
+    first = answer("hi", settings)
+    second = answer("hi", settings)
+
+    assert first.kind == "chitchat"
+    assert second.kind == "chitchat"
+    # The second call was a cache hit -- routing only ran once.
+    assert mock_route.call_count == 1
+
+
+def test_answer_use_cache_false_skips_cache(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.answer.get_index_generation", lambda settings: 1)
+    shared_cache = FakeCacheClient()
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    mock_route = Mock(return_value=Route(intent="doc", standalone_query="What is X?", reply="", source="llm"))
+    monkeypatch.setattr("ask_the_docs.answer.route", mock_route)
+
+    answers = iter(["first answer [1]", "second answer [1]"])
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_structured=Mock(
+                side_effect=lambda prompt, schema, system=None: StructuredJSONResult(
+                    data={"grounded": True, "answer": next(answers), "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
+                )
+            )
+        ),
+    )
+    settings = make_settings()
+
+    first = answer("What is X?", settings, k=5)
+    snapshot = dict(shared_cache._store)
+
+    second = answer("What is X?", settings, k=5, use_cache=False)
+
+    assert first.text == "first answer [1]"
+    # use_cache=False recomputed instead of reading the primed cache entry.
+    assert second.text == "second answer [1]"
+    assert mock_route.call_count == 2
+    # Nothing was written either.
+    assert shared_cache._store == snapshot
+
+
 def test_answer_passes_system_prompt_to_generate(monkeypatch):
     """Free-text providers (non-ollama) still use settings.system_prompt_template --
     the structured path below has its own, separate system prompt constant."""
@@ -926,16 +1033,83 @@ def test_answer_passes_system_prompt_to_generate(monkeypatch):
     assert captured["system"] == settings.system_prompt_template
 
 
-def test_compute_answer_builds_prompt_from_the_rewritten_search_query(monkeypatch):
-    """retrieve() already cleans up a typo'd/malformed query for its own
-    search -- without this, the LLM generating the final answer still saw
-    the raw original. ollama is the production generator and now uses
-    structured output, so the fake client implements generate_structured."""
-    chunks = RetrievedChunks(
-        [Document(page_content="chunk one", metadata={"source": "a.pdf"})],
-        search_query="what is Chain-of-Thought prompting?",
+def test_answer_chitchat_skips_retrieval_and_generation(monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.answer.route",
+        lambda query, history, settings: Route(
+            intent="chitchat", standalone_query="", reply=GREETING_REPLY, source="rules"
+        ),
     )
-    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    mock_retrieve = Mock()
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", mock_retrieve)
+    mock_get_llm_client = Mock()
+    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", mock_get_llm_client)
+
+    result = answer("hi", make_settings())
+
+    assert result == AnswerResult(text=GREETING_REPLY, citations=[], kind="chitchat")
+    mock_retrieve.assert_not_called()
+    mock_get_llm_client.assert_not_called()
+
+
+def test_answer_meta_returns_source_listing(monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.answer.route",
+        lambda query, history, settings: Route(intent="meta", standalone_query="", reply="", source="llm"),
+    )
+    monkeypatch.setattr("ask_the_docs.answer.list_sources", lambda settings: ["a.pdf"])
+    mock_retrieve = Mock()
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", mock_retrieve)
+
+    result = answer("what documents do you have?", make_settings())
+
+    assert result.kind == "meta"
+    assert result.text == build_meta_reply(["a.pdf"])
+    mock_retrieve.assert_not_called()
+
+
+def test_answer_meta_falls_back_to_doc_when_listing_fails(monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.answer.route",
+        lambda query, history, settings: Route(intent="meta", standalone_query="", reply="", source="llm"),
+    )
+
+    def failing_list_sources(settings):
+        raise RuntimeError("chroma unavailable")
+
+    monkeypatch.setattr("ask_the_docs.answer.list_sources", failing_list_sources)
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    mock_retrieve = Mock(return_value=chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", mock_retrieve)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_structured=Mock(
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
+                )
+            )
+        ),
+    )
+
+    answer("what documents do you have?", make_settings())
+
+    mock_retrieve.assert_called_once()
+    assert mock_retrieve.call_args.args[0] == "what documents do you have?"
+
+
+def test_answer_doc_retrieves_and_prompts_with_standalone_query(monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.answer.route",
+        lambda query, history, settings: Route(
+            intent="doc", standalone_query="LoRA low-rank adaptation", reply="", source="llm"
+        ),
+    )
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    mock_retrieve = Mock(return_value=chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", mock_retrieve)
 
     captured = {}
 
@@ -949,38 +1123,86 @@ def test_compute_answer_builds_prompt_from_the_rewritten_search_query(monkeypatc
             )
 
     monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
-    settings = make_settings()
 
-    answer("wut id cot", settings)
+    answer("what's lora?", make_settings())
 
-    assert "what is Chain-of-Thought prompting?" in captured["prompt"]
-    assert "wut id cot" not in captured["prompt"]
+    assert mock_retrieve.call_args.args[0] == "LoRA low-rank adaptation"
+    assert "Question: LoRA low-rank adaptation" in captured["prompt"]
 
 
-def test_compute_answer_falls_back_to_raw_query_when_retrieve_returns_a_plain_list(monkeypatch):
-    """A mocked/older retrieve() returning a plain list (no .search_query
-    attribute) must not crash -- falls back to the original query, same as
-    today's behavior."""
+def test_answer_refusal_kind(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: [])
+
+    no_chunks_result = answer("anything", make_settings())
+
+    assert no_chunks_result.kind == "refusal"
+
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: chunks)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_structured=Mock(
+                return_value=StructuredJSONResult(
+                    data={"grounded": False, "answer": "", "citations": []},
+                    input_tokens=None,
+                    output_tokens=None,
+                )
+            )
+        ),
+    )
 
+    guardrail_fail_result = answer("some question", make_settings())
+
+    assert guardrail_fail_result.kind == "refusal"
+
+
+def test_answer_passes_trimmed_history_to_route(monkeypatch):
     captured = {}
 
-    class FakeClient:
-        def generate_structured(self, prompt, schema, system=None):
-            captured["prompt"] = prompt
-            return StructuredJSONResult(
-                data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
-                input_tokens=None,
-                output_tokens=None,
+    def fake_route(query, history, settings):
+        captured["history"] = history
+        return Route(intent="doc", standalone_query=query, reply="", source="llm")
+
+    monkeypatch.setattr("ask_the_docs.answer.route", fake_route)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k: [])
+
+    settings = make_settings().model_copy(update={"history_max_turns": 1})
+    history = [Turn(role="user", content="first"), Turn(role="assistant", content="second")]
+
+    answer("anything", settings, history=history)
+
+    assert captured["history"] == trim_history(history, settings.history_max_turns)
+
+
+def test_answer_falls_back_to_doc_with_raw_query_when_route_raises(monkeypatch):
+    """route() never raises per its own contract, but answer() defends against it anyway."""
+
+    def failing_route(query, history, settings):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr("ask_the_docs.answer.route", failing_route)
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    mock_retrieve = Mock(return_value=chunks)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", mock_retrieve)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_structured=Mock(
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
+                )
             )
+        ),
+    )
 
-    monkeypatch.setattr("ask_the_docs.answer.get_llm_client", lambda config: FakeClient())
-    settings = make_settings()
+    result = answer("the raw query", make_settings())
 
-    answer("the raw query", settings)
-
-    assert "the raw query" in captured["prompt"]
+    assert result.text == "the answer [1]"
+    mock_retrieve.assert_called_once()
+    assert mock_retrieve.call_args.args[0] == "the raw query"
 
 
 def test_answer_passes_structured_system_prompt_for_ollama(monkeypatch):

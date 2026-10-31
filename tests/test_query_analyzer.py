@@ -4,7 +4,6 @@ from ask_the_docs.query_analyzer import (
     QueryClassification,
     _strip_code_fence,
     classify_query,
-    rewrite_query,
 )
 from tests.test_metrics import find_data_point, find_metric, get_metrics_data
 
@@ -37,24 +36,6 @@ class FakeLLMClient:
     def generate_with_usage(self, prompt: str, system: str | None = None) -> GenerationResult:
         self.captured_prompt = prompt
         return GenerationResult(text=self.response, input_tokens=5, output_tokens=7, response_model="fake-model")
-
-
-def test_rewrite_query_returns_stripped_result(monkeypatch):
-    fake_client = FakeLLMClient()
-    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda _: fake_client)
-
-    result = rewrite_query("what is attention?", make_settings())
-
-    assert result == "rewritten search query"
-
-
-def test_rewrite_query_includes_original_query_in_prompt(monkeypatch):
-    fake_client = FakeLLMClient()
-    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda _: fake_client)
-
-    rewrite_query("what is attention?", make_settings())
-
-    assert "what is attention?" in fake_client.captured_prompt
 
 
 def test_classify_query_parses_local_with_entities(monkeypatch):
@@ -159,16 +140,6 @@ GEN_AI_DURATION_ATTRS = {
     "gen_ai.provider.name": "ollama",
     "gen_ai.request.model": "llama3.1:8b",
 }
-
-
-def test_rewrite_query_records_gen_ai_inference_duration(monkeypatch):
-    fake_client = FakeLLMClient()
-    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", lambda _: fake_client)
-
-    before = _histogram_count("gen_ai.client.inference.duration", **GEN_AI_DURATION_ATTRS)
-    rewrite_query("what is attention?", make_settings())
-
-    assert _histogram_count("gen_ai.client.inference.duration", **GEN_AI_DURATION_ATTRS) - before == 1
 
 
 def test_classify_query_records_gen_ai_inference_duration(monkeypatch):

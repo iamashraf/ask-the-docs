@@ -1,5 +1,5 @@
-"""LLM-based query rewrite and local/global classification, run before
-retrieval to decide how a user's question should be routed."""
+"""LLM-based local/global classification, run before retrieval to decide
+how a user's question should be routed."""
 
 import json
 import logging
@@ -16,18 +16,6 @@ from ask_the_docs.llm import get_llm_client
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
-
-QUERY_REWRITE_PROMPT_TEMPLATE = """Rewrite the question below into an effective search query for a document retrieval system.
-
-Rules:
-- Expand abbreviations and acronyms if you know what they stand for.
-- Add likely synonyms or technical terms a relevant document would use.
-- Keep it a single query, not a list of alternatives.
-- Do not answer the question. Do not add explanation. Output only the rewritten query.
-
-Question: {query}
-
-Rewritten query:"""
 
 QUERY_CLASSIFICATION_PROMPT_TEMPLATE = """Classify the question below as "local" or "global":
 - "local": asks about specific named entities or the relationships between them.
@@ -51,38 +39,6 @@ def _strip_code_fence(raw: str) -> str:
         return raw
     match = FENCED_BLOCK_PATTERN.match(raw.strip())
     return match.group(1) if match else raw
-
-
-def rewrite_query(query: str, settings: Settings) -> str:
-    client = get_llm_client(settings.generator)
-    with tracer.start_as_current_span("rewrite_query") as span:
-        start = time.monotonic()
-        result = client.generate_with_usage(QUERY_REWRITE_PROMPT_TEMPLATE.format(query=query))
-        duration = time.monotonic() - start
-
-        span.set_attribute("gen_ai.request.model", settings.generator.model)
-        span.set_attribute("gen_ai.response.model", result.response_model or settings.generator.model)
-        span.set_attribute("gen_ai.provider.name", settings.generator.provider)
-        attrs = {
-            "gen_ai.operation.name": "chat",
-            "gen_ai.provider.name": settings.generator.provider,
-            "gen_ai.request.model": settings.generator.model,
-        }
-        if result.input_tokens is not None:
-            span.set_attribute("gen_ai.usage.input_tokens", result.input_tokens)
-            metrics.gen_ai_client_inference_usage_input_tokens.add(
-                result.input_tokens, {**attrs, "gen_ai.token.modality": "text"}
-            )
-        if result.output_tokens is not None:
-            span.set_attribute("gen_ai.usage.output_tokens", result.output_tokens)
-            metrics.gen_ai_client_inference_usage_output_tokens.add(
-                result.output_tokens, {**attrs, "gen_ai.token.modality": "text"}
-            )
-        metrics.gen_ai_client_inference_duration.record(duration, attrs)
-
-        rewritten = result.text.strip()
-        logger.info("Query rewrite succeeded (%d -> %d chars)", len(query), len(rewritten))
-    return rewritten
 
 
 @dataclass

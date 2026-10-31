@@ -1,5 +1,5 @@
-"""Hybrid retrieval orchestration: optional LLM query rewrite, vector +
-BM25 search merged by a weighted blend, optional cross-encoder rerank."""
+"""Hybrid retrieval orchestration: vector + BM25 search merged by a
+weighted blend, optional cross-encoder rerank."""
 
 import logging
 import time
@@ -12,24 +12,11 @@ from ask_the_docs.bm25_index import score as bm25_score
 from ask_the_docs.config import Settings
 from ask_the_docs.graph_retrieve import global_search, local_search
 from ask_the_docs.index import load_index
-from ask_the_docs.query_analyzer import QueryClassification, classify_query, rewrite_query
+from ask_the_docs.query_analyzer import QueryClassification, classify_query
 from ask_the_docs.reranker import DEFAULT_RERANKER_MODEL, get_reranker
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
-
-
-class RetrievedChunks(list):
-    """list[Document] that also carries the query actually used for
-    retrieval (the rewritten one, when query_rewrite_enabled) -- answer.py
-    reuses it for the generation prompt too, so a cleaned-up/expanded
-    query benefits generation, not just retrieval. Still a plain list for
-    every existing caller/test: equality, iteration, len(), indexing all
-    behave exactly as before."""
-
-    def __init__(self, chunks, search_query: str):
-        super().__init__(chunks)
-        self.search_query = search_query
 
 
 def _doc_key(doc: Document) -> tuple[str, int]:
@@ -73,18 +60,8 @@ def hybrid_merge(
     return merged
 
 
-def retrieve(query: str, settings: Settings, k: int = 5) -> RetrievedChunks:
-    """Up to k chunks most relevant to query via hybrid (vector + BM25)
-    search with optional query rewrite and reranking, with a graph-aware
-    "global" short-circuit and "local" candidate merge when graph_enabled;
-    [] if the index has no chunks yet."""
-    search_query = query
-    if settings.query_rewrite_enabled:
-        try:
-            search_query = rewrite_query(query, settings)
-        except Exception:
-            logger.warning("Query rewrite failed; falling back to the raw query.", exc_info=True)
-
+def retrieve(query: str, settings: Settings, k: int = 5) -> list[Document]:
+    """Up to k chunks via hybrid (vector + BM25) search, optional rerank, and graph-aware global/local merge; [] if the index is empty."""
     classification = QueryClassification(label="local", entities=[])
     if settings.graph_enabled:
         try:
@@ -99,7 +76,7 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> RetrievedChunks:
                 logger.warning("Global search failed; falling back to hybrid search.", exc_info=True)
                 global_results = []
             if global_results:
-                return RetrievedChunks(global_results[:k], search_query)
+                return global_results[:k]
 
     hybrid_start = time.monotonic()
     with tracer.start_as_current_span("hybrid_retrieve"):
@@ -110,9 +87,7 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> RetrievedChunks:
             # "higher = more relevant" scores, instead of inverting the ranking.
             vector_hits = [
                 (doc, -distance)
-                for doc, distance in index.similarity_search_with_score(
-                    search_query, k=settings.candidate_pool_size
-                )
+                for doc, distance in index.similarity_search_with_score(query, k=settings.candidate_pool_size)
             ]
         except Exception:
             logger.warning("Vector search failed; falling back to BM25-only results.", exc_info=True)
@@ -123,7 +98,7 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> RetrievedChunks:
         # crowding out real vector matches.
         bm25_hits = [
             hit
-            for hit in sorted(bm25_score(search_query, settings), key=lambda pair: pair[1], reverse=True)
+            for hit in sorted(bm25_score(query, settings), key=lambda pair: pair[1], reverse=True)
             if hit[1] > 0
         ][: settings.candidate_pool_size]
 
@@ -153,5 +128,5 @@ def retrieve(query: str, settings: Settings, k: int = 5) -> RetrievedChunks:
             reranked = get_reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
             logger.info("Rerank succeeded: %d results", len(reranked))
         metrics.rerank_latency_seconds.record(time.monotonic() - rerank_start)
-        return RetrievedChunks(reranked, search_query)
-    return RetrievedChunks(candidates[:k], search_query)
+        return reranked
+    return candidates[:k]

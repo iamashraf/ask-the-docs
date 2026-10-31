@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from typing import Literal
 
 from langchain_core.documents import Document
 from opentelemetry import trace
@@ -13,15 +14,18 @@ from opentelemetry import trace
 from ask_the_docs import metrics
 from ask_the_docs.cache import cache_get, cache_set, get_cache_client, make_cache_key
 from ask_the_docs.config import REFUSAL_MESSAGE, Settings
-from ask_the_docs.index import get_index_generation
+from ask_the_docs.index import get_index_generation, list_sources
 from ask_the_docs.llm import (
     StructuredOutputError,
     get_llm_client,
 )
 from ask_the_docs.retrieve import retrieve
+from ask_the_docs.router import ANALYZE_SYSTEM_PROMPT, Turn, build_meta_reply, route, trim_history
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
+
+Kind = Literal["answer", "refusal", "chitchat", "meta"]
 
 CITATION_PATTERN = re.compile(r"\[(\d+)\]")
 ANSWER_CACHE_TTL_SECONDS = 86400
@@ -69,6 +73,7 @@ class AnswerResult:
     text: str
     citations: list[str]
     context: str = ""
+    kind: Kind = "answer"
 
 
 @dataclasses.dataclass
@@ -155,17 +160,11 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
     chunks = retrieve(query, settings, k=k)
     if not chunks:
         metrics.refusal_total.add(1)
-        return AnswerResult(text=REFUSAL_MESSAGE, citations=[])
+        return AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal")
 
     context = format_context(chunks)
     client = get_llm_client(settings.generator)
-    # retrieve() cleans the query up (typos, grammar) for its own search --
-    # reuse that for generation too, so a malformed input doesn't throw off
-    # the model's citation formatting even though the right context was
-    # found. Falls back to the raw query if retrieve() is mocked/old and
-    # returns a plain list with no .search_query.
-    generation_query = getattr(chunks, "search_query", query)
-    prompt = build_prompt(generation_query, context)
+    prompt = build_prompt(query, context)
 
     # Ollama uses schema-constrained structured output; other providers keep the free-text + regex guardrail.
     use_structured = settings.generator.provider == "ollama"
@@ -249,49 +248,80 @@ def _compute_answer(query: str, settings: Settings, k: int) -> AnswerResult:
             feedback = _structured_retry_feedback(structured)
 
     metrics.refusal_total.add(1)
-    return AnswerResult(text=REFUSAL_MESSAGE, citations=[])
+    return AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal")
 
 
-def answer(query: str, settings: Settings, k: int = 5) -> AnswerResult:
-    """Exact-match cached wrapper around _compute_answer -- a hit skips
-    retrieval, reranking, and the LLM call entirely. The index generation
-    is part of the cache key, so any real ingest write (including a
-    same-chunk-count replace) produces a new key rather than needing
-    explicit cache invalidation; reading it never touches Chroma, so
-    computing the key doesn't depend on the index being reachable."""
-    cache_client = get_cache_client(settings)
-    cache_key = make_cache_key(
-        query.strip().lower(),
-        k,
-        settings.embeddings_backend,
-        settings.generator.provider,
-        settings.generator.model,
-        settings.hybrid_alpha,
-        settings.rerank_enabled,
-        settings.query_rewrite_enabled,
-        settings.system_prompt_template,
-        settings.candidate_pool_size,
-        settings.graph_enabled,
-        settings.graph_traversal_hop_depth,
-        settings.global_search_top_communities,
-        get_index_generation(settings),
-        # Not settings-controlled, but invalidates cached entries from before the structured-output path existed.
-        STRUCTURED_SYSTEM_PROMPT_TEMPLATE,
-    )
+def _dispatch(query: str, trimmed_history: list[Turn], settings: Settings, k: int) -> AnswerResult:
+    """Chitchat/meta skip retrieval; a routing or source-listing failure falls back to the doc path with the raw query."""
+    try:
+        result = route(query, trimmed_history, settings)
+    except Exception:
+        logger.warning("route() raised unexpectedly; falling back to the doc path.", exc_info=True)
+        return _compute_answer(query, settings, k)
 
-    cached = cache_get(cache_client, cache_key)
-    if cached is not None:
+    if result.intent == "chitchat":
+        return AnswerResult(text=result.reply, citations=[], kind="chitchat")
+
+    if result.intent == "meta":
         try:
-            result = AnswerResult(**json.loads(cached))
-            metrics.cache_result_total.add(1, {"result": "hit"})
-            return result
-        except (json.JSONDecodeError, TypeError):
-            # A corrupted value or a schema mismatch from an older cache
-            # entry -- treat it as a miss and recompute, rather than
-            # letting a cache problem break the request.
-            logger.warning("Cached answer value was unusable; recomputing.", exc_info=True)
+            sources = list_sources(settings)
+        except Exception:
+            logger.warning("Listing sources for a meta question failed; falling back to the doc path.", exc_info=True)
+            return _compute_answer(query, settings, k)
+        return AnswerResult(text=build_meta_reply(sources), citations=[], kind="meta")
 
-    metrics.cache_result_total.add(1, {"result": "miss"})
-    result = _compute_answer(query, settings, k)
-    cache_set(cache_client, cache_key, json.dumps(dataclasses.asdict(result)).encode(), ttl_seconds=ANSWER_CACHE_TTL_SECONDS)
+    return _compute_answer(result.standalone_query, settings, k)
+
+
+def answer(
+    query: str,
+    settings: Settings,
+    k: int = 5,
+    history: list[Turn] | None = None,
+    use_cache: bool = True,
+) -> AnswerResult:
+    """Cache lookup precedes routing so a hit skips everything; use_cache=False bypasses read and write."""
+    trimmed_history = trim_history(history, settings.history_max_turns)
+
+    if use_cache:
+        cache_client = get_cache_client(settings)
+        cache_key = make_cache_key(
+            query.strip().lower(),
+            k,
+            settings.embeddings_backend,
+            settings.generator.provider,
+            settings.generator.model,
+            settings.hybrid_alpha,
+            settings.rerank_enabled,
+            settings.query_rewrite_enabled,
+            settings.system_prompt_template,
+            settings.candidate_pool_size,
+            settings.graph_enabled,
+            settings.graph_traversal_hop_depth,
+            settings.global_search_top_communities,
+            get_index_generation(settings),
+            # Not settings-controlled, but invalidates cached entries from before the structured-output path existed.
+            STRUCTURED_SYSTEM_PROMPT_TEMPLATE,
+            [(t.role, t.content.strip().lower()) for t in trimmed_history],
+            settings.history_max_turns,
+            ANALYZE_SYSTEM_PROMPT,
+        )
+
+        cached = cache_get(cache_client, cache_key)
+        if cached is not None:
+            try:
+                result = AnswerResult(**json.loads(cached))
+                metrics.cache_result_total.add(1, {"result": "hit"})
+                return result
+            except (json.JSONDecodeError, TypeError):
+                # A corrupted value or a schema mismatch from an older cache
+                # entry -- treat it as a miss and recompute, rather than
+                # letting a cache problem break the request.
+                logger.warning("Cached answer value was unusable; recomputing.", exc_info=True)
+        metrics.cache_result_total.add(1, {"result": "miss"})
+
+    result = _dispatch(query, trimmed_history, settings, k)
+
+    if use_cache:
+        cache_set(cache_client, cache_key, json.dumps(dataclasses.asdict(result)).encode(), ttl_seconds=ANSWER_CACHE_TTL_SECONDS)
     return result

@@ -1,4 +1,5 @@
 import logging
+from unittest.mock import Mock
 
 import pytest
 from langchain_core.documents import Document
@@ -220,73 +221,32 @@ def test_retrieve_excludes_zero_score_bm25_hits_from_merge(tmp_path, monkeypatch
     assert result_ids == {"v1", "v2"}
 
 
-def test_retrieve_falls_back_to_raw_query_when_rewrite_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
-    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda settings: FakeCache())
+def test_retrieve_searches_with_the_given_query_and_never_calls_an_llm(tmp_path, monkeypatch):
+    """With graph_enabled off, retrieve() must never rewrite its query via an LLM anymore."""
+    mock_get_llm_client = Mock(side_effect=RuntimeError("retrieve() must never call an LLM"))
+    monkeypatch.setattr("ask_the_docs.query_analyzer.get_llm_client", mock_get_llm_client)
+    recorded = {}
 
-    def failing_rewrite(query, settings):
-        raise RuntimeError("ollama unreachable")
+    class FakeIndex:
+        def similarity_search_with_score(self, query, k):
+            recorded["vector_query"] = query
+            return []
 
-    monkeypatch.setattr("ask_the_docs.retrieve.rewrite_query", failing_rewrite)
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
 
-    settings = Settings(
-        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
-        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
-        index_dir=tmp_path / "index",
-        query_rewrite_enabled=True,
-        rerank_enabled=False,
-    )
-    docs = [Document(page_content="apples are red fruit", metadata={"source": "a.txt", "source_doc_id": "a"})]
-    build_index(docs, settings)
+    def fake_bm25_score(query, settings):
+        recorded["bm25_query"] = query
+        return []
 
-    results = retrieve("apples are red fruit", settings, k=1)
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", fake_bm25_score)
 
-    assert len(results) == 1
-    assert results[0].page_content == "apples are red fruit"
+    # query_rewrite_enabled=True used to trigger the now-removed rewrite call.
+    settings = make_settings(tmp_path).model_copy(update={"query_rewrite_enabled": True})
+    retrieve("what is attention?", settings, k=5)
 
-
-def test_retrieve_result_carries_the_rewritten_search_query(tmp_path, monkeypatch):
-    """answer.py reuses this for the generation prompt too -- without it,
-    a typo'd/malformed query gets cleaned up for retrieval but the LLM
-    still sees the raw, confusing original when generating the answer."""
-    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
-    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda settings: FakeCache())
-    monkeypatch.setattr("ask_the_docs.retrieve.rewrite_query", lambda query, settings: "cleaned up query")
-    monkeypatch.setitem(VECTORS, "cleaned up query", VECTORS["apples are red fruit"])
-
-    settings = Settings(
-        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
-        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
-        index_dir=tmp_path / "index",
-        query_rewrite_enabled=True,
-        rerank_enabled=False,
-    )
-    docs = [Document(page_content="apples are red fruit", metadata={"source": "a.txt", "source_doc_id": "a"})]
-    build_index(docs, settings)
-
-    results = retrieve("wut r apls", settings, k=1)
-
-    assert results.search_query == "cleaned up query"
-    assert len(results) == 1
-
-
-def test_retrieve_result_search_query_matches_original_when_rewrite_disabled(tmp_path, monkeypatch):
-    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
-    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda settings: FakeCache())
-
-    settings = Settings(
-        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
-        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
-        index_dir=tmp_path / "index",
-        query_rewrite_enabled=False,
-        rerank_enabled=False,
-    )
-    docs = [Document(page_content="apples are red fruit", metadata={"source": "a.txt", "source_doc_id": "a"})]
-    build_index(docs, settings)
-
-    results = retrieve("apples are red fruit", settings, k=1)
-
-    assert results.search_query == "apples are red fruit"
+    assert recorded["vector_query"] == "what is attention?"
+    assert recorded["bm25_query"] == "what is attention?"
+    mock_get_llm_client.assert_not_called()
 
 
 def test_retrieve_skips_classification_when_graph_disabled(tmp_path, monkeypatch):
