@@ -3,6 +3,7 @@
 - question: "How does chunking affect retrieval quality?"
   notes: "open-ended, no single source"
   expected_intent: "doc"
+  expected_answer: true
 - question: "What would happen if the Transformer architecture didn't use positional encodings?"
   notes: "hypothetical/speculative -- not stated in the Transformer paper's actual content"
   expected_refusal: true
@@ -49,3 +50,4 @@
     - role: "assistant"
       content: "Attention lets the model weigh how relevant each other token is when computing a representation for a given token [1]."
   expected_intent: "doc"
+  expected_answer: true

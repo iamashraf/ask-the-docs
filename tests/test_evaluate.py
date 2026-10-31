@@ -294,6 +294,26 @@ def test_run_evaluation_flags_error_when_latency_exceeds_max(tmp_path, monkeypat
     mock_get_llm_client.assert_not_called()
 
 
+def test_run_evaluation_flags_error_when_expected_answer_question_gets_a_refusal(tmp_path, monkeypatch):
+    questions_path = tmp_path / "questions.yaml"
+    questions_path.write_text('- question: "Q1"\n  expected_answer: true\n')
+
+    monkeypatch.setattr(
+        "ask_the_docs.evaluate.answer",
+        lambda query, settings, history=None, use_cache=True: AnswerResult(
+            text=REFUSAL_MESSAGE, citations=[], context="", kind="refusal"
+        ),
+    )
+    mock_get_llm_client = Mock()
+    monkeypatch.setattr("ask_the_docs.evaluate.get_llm_client", mock_get_llm_client)
+
+    results = run_evaluation(make_settings(), questions_path)
+
+    assert results[0].error == "expected an answer but got a refusal"
+    assert results[0].score is None
+    mock_get_llm_client.assert_not_called()
+
+
 def test_run_evaluation_scores_chitchat_deterministically_when_intent_matches(tmp_path, monkeypatch):
     questions_path = tmp_path / "questions.yaml"
     questions_path.write_text('- question: "hi"\n  expected_intent: "chitchat"\n')

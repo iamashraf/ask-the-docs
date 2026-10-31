@@ -36,6 +36,7 @@ class GoldenQuestion:
     question: str
     notes: str | None = None
     expected_refusal: bool = False
+    expected_answer: bool = False
     expected_intent: Literal["doc", "chitchat", "meta"] | None = None
     history: list[Turn] = field(default_factory=list)
     max_latency_seconds: float | None = None
@@ -70,6 +71,7 @@ def load_golden_questions(path: Path) -> list[GoldenQuestion]:
             question=item["question"],
             notes=item.get("notes"),
             expected_refusal=item.get("expected_refusal", False),
+            expected_answer=item.get("expected_answer", False),
             expected_intent=item.get("expected_intent"),
             history=[Turn(**turn) for turn in item.get("history", [])],
             max_latency_seconds=item.get("max_latency_seconds"),
@@ -132,6 +134,9 @@ def run_evaluation(settings: Settings, questions_path: Path) -> list[EvalResult]
                 else:
                     score = None
                     error = f"expected a refusal but got an answer: {result.text[:100]!r}"
+            elif golden.expected_answer and result.kind == "refusal":
+                score = None
+                error = "expected an answer but got a refusal"
             elif golden.expected_intent in ("chitchat", "meta"):
                 # No retrieved context to judge for a canned chitchat/meta
                 # reply -- same rationale as the expected_refusal case above.
