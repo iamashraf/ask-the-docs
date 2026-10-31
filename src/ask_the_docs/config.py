@@ -59,6 +59,10 @@ class Settings(BaseSettings):
 
     hybrid_alpha: float = Field(default=0.5, ge=0.0, le=1.0)
     rerank_enabled: bool = True
+    # Cross-encoder logit below which a reranked chunk is dropped instead of
+    # reaching the generator -- measured on this corpus, genuinely relevant
+    # chunks score well above 0 and off-topic ones (e.g. "hi") well below it.
+    rerank_score_floor: float = 0.0
     query_rewrite_enabled: bool = True
     candidate_pool_size: int = Field(default=50, ge=1)
     system_prompt_template: str = DEFAULT_SYSTEM_PROMPT_TEMPLATE

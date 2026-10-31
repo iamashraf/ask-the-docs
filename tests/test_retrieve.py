@@ -182,7 +182,7 @@ def test_retrieve_truncates_merged_candidates_to_pool_size_before_rerank(tmp_pat
     captured = {}
 
     class CapturingReranker:
-        def rerank(self, query, candidates, k):
+        def rerank(self, query, candidates, k, score_floor=None):
             captured["candidates"] = candidates
             return candidates[:k]
 
@@ -620,7 +620,7 @@ def test_retrieve_observes_rerank_latency_when_rerank_enabled(tmp_path, monkeypa
     _stub_hybrid_with_one_hit(monkeypatch)
 
     class PassThroughReranker:
-        def rerank(self, query, candidates, k):
+        def rerank(self, query, candidates, k, score_floor=None):
             return candidates[:k]
 
     monkeypatch.setattr("ask_the_docs.retrieve.get_reranker", lambda model_name: PassThroughReranker())
@@ -633,3 +633,38 @@ def test_retrieve_observes_rerank_latency_when_rerank_enabled(tmp_path, monkeypa
     assert _histogram_count("rerank_latency") - rerank_before == 1.0
     assert _histogram_count("retrieve_latency") - retrieve_before == 1.0
     assert any("Rerank succeeded" in record.message for record in caplog.records)
+
+
+def test_retrieve_passes_rerank_score_floor_to_reranker(tmp_path, monkeypatch):
+    _stub_hybrid_with_one_hit(monkeypatch)
+    captured = {}
+
+    class CapturingReranker:
+        def rerank(self, query, candidates, k, score_floor=None):
+            captured["score_floor"] = score_floor
+            return candidates[:k]
+
+    monkeypatch.setattr("ask_the_docs.retrieve.get_reranker", lambda model_name: CapturingReranker())
+
+    settings = make_settings(tmp_path).model_copy(update={"rerank_enabled": True, "rerank_score_floor": 2.5})
+    retrieve("a query", settings, k=1)
+
+    assert captured["score_floor"] == 2.5
+
+
+def test_retrieve_returns_empty_when_rerank_drops_everything_below_floor(tmp_path, monkeypatch):
+    # Simulates an off-topic query: every candidate scores below the floor,
+    # so the reranker returns nothing and retrieve() should surface that as
+    # no results rather than falling back to the unfiltered hybrid pool.
+    _stub_hybrid_with_one_hit(monkeypatch)
+
+    class RejectEverythingReranker:
+        def rerank(self, query, candidates, k, score_floor=None):
+            return []
+
+    monkeypatch.setattr("ask_the_docs.retrieve.get_reranker", lambda model_name: RejectEverythingReranker())
+
+    settings = make_settings(tmp_path).model_copy(update={"rerank_enabled": True})
+    result = retrieve("a query", settings, k=1)
+
+    assert result == []

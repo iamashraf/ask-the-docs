@@ -639,6 +639,7 @@ def test_answer_returns_cached_result_without_calling_generator(monkeypatch):
         settings.generator.model,
         settings.hybrid_alpha,
         settings.rerank_enabled,
+        settings.rerank_score_floor,
         settings.query_rewrite_enabled,
         settings.system_prompt_template,
         settings.candidate_pool_size,
@@ -709,6 +710,7 @@ def test_answer_recomputes_when_cached_value_is_corrupted(monkeypatch):
         make_settings().generator.model,
         make_settings().hybrid_alpha,
         make_settings().rerank_enabled,
+        make_settings().rerank_score_floor,
         make_settings().query_rewrite_enabled,
         make_settings().system_prompt_template,
         make_settings().candidate_pool_size,
@@ -817,6 +819,7 @@ def test_answer_cache_key_changes_when_candidate_pool_size_changes(monkeypatch):
         ("graph_enabled", False, True),
         ("graph_traversal_hop_depth", 1, 2),
         ("global_search_top_communities", 3, 5),
+        ("rerank_score_floor", 0.0, -5.0),
     ],
 )
 def test_answer_cache_key_changes_when_graph_setting_changes(monkeypatch, field, value_a, value_b):

@@ -54,6 +54,35 @@ def test_rerank_returns_all_candidates_when_k_exceeds_pool_size(monkeypatch):
     assert len(result) == 3
 
 
+def test_rerank_drops_candidates_below_score_floor(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.reranker.CrossEncoder", FakeCrossEncoder)
+
+    reranker = Reranker(model_name="fake-model")
+    # FakeCrossEncoder scores: A=0.1, B=0.9, C=0.5 -- a floor of 0.3 should
+    # drop A even though k=3 would otherwise keep it.
+    result = reranker.rerank("some query", [DOC_A, DOC_B, DOC_C], k=3, score_floor=0.3)
+
+    assert result == [DOC_B, DOC_C]
+
+
+def test_rerank_returns_empty_list_when_every_score_is_below_floor(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.reranker.CrossEncoder", FakeCrossEncoder)
+
+    reranker = Reranker(model_name="fake-model")
+    result = reranker.rerank("some query", [DOC_A, DOC_B, DOC_C], k=3, score_floor=1.0)
+
+    assert result == []
+
+
+def test_rerank_keeps_all_scores_when_floor_not_given(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.reranker.CrossEncoder", FakeCrossEncoder)
+
+    reranker = Reranker(model_name="fake-model")
+    result = reranker.rerank("some query", [DOC_A, DOC_B, DOC_C], k=3)
+
+    assert result == [DOC_B, DOC_C, DOC_A]
+
+
 def test_rerank_handles_empty_candidate_list(monkeypatch):
     class EmptyCrossEncoder:
         def __init__(self, model_name):

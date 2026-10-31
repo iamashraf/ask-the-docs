@@ -55,6 +55,7 @@ def test_settings_hybrid_defaults():
     )
     assert settings.hybrid_alpha == 0.5
     assert settings.rerank_enabled is True
+    assert settings.rerank_score_floor == 0.0
     assert settings.query_rewrite_enabled is True
     assert settings.candidate_pool_size == 50
     assert REFUSAL_MESSAGE in settings.system_prompt_template
