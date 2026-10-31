@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 import requests
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import BaseModel, Field
@@ -29,7 +29,7 @@ from ask_the_docs.ingest import (
     UrlSecurityError,
     validate_source,
 )
-from ask_the_docs.jobs import JobStoreError, create_job, get_async_cache_client, get_job, update_job
+from ask_the_docs.jobs import JobStoreError, create_job, get_async_cache_client, get_job, list_jobs, update_job
 from ask_the_docs.llm import OllamaUnavailableError
 from ask_the_docs.queue import QueuePublishError, publish_ingest_job
 from ask_the_docs.seed import seed_if_needed
@@ -167,6 +167,23 @@ async def index() -> JobAcceptedResponse:
     """Enqueues a bulk re-index of everything under docs_dir; the worker
     discovers and dispatches the files."""
     return await _create_and_publish_job(get_settings(), kind="index", source=None)
+
+
+class JobListItem(JobStatusResponse):
+    created_at: str
+    updated_at: str
+
+
+class JobListResponse(BaseModel):
+    jobs: list[JobListItem]
+
+
+@app.get("/v1/jobs")
+async def get_jobs(limit: int = Query(default=50, ge=1, le=200)) -> JobListResponse:
+    settings = get_settings()
+    client = get_async_cache_client(settings)
+    jobs = await list_jobs(client, limit)
+    return JobListResponse(jobs=[JobListItem(**job) for job in jobs])
 
 
 @app.get("/v1/jobs/{job_id}")
