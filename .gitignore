@@ -22,3 +22,6 @@ data/documents/*
 # superpowers execution scratch (ledgers/briefs, not project artifacts)
 .superpowers/
 .worktrees/
+
+# personal Claude Code settings (hooks, local overrides) -- not team policy
+.claude/settings.local.json
