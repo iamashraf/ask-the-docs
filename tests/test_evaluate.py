@@ -4,9 +4,9 @@ from unittest.mock import Mock
 from ask_the_docs.answer import AnswerResult
 from ask_the_docs.config import REFUSAL_MESSAGE, ProviderConfig, Settings
 from ask_the_docs.evaluate import (
+    JUDGE_SYSTEM_PROMPT,
     EvalResult,
     GoldenQuestion,
-    JUDGE_SYSTEM_PROMPT,
     JudgeScore,
     judge,
     load_golden_questions,
@@ -336,6 +336,29 @@ def test_run_evaluation_flags_error_when_expected_answer_question_gets_a_refusal
     assert results[0].error == "expected an answer but got a refusal"
     assert results[0].score is None
     mock_get_llm_client.assert_not_called()
+
+
+def test_run_evaluation_judges_expected_answer_question_normally_when_it_gets_an_answer(tmp_path, monkeypatch):
+    questions_path = tmp_path / "questions.yaml"
+    questions_path.write_text('- question: "Q1"\n  expected_answer: true\n')
+
+    monkeypatch.setattr(
+        "ask_the_docs.evaluate.answer",
+        lambda query, settings, history=None, use_cache=True: AnswerResult(
+            text="a real answer", citations=["a.pdf"], context="ctx", kind="answer"
+        ),
+    )
+    fake_client = Mock()
+    fake_client.generate.return_value = json.dumps(
+        {"accuracy": 1.0, "answer_relevance": 1.0, "context_relevance": 1.0, "completeness": 1.0, "justification": "ok"}
+    )
+    monkeypatch.setattr("ask_the_docs.evaluate.get_llm_client", lambda config: fake_client)
+
+    results = run_evaluation(make_settings(), questions_path)
+
+    assert results[0].error is None
+    assert results[0].score == JudgeScore(1.0, 1.0, 1.0, 1.0, "ok")
+    fake_client.generate.assert_called_once()
 
 
 def test_run_evaluation_scores_chitchat_deterministically_when_intent_matches(tmp_path, monkeypatch):

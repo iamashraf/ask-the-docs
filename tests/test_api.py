@@ -453,6 +453,19 @@ def test_ask_rejects_oversized_history_list():
     assert response.status_code == 422
 
 
+def test_ask_accepts_history_at_the_size_limit(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+
+    def fake_answer(query, settings, k, history=None):
+        return AnswerResult(text="ok", citations=[], kind="answer")
+
+    monkeypatch.setattr("ask_the_docs.api.answer", fake_answer)
+
+    history = [{"role": "user", "content": "hi"}] * 50
+    response = TestClient(app).post("/v1/ask", json={"query": "hi", "history": history})
+    assert response.status_code == 200
+
+
 def test_ask_rejects_empty_query():
     response = TestClient(app).post("/v1/ask", json={"query": ""})
     assert response.status_code == 422
