@@ -59,6 +59,7 @@ def test_settings_hybrid_defaults():
     assert settings.candidate_pool_size == 50
     assert REFUSAL_MESSAGE in settings.system_prompt_template
     assert settings.cache_url == "redis://localhost:6379/0"
+    assert settings.history_max_turns == 6
 
 
 def test_settings_rejects_hybrid_alpha_out_of_range():
@@ -100,6 +101,24 @@ def test_settings_rejects_non_positive_candidate_pool_size():
             generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
             judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
             candidate_pool_size=0,
+        )
+
+
+def test_settings_accepts_zero_history_max_turns():
+    settings = Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+        history_max_turns=0,
+    )
+    assert settings.history_max_turns == 0
+
+
+def test_settings_rejects_negative_history_max_turns():
+    with pytest.raises(ValidationError):
+        Settings(
+            generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+            judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+            history_max_turns=-1,
         )
 
 

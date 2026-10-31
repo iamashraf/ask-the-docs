@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     hybrid_alpha: float = Field(default=0.5, ge=0.0, le=1.0)
     rerank_enabled: bool = True
     query_rewrite_enabled: bool = True
+    history_max_turns: int = Field(default=6, ge=0)
     candidate_pool_size: int = Field(default=50, ge=1)
     system_prompt_template: str = DEFAULT_SYSTEM_PROMPT_TEMPLATE
     cache_url: str = "redis://localhost:6379/0"
