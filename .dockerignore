@@ -5,6 +5,7 @@
 data
 evals
 tests
+web
 __pycache__
 *.pyc
 .pytest_cache
