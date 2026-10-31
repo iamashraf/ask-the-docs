@@ -15,19 +15,20 @@ from ask_the_docs.config import Settings
 from ask_the_docs.llm import LLMClient, get_llm_client
 from ask_the_docs.router import Turn
 
-JUDGE_PROMPT_TEMPLATE = """You are evaluating a RAG system's answer.
+JUDGE_SYSTEM_PROMPT = """You are evaluating a RAG system's answer.
 
-Question: {question}
+Score the answer from 0.0 to 1.0 on each dimension, with a short justification.
+Respond with ONLY a JSON object of this exact shape:
+{"accuracy": <float>, "answer_relevance": <float>, "context_relevance": <float>, "completeness": <float>, "justification": "<string>"}
+"""
+
+JUDGE_PROMPT_TEMPLATE = """Question: {question}
 
 Retrieved context:
 {context}
 
 Generated answer:
 {answer_text}
-
-Score the answer from 0.0 to 1.0 on each dimension, with a short justification.
-Respond with ONLY a JSON object of this exact shape:
-{{"accuracy": <float>, "answer_relevance": <float>, "context_relevance": <float>, "completeness": <float>, "justification": "<string>"}}
 """
 
 
@@ -83,7 +84,7 @@ def load_golden_questions(path: Path) -> list[GoldenQuestion]:
 def judge(question: str, context: str, answer_text: str, judge_client: LLMClient) -> JudgeScore | None:
     """Returns None if the judge's response isn't parseable JSON matching the rubric shape."""
     prompt = JUDGE_PROMPT_TEMPLATE.format(question=question, context=context, answer_text=answer_text)
-    raw = judge_client.generate(prompt)
+    raw = judge_client.generate(prompt, system=JUDGE_SYSTEM_PROMPT)
     try:
         data = json.loads(raw)
         return JudgeScore(

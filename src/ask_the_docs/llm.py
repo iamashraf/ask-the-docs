@@ -153,7 +153,7 @@ class AnthropicLLMClient:
     def generate_with_usage(self, prompt: str, system: str | None = None) -> GenerationResult:
         kwargs = {"model": self.model, "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]}
         if system is not None:
-            kwargs["system"] = system
+            kwargs["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
         response = self._client.messages.create(**kwargs)
         usage = getattr(response, "usage", None)
         return GenerationResult(

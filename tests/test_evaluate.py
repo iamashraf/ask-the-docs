@@ -6,6 +6,7 @@ from ask_the_docs.config import REFUSAL_MESSAGE, ProviderConfig, Settings
 from ask_the_docs.evaluate import (
     EvalResult,
     GoldenQuestion,
+    JUDGE_SYSTEM_PROMPT,
     JudgeScore,
     judge,
     load_golden_questions,
@@ -83,6 +84,29 @@ def test_judge_returns_none_for_json_missing_required_field():
     assert judge("q", "context", "answer", client) is None
 
 
+def test_judge_sends_instructions_as_a_separate_system_prompt(monkeypatch):
+    client = Mock()
+    client.generate.return_value = json.dumps(
+        {
+            "accuracy": 0.9,
+            "answer_relevance": 0.8,
+            "context_relevance": 0.7,
+            "completeness": 0.85,
+            "justification": "Good answer.",
+        }
+    )
+
+    judge("q", "context", "answer", client)
+
+    client.generate.assert_called_once()
+    call_args, call_kwargs = client.generate.call_args
+    prompt = call_args[0]
+    assert call_kwargs["system"] == JUDGE_SYSTEM_PROMPT
+    assert "q" in prompt and "context" in prompt and "answer" in prompt
+    assert "You are evaluating a RAG system's answer." not in prompt
+    assert "Respond with ONLY a JSON object" not in prompt
+
+
 def test_run_evaluation_skips_judge_for_expected_refusal_question_that_correctly_refuses(tmp_path, monkeypatch):
     questions_path = tmp_path / "questions.yaml"
     questions_path.write_text('- question: "Q1"\n  expected_refusal: true\n')
@@ -146,7 +170,7 @@ def test_run_evaluation_marks_error_and_continues(tmp_path, monkeypatch):
         ]
     )
     fake_client = Mock()
-    fake_client.generate.side_effect = lambda prompt: next(responses)
+    fake_client.generate.side_effect = lambda prompt, system=None: next(responses)
     monkeypatch.setattr("ask_the_docs.evaluate.get_llm_client", lambda config: fake_client)
 
     results = run_evaluation(make_settings(), questions_path)

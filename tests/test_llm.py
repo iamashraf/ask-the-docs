@@ -157,7 +157,7 @@ def test_anthropic_client_generate_passes_system_kwarg_when_given(monkeypatch):
     client = AnthropicLLMClient(model="claude-sonnet-5-5", api_key="x")
     client.generate("hi", system="be terse")
 
-    assert captured["system"] == "be terse"
+    assert captured["system"] == [{"type": "text", "text": "be terse", "cache_control": {"type": "ephemeral"}}]
 
 
 def test_openai_client_generate_calls_sdk(monkeypatch):
