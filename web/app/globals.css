@@ -325,6 +325,72 @@ a {
   font-style: italic;
 }
 
+.job-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.job-list__item {
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.job-list__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.job-list__source {
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+
+.job-list__meta {
+  margin-top: 0.3rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  background: var(--panel);
+  color: var(--ink-muted);
+}
+
+.status-badge--done {
+  background: var(--citation-bg);
+  color: var(--accent);
+}
+
+.status-badge--failed {
+  background: var(--error-bg);
+  color: var(--error-ink);
+}
+
+.status-badge--queued,
+.status-badge--processing {
+  background: var(--refusal-bg);
+  color: var(--refusal-ink);
+}
+
 .message__citations-wrap {
   margin-top: 0.6rem;
   padding-top: 0.5rem;
