@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 
 BM25_CACHE_TTL_SECONDS = 86400
 
+
+class ChromaReadError(RuntimeError):
+    """Raised by _rebuild_bm25_index when get_all_chunks fails -- distinct
+    from a real empty corpus, which legitimately returns (None, [])."""
+
 _WORD_PATTERN = re.compile(r"\w+")
 
 
@@ -41,7 +46,15 @@ def get_bm25_index(settings: Settings) -> tuple[bm25s.BM25 | None, list[Document
     if key not in _bm25_cache:
         if len(_bm25_cache) >= _BM25_CACHE_MAXSIZE:
             _bm25_cache.pop(next(iter(_bm25_cache)))
-        _bm25_cache[key] = _rebuild_bm25_index(settings)
+        try:
+            rebuilt = _rebuild_bm25_index(settings)
+        except ChromaReadError:
+            # A transient failure must not be cached -- it's not real data
+            # for this generation, just degraded service for this one
+            # call. Caching it would turn one Chroma hiccup into "BM25 off
+            # for the rest of this process's life at this generation."
+            return None, []
+        _bm25_cache[key] = rebuilt
     return _bm25_cache[key]
 
 
@@ -71,9 +84,9 @@ def _rebuild_bm25_index(settings: Settings) -> tuple[bm25s.BM25 | None, list[Doc
 
     try:
         chunks = get_all_chunks(settings)
-    except Exception:
+    except Exception as exc:
         logger.warning("Reading chunks from Chroma for the BM25 index failed; degrading to no BM25 results.", exc_info=True)
-        return None, []
+        raise ChromaReadError from exc
     # bm25s.BM25().index([]) raises ValueError on an empty corpus (nothing
     # ingested yet) -- unlike rank_bm25, which only raised on scoring one.
     if chunks:

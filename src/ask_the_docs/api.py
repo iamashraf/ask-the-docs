@@ -68,8 +68,13 @@ async def lifespan(app: FastAPI):
     # Same reasoning, applied to the Chroma/BM25 resident caches added in
     # this branch -- moves their one-time construction cost off the first
     # real /v1/ask request instead of paying it on the user's behalf.
-    load_index(settings)
-    get_bm25_index(settings)
+    # Best-effort: a broken index directory or an unreadable cache entry
+    # must not crash startup -- the first real request rebuilds anyway.
+    try:
+        load_index(settings)
+        get_bm25_index(settings)
+    except Exception:
+        logger.warning("Warming the resident index/BM25 caches failed; continuing without warm-up.", exc_info=True)
     yield
 
 GOLDEN_QUESTIONS_PATH = Path("evals/golden_questions.yaml")

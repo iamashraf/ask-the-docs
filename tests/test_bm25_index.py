@@ -287,3 +287,35 @@ def test_get_bm25_index_degrades_to_no_results_when_chroma_fails(tmp_path, monke
     assert bm25 is None
     assert chunks == []
     assert any("chroma" in record.message.lower() or "bm25" in record.message.lower() for record in caplog.records)
+
+
+def test_get_bm25_index_does_not_cache_a_transient_chroma_failure(tmp_path, monkeypatch):
+    """A failure to read Chroma must not be cached in the resident cache --
+    the next call should retry and succeed once Chroma recovers, not be
+    stuck returning (None, []) for the rest of this generation (a real
+    empty corpus -- no exception, just zero chunks -- is still cached
+    correctly; only the failure path isn't). Found by this branch's own
+    live smoke test: the in-process cache added in Task 1 caches whatever
+    _rebuild_bm25_index returns unconditionally, including a degraded
+    failure result."""
+    settings = make_settings(tmp_path)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: 1)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
+
+    calls = {"n": 0}
+
+    def flaky_get_all_chunks(s):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("chroma unavailable")
+        return FIXTURE_CHUNKS
+
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", flaky_get_all_chunks)
+
+    first_bm25, first_chunks = get_bm25_index(settings)
+    second_bm25, second_chunks = get_bm25_index(settings)
+
+    assert first_bm25 is None
+    assert first_chunks == []
+    assert second_bm25 is not None
+    assert second_chunks == FIXTURE_CHUNKS

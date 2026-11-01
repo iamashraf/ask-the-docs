@@ -29,6 +29,8 @@ def test_startup_triggers_seeding(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.configure_tracing", lambda service_name, settings: None)
     monkeypatch.setattr("ask_the_docs.api.configure_logging", lambda service_name, settings: None)
     monkeypatch.setattr("ask_the_docs.api.configure_metrics", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.load_index", lambda settings: None)
+    monkeypatch.setattr("ask_the_docs.api.get_bm25_index", lambda settings: (None, []))
     captured = {}
     monkeypatch.setattr(
         "ask_the_docs.api.seed_if_needed", lambda settings: captured.setdefault("called", True)
@@ -45,6 +47,8 @@ def test_startup_configures_tracing(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.seed_if_needed", lambda settings: None)
     monkeypatch.setattr("ask_the_docs.api.configure_logging", lambda service_name, settings: None)
     monkeypatch.setattr("ask_the_docs.api.configure_metrics", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.load_index", lambda settings: None)
+    monkeypatch.setattr("ask_the_docs.api.get_bm25_index", lambda settings: (None, []))
     captured = {}
     monkeypatch.setattr(
         "ask_the_docs.api.configure_tracing",
@@ -66,6 +70,8 @@ def test_startup_warms_the_reranker_when_rerank_enabled(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.configure_tracing", lambda service_name, settings: None)
     monkeypatch.setattr("ask_the_docs.api.configure_logging", lambda service_name, settings: None)
     monkeypatch.setattr("ask_the_docs.api.configure_metrics", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.load_index", lambda settings: None)
+    monkeypatch.setattr("ask_the_docs.api.get_bm25_index", lambda settings: (None, []))
     captured = {}
     monkeypatch.setattr(
         "ask_the_docs.api.get_reranker", lambda model_name: captured.setdefault("model_name", model_name)
@@ -75,6 +81,54 @@ def test_startup_warms_the_reranker_when_rerank_enabled(monkeypatch):
         pass
 
     assert captured["model_name"] == DEFAULT_RERANKER_MODEL
+
+
+def test_startup_warms_the_resident_index_and_bm25_caches(monkeypatch):
+    """load_index and get_bm25_index are resident (Chroma reopened / BM25
+    rebuilt once per generation, not once per request) -- warming them
+    here moves that one-time cost off the first real /v1/ask request,
+    same reasoning as the reranker warm-up above."""
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.seed_if_needed", lambda settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_tracing", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_logging", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_metrics", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.get_reranker", lambda model_name: None)
+    called = []
+    monkeypatch.setattr("ask_the_docs.api.load_index", lambda settings: called.append("load_index"))
+    monkeypatch.setattr("ask_the_docs.api.get_bm25_index", lambda settings: called.append("get_bm25_index") or (None, []))
+
+    with TestClient(app):
+        pass
+
+    assert called == ["load_index", "get_bm25_index"]
+
+
+def test_startup_survives_a_warm_up_failure(monkeypatch):
+    """A broken index directory or a cache deserialization failure must
+    not crash the whole app at startup -- the warm-up is best-effort, and
+    the first real request rebuilds anyway. Reproduces, at the lifespan
+    level, the exact live failure this branch's own ledger recorded
+    (a stale cache entry crashing app startup) -- this is the guard that
+    failure's root-cause fix (bm25_index.py's broadened except) didn't by
+    itself add at the call site that invokes it."""
+    monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
+    monkeypatch.setattr("ask_the_docs.api.seed_if_needed", lambda settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_tracing", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_logging", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.configure_metrics", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.get_reranker", lambda model_name: None)
+
+    def broken_load_index(settings):
+        raise RuntimeError("index directory is unreadable")
+
+    monkeypatch.setattr("ask_the_docs.api.load_index", broken_load_index)
+    monkeypatch.setattr("ask_the_docs.api.get_bm25_index", lambda settings: (None, []))
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
 
 
 def test_startup_skips_reranker_warmup_when_rerank_disabled(monkeypatch):
@@ -88,6 +142,8 @@ def test_startup_skips_reranker_warmup_when_rerank_disabled(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.configure_tracing", lambda service_name, settings: None)
     monkeypatch.setattr("ask_the_docs.api.configure_logging", lambda service_name, settings: None)
     monkeypatch.setattr("ask_the_docs.api.configure_metrics", lambda service_name, settings: None)
+    monkeypatch.setattr("ask_the_docs.api.load_index", lambda settings: None)
+    monkeypatch.setattr("ask_the_docs.api.get_bm25_index", lambda settings: (None, []))
     called = []
     monkeypatch.setattr("ask_the_docs.api.get_reranker", lambda model_name: called.append(model_name))
 
@@ -103,6 +159,8 @@ def test_startup_configures_logging_and_metrics_alongside_tracing(monkeypatch):
     need their OTel providers set up before the app starts serving."""
     monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
     monkeypatch.setattr("ask_the_docs.api.seed_if_needed", lambda settings: None)
+    monkeypatch.setattr("ask_the_docs.api.load_index", lambda settings: None)
+    monkeypatch.setattr("ask_the_docs.api.get_bm25_index", lambda settings: (None, []))
     order = []
     monkeypatch.setattr(
         "ask_the_docs.api.configure_tracing",
