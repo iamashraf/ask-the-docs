@@ -6,7 +6,7 @@ research papers — then ask questions grounded in that content with cited
 sources. No data leaves your machine except the LLM calls you explicitly
 configure.
 
-![Ingesting a document, asking grounded questions about it, then asking something outside its scope and getting a clean refusal](docs/demo.gif)
+![Ingesting a document, asking grounded questions about it, then asking something outside its scope and getting a clean refusal](dev-docs/demo.gif)
 
 **Key features**
 
@@ -39,13 +39,13 @@ configure.
 Ingestion and query paths sharing Chroma, Redis, and Neo4j. Solid
 borders are on the critical path; dashed borders are optional, toggled
 off by default (Graph RAG, Neo4j). Built incrementally, one slice at a
-time — see `docs/ARCHITECTURE.md` for the detailed flow and current
+time — see `dev-docs/ARCHITECTURE.md` for the detailed flow and current
 implementation notes as each piece lands.
 
-![AskTheDocs RAG architecture: ingestion and query paths sharing Chroma, Redis, and Neo4j, with solid borders on the critical path and dashed borders marking optional components like Graph RAG and Neo4j that are off by default](docs/architecture-diagram.png)
+[Interactive runtime architecture diagram](docs/runtime-architecture.html) — components, trust boundaries, and the primary request path, explorable in a browser.
 
-See `docs/ARCHITECTURE.md` for the full query/ingest flow and the tech
-stack's rationale, and `docs/CONCEPTS.md` for the concepts (vector
+See `dev-docs/ARCHITECTURE.md` for the full query/ingest flow and the tech
+stack's rationale, and `dev-docs/CONCEPTS.md` for the concepts (vector
 search, BM25, reranking, Graph RAG, ...) behind each stage.
 
 ## Quickstart

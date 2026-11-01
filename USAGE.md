@@ -105,11 +105,13 @@ whichever fits; nothing about the pipeline itself differs.
   the `curl` examples below:**
 
   ```bash
-  podman compose up -d --build app
+  podman compose up -d --build app worker
   ```
 
-  Every `curl .../v1/...` example in this guide assumes that's already
-  running.
+  `app` answers `curl` requests; `worker` is what actually processes a
+  queued `/v1/ingest`/`/v1/index` job — without it, those jobs sit in
+  `queued` forever. Every `curl .../v1/...` example in this guide assumes
+  both are already running.
 
 ## Ingest — load a document into the index
 
@@ -125,11 +127,11 @@ curl -X POST localhost:8000/v1/ingest -H "Content-Type: application/json" \
 
 What happens:
 
-1. The source string is routed by scheme: a URL goes through the SSRF
-   guard (hostname resolved and rejected if it points at a
-   private/loopback/internal address — re-checked on every redirect hop);
-   a local path is checked against path-traversal, extension, and size
-   limits.
+1. The source string is routed by scheme and validated — a URL goes
+   through the SSRF guard (hostname resolved and rejected if it points
+   at a private/loopback/internal address — re-checked on every redirect
+   hop); a local path is checked against path-traversal, extension, and
+   size limits.
 2. The matching loader turns the content into one or more chunks of text,
    each tagged with its source. A PDF produces one unit per page (pages
    with no extractable text, e.g. scanned images, are dropped); a PDF
@@ -140,10 +142,23 @@ What happens:
    named for that backend — so switching embedding backends never mixes
    incompatible vectors.
 
-CLI output: `Ingested N document(s) from 1 source(s).` — `N` is the number
-of page/section units *before* chunking (a 10-page PDF with text on every
-page → `N=10`), not the chunk count. The API returns the same count as
-`{"documents_ingested": N}`.
+**CLI** runs all three steps synchronously; output is `Ingested N
+document(s) from 1 source(s).` — `N` is the number of page/section units
+*before* chunking (a 10-page PDF with text on every page → `N=10`), not
+the chunk count.
+
+**API** only does step 1 inline (so a bad source still gets an immediate
+`400`/`404`), then enqueues a job on NATS JetStream and returns `202
+{"job_id": "...", "status": "queued"}` — a separate `worker` process runs
+steps 2-3. Poll for completion:
+
+```bash
+curl localhost:8000/v1/jobs/<job_id>
+# {"job_id": "...", "status": "done", "result": {"documents_ingested": N}, ...}
+```
+
+`status` is `queued` → `processing` → `done`/`failed`. `GET /v1/jobs`
+lists recent jobs (newest first) without needing an id.
 
 ## Ask — query the index
 
@@ -281,14 +296,20 @@ same ingest pipeline on each, without naming files individually.
 files duplicates their chunks (document-update/delete is a planned future
 addition, not built yet).
 
+Like `/v1/ingest`, the API returns `202 {"job_id": "...", "status":
+"queued"}` and runs the walk/ingest in the `worker`; poll `GET
+/v1/jobs/<job_id>` as above — its `result` also includes `files_found`
+alongside `documents_ingested`.
+
 ## API error responses
 
 The CLI prints errors as text; the API returns real HTTP status codes:
 
 | Situation | Status |
 |---|---|
+| `/v1/ingest`/`/v1/index` accepted, job queued | 202 |
 | Bad/unsafe `source` (path traversal, SSRF, unsupported extension) | 400 |
-| File not found | 404 |
+| File not found, or `/v1/jobs/{job_id}` with an unknown id | 404 |
 | Empty `source`/`query`, `k <= 0`, or a malformed `history` turn | 422 |
 | Ollama unreachable | 503 |
 
@@ -335,8 +356,8 @@ the end-to-end pipeline against a real model; the suite below automates it.
 uv run pytest e2e/   # real stack must already be running
 ```
 
-Drives the real HTTP API (`podman compose up -d --build app`, plus
-whatever else is already running) against real Ollama/Chroma/Redis —
+Drives the real HTTP API (`podman compose up -d --build app worker`,
+plus whatever else is already running) against real Ollama/Chroma/Redis —
 idempotent re-ingest, large-batch ingest, cache invalidation on content
 change, grounded/cited answers, and refusals. Not part of `uv run
 pytest`'s default run (see `pyproject.toml`'s `testpaths`), same split as
@@ -363,8 +384,9 @@ cd web && npm run test:e2e   # real stack must already be running
 ```
 
 `npm run test:e2e` drives a real browser (Playwright) against the real
-running stack — `podman compose up app web` (plus whatever else is
-already running) — and asks real questions, asserting on real grounded
+running stack — `podman compose up app worker web` (plus whatever else
+is already running; the ingest page needs `worker` to actually process
+what it uploads) — and asks real questions, asserting on real grounded
 answers/citations/refusals. Not part of `npm test`'s default run, same
 split as the Python suite above.
 

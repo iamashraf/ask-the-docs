@@ -27,3 +27,4 @@ data/documents/*
 .claude/settings.local.json
 
 graphify-out/
+.archify/

@@ -65,13 +65,28 @@ flowchart TD
     end
 ```
 
+The diagram above shows the ingest/query *logic*, not process topology.
+In practice, `/v1/ingest` and `/v1/index` validate the source
+synchronously (so a bad request still gets an immediate 400/404), then
+enqueue a job on NATS JetStream and return `202` — the actual
+`dispatch`/`build_index` work in the Ingest subgraph above runs in a
+separate `worker` process, not the request handler. For the full
+runtime topology (API, worker, NATS, Chroma, Valkey, Neo4j, Ollama, and
+the trust boundary around them), see the interactive diagram:
+[runtime-architecture.html](../docs/runtime-architecture.html).
+
 Graph RAG (triplet extraction, entity resolution, community
 detection/summarization, local/global search) is entirely gated behind
 `graph_enabled` (default `False`) and degrades to the plain hybrid path
 above on any Neo4j/LLM failure — it never crashes an ingest or a query.
 
-Both the CLI (`ingest`/`index`/`ask`/`evaluate`/`serve`) and the HTTP API
-(`/v1/...`) drive this same pipeline — no logic is duplicated between them.
+Both the CLI (`ingest`/`index`/`ask`/`evaluate`/`serve`/`worker`) and the
+HTTP API (`/v1/...`) drive this same pipeline — no logic is duplicated
+between them. There's one binary, not three: the `app` and `worker`
+containers in `docker-compose.yml` are the same CLI image, started with
+`serve`/`worker` respectively; `ingest`/`index`/`ask`/`evaluate` are the
+CLI's own direct, synchronous subcommands that call the pipeline without
+going through the API or the queue.
 
 ## Concepts used
 
@@ -129,6 +144,12 @@ Both the CLI (`ingest`/`index`/`ask`/`evaluate`/`serve`) and the HTTP API
   automatically on re-ingest. An open-source, Linux-Foundation-backed
   fork rather than Redis itself, avoiding Redis Inc.'s post-2024
   source-available licensing.
+- **NATS JetStream** — the ingest job queue (`queue.py`, `worker.py`):
+  `/v1/ingest`/`/v1/index` publish a job and return `202` immediately,
+  so a slow ingest (a large PDF, a remote URL) never ties up a request
+  thread; the `worker` process consumes durably (at-least-once,
+  redelivered on crash) and writes status to Valkey (`jobs.py`) for the
+  `/v1/jobs/{id}` polling endpoint.
 - **Neo4j, with GDS** — the graph store for Graph RAG (`graph_store.py`,
   `community.py`), off by default. Leiden community detection runs
   *in the database* via the GDS library against the graph already
@@ -142,7 +163,7 @@ Both the CLI (`ingest`/`index`/`ask`/`evaluate`/`serve`) and the HTTP API
   core pipeline. Anthropic/OpenAI swap in via config alone (same
   `LLMClient`/`Embeddings` interface) — e.g. for the judge role in
   evaluation — without touching call sites.
-- **Podman- or Docker-compose** — the whole stack (Ollama, Valkey,
-  Neo4j, the app) is one standard compose file; Podman's rootless,
-  daemonless execution is the documented default, with Docker Compose
-  working against the same file.
+- **Podman- or Docker-compose** — the whole stack (Ollama, Valkey, NATS,
+  Neo4j, the app, the worker, the web UI) is one standard compose file;
+  Podman's rootless, daemonless execution is the documented default,
+  with Docker Compose working against the same file.
