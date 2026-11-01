@@ -59,11 +59,15 @@ def _rebuild_bm25_index(settings: Settings) -> tuple[bm25s.BM25 | None, list[Doc
     if cached is not None:
         try:
             return pickle.loads(cached)
-        except (pickle.UnpicklingError, EOFError, AttributeError):
-            # A corrupted entry, or one from an incompatible bm25s
-            # version -- treat it as a miss and rebuild, same as the
-            # answer cache's corruption handling.
-            pass
+        except Exception:
+            # A corrupted entry, an incompatible bm25s version, or --
+            # observed live when this branch swapped rank_bm25 for bm25s --
+            # a pickle referencing a module no longer installed at all
+            # (ModuleNotFoundError, not UnpicklingError/EOFError/
+            # AttributeError). Any deserialization failure degrades to a
+            # rebuild rather than crashing the caller; caching is an
+            # optimization here, not a hard dependency.
+            logger.warning("Cached BM25 index was unusable; rebuilding.", exc_info=True)
 
     try:
         chunks = get_all_chunks(settings)

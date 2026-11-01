@@ -136,6 +136,40 @@ def test_score_returns_empty_list_for_an_empty_corpus(tmp_path, monkeypatch):
     assert score("anything", settings, k=10) == []
 
 
+def test_get_bm25_index_rebuilds_when_cached_value_is_from_an_incompatible_module(tmp_path, monkeypatch):
+    """A pickle written before a library swap (this branch's rank_bm25 ->
+    bm25s change) references a module that's no longer installed --
+    ModuleNotFoundError, not UnpicklingError/EOFError/AttributeError. This
+    crashed a live app's startup (lifespan's warm-up call) before this fix:
+    the old except clause didn't catch it."""
+    settings = make_settings(tmp_path)
+    calls = {"count": 0}
+
+    def fake_get_all_chunks(s):
+        calls["count"] += 1
+        return FIXTURE_CHUNKS
+
+    class StaleCache:
+        def get(self, key):
+            return b"stand-in for a pickle of a now-uninstalled class"
+
+        def set(self, key, value, ex=None):
+            pass
+
+    def fake_loads(data):
+        raise ModuleNotFoundError("No module named 'rank_bm25'")
+
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", fake_get_all_chunks)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: 4)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: StaleCache())
+    monkeypatch.setattr("ask_the_docs.bm25_index.pickle.loads", fake_loads)
+
+    bm25, chunks = get_bm25_index(settings)
+
+    assert calls["count"] == 1
+    assert chunks == FIXTURE_CHUNKS
+
+
 def test_score_clamps_k_to_corpus_size(tmp_path, monkeypatch):
     """bm25s.BM25.retrieve() raises ValueError if k exceeds the corpus size
     -- score() must clamp instead of propagating that crash."""
