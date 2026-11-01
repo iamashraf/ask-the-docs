@@ -208,6 +208,41 @@ def test_openai_client_generate_calls_sdk(monkeypatch):
     assert captured["messages"] == [{"role": "user", "content": "hi"}]
 
 
+def test_openai_client_forwards_base_url_when_set(monkeypatch):
+    captured = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("ask_the_docs.llm.OpenAI", FakeOpenAI)
+
+    OpenAILLMClient(model="gpt-4o-mini", api_key="x", base_url="https://custom-gateway.example.com/v1")
+
+    assert captured == {"api_key": "x", "base_url": "https://custom-gateway.example.com/v1"}
+
+
+def test_get_llm_client_forwards_base_url_for_openai(monkeypatch):
+    captured = {}
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("ask_the_docs.llm.OpenAI", FakeOpenAI)
+
+    get_llm_client(
+        ProviderConfig(
+            provider="openai",
+            model="gpt-4o-mini",
+            api_key="x",
+            base_url="https://custom-gateway.example.com/v1",
+        )
+    )
+
+    assert captured["base_url"] == "https://custom-gateway.example.com/v1"
+
+
 def test_ollama_generate_with_usage_reads_token_counts(monkeypatch):
     def fake_post(url, json, timeout):
         return SimpleNamespace(

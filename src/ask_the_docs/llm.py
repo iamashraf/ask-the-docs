@@ -179,9 +179,12 @@ class AnthropicLLMClient:
 class OpenAILLMClient:
     """Wraps the OpenAI SDK."""
 
-    def __init__(self, model: str, api_key: str):
+    def __init__(self, model: str, api_key: str, base_url: str | None = None):
         self.model = model
-        self._client = OpenAI(api_key=api_key)
+        kwargs = {"api_key": api_key}
+        if base_url is not None:
+            kwargs["base_url"] = base_url
+        self._client = OpenAI(**kwargs)
 
     def generate(self, prompt: str, system: str | None = None) -> str:
         return self.generate_with_usage(prompt, system).text
@@ -209,5 +212,7 @@ def get_llm_client(config: ProviderConfig) -> LLMClient:
     if config.provider == "anthropic":
         return AnthropicLLMClient(model=config.model, api_key=config.api_key.get_secret_value())
     if config.provider == "openai":
-        return OpenAILLMClient(model=config.model, api_key=config.api_key.get_secret_value())
+        return OpenAILLMClient(
+            model=config.model, api_key=config.api_key.get_secret_value(), base_url=config.base_url
+        )
     raise ValueError(f"Unknown provider: {config.provider!r}")

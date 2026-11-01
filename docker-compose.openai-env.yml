@@ -1,0 +1,19 @@
+# Opt-in compose overlay: passes GENERATOR__API_KEY into app/worker straight
+# from the host's OPEN_API_KEY env var, instead of duplicating the secret
+# into .env.local. Not loaded by default -- only applies when passed
+# explicitly with `-f`:
+#
+#   podman compose -f docker-compose.yml -f docker-compose.openai-env.yml \
+#     up -d --force-recreate app worker
+#
+# Requires OPEN_API_KEY to be exported in the shell that runs that command.
+
+services:
+  app:
+    environment:
+      - GENERATOR__API_KEY=${OPENAI_API_KEY}
+      - JUDGE__API_KEY=${OPENAI_API_KEY}
+  worker:
+    environment:
+      - GENERATOR__API_KEY=${OPENAI_API_KEY}
+      - JUDGE__API_KEY=${OPENAI_API_KEY}
