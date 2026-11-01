@@ -36,13 +36,13 @@ configure.
 
 ## Architecture
 
+[Interactive runtime architecture diagram](https://iamashraf.github.io/ask-the-docs/runtime-architecture.html) — components, trust boundaries, and the primary request path, explorable in a browser.
+
 Ingestion and query paths sharing Chroma, Redis, and Neo4j. Solid
 borders are on the critical path; dashed borders are optional, toggled
 off by default (Graph RAG, Neo4j). Built incrementally, one slice at a
 time — see `dev-docs/ARCHITECTURE.md` for the detailed flow and current
 implementation notes as each piece lands.
-
-[Interactive runtime architecture diagram](https://iamashraf.github.io/ask-the-docs/runtime-architecture.html) — components, trust boundaries, and the primary request path, explorable in a browser.
 
 See `dev-docs/ARCHITECTURE.md` for the full query/ingest flow and the tech
 stack's rationale, and `dev-docs/CONCEPTS.md` for the concepts (vector
