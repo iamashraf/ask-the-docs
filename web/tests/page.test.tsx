@@ -63,14 +63,49 @@ describe("Page", () => {
 
     const firstBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     const secondBody = JSON.parse(fetchMock.mock.calls[1][1].body as string);
-    expect(firstBody).toEqual({ query: "What is BM25?", history: [] });
+    expect(firstBody).toEqual({
+      query: "What is BM25?",
+      history: [],
+      session_id: expect.any(String),
+    });
     expect(secondBody).toEqual({
       query: "And TF-IDF?",
       history: [
         { role: "user", content: "What is BM25?" },
         { role: "assistant", content: "It's a ranking function." },
       ],
+      session_id: expect.any(String),
     });
+  });
+
+  test("sends the same session_id for every request in one page load", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ answer: "answer 1", citations: [], kind: "answer" }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ answer: "answer 2", citations: [], kind: "answer" }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Page />);
+    await userEvent.type(screen.getByRole("textbox"), "first question");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText("answer 1");
+
+    await userEvent.type(screen.getByRole("textbox"), "second question");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await screen.findByText("answer 2");
+
+    const firstBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const secondBody = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    expect(firstBody.session_id).toBeTruthy();
+    expect(secondBody.session_id).toBe(firstBody.session_id);
   });
 
   test("truncates a long history turn's content but leaves a short one unchanged", async () => {

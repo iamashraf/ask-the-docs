@@ -487,6 +487,61 @@ def test_ask_returns_kind_for_chitchat(monkeypatch):
     assert response.json() == {"answer": "Hello!", "citations": [], "kind": "chitchat"}
 
 
+def test_ask_sets_session_id_span_attribute_when_provided(monkeypatch):
+    """Review Focus: session_id is how Tempo groups every trace in one chat
+    conversation together (TraceQL `span.session.id = ...`) -- it must land
+    on the request's current span, not get silently dropped."""
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    monkeypatch.setattr("ask_the_docs.api.answer", lambda query, settings, k, history=None: AnswerResult(text="ok", citations=[]))
+
+    class FakeSpan:
+        def __init__(self):
+            self.attributes = {}
+
+        def set_attribute(self, key, value):
+            self.attributes[key] = value
+
+    fake_span = FakeSpan()
+
+    class FakeTrace:
+        @staticmethod
+        def get_current_span():
+            return fake_span
+
+    monkeypatch.setattr("ask_the_docs.api.trace", FakeTrace)
+
+    response = TestClient(app).post("/v1/ask", json={"query": "hi", "session_id": "chat-abc-123"})
+
+    assert response.status_code == 200
+    assert fake_span.attributes.get("session.id") == "chat-abc-123"
+
+
+def test_ask_without_session_id_does_not_set_span_attribute(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    monkeypatch.setattr("ask_the_docs.api.answer", lambda query, settings, k, history=None: AnswerResult(text="ok", citations=[]))
+
+    class FakeSpan:
+        def __init__(self):
+            self.attributes = {}
+
+        def set_attribute(self, key, value):
+            self.attributes[key] = value
+
+    fake_span = FakeSpan()
+
+    class FakeTrace:
+        @staticmethod
+        def get_current_span():
+            return fake_span
+
+    monkeypatch.setattr("ask_the_docs.api.trace", FakeTrace)
+
+    response = TestClient(app).post("/v1/ask", json={"query": "hi"})
+
+    assert response.status_code == 200
+    assert fake_span.attributes == {}
+
+
 def test_ask_rejects_oversized_history_turn():
     history = [{"role": "user", "content": "x" * 4001}]
     response = TestClient(app).post("/v1/ask", json={"query": "hi", "history": history})

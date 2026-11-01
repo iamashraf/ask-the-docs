@@ -418,6 +418,22 @@ def test_route_records_gen_ai_metrics_on_hosted_provider_malformed_json(monkeypa
     assert after - before == 1
 
 
+def test_analyze_records_route_latency_metric(monkeypatch):
+    """Review Focus: route()/analyze() is an LLM round trip on every doc
+    query -- without its own latency histogram, a slow router is invisible
+    next to retrieve_latency/rerank_latency/generate_latency in Grafana."""
+    text = '{"intent": "doc", "standalone_query": "LoRA low-rank adaptation", "reply": ""}'
+    fake_client = FakeTextClient(text)
+    monkeypatch.setattr("ask_the_docs.router.get_llm_client", lambda _: fake_client)
+    settings = make_settings(provider="anthropic", model="claude-sonnet-5-5")
+
+    before = _histogram_count("route_latency")
+    analyze("what is LoRA?", [], settings)
+    after = _histogram_count("route_latency")
+
+    assert after - before == 1
+
+
 def test_route_increments_route_counter(monkeypatch):
     before = _counter_value("route", intent="chitchat", source="rules")
 

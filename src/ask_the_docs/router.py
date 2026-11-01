@@ -164,6 +164,7 @@ def analyze(query: str, history: list[Turn], settings: Settings) -> Route:
                 result.output_tokens, {**attrs, "gen_ai.token.modality": "text"}
             )
         metrics.gen_ai_client_inference_duration.record(duration, attrs)
+        metrics.route_latency_seconds.record(duration)
 
         if settings.generator.provider == "ollama":
             data = result.data

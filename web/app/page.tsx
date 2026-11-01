@@ -23,6 +23,9 @@ export default function Page() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // One id per page load -- lets Tempo group every trace from this
+  // conversation together (TraceQL `span.session.id = ...`).
+  const [sessionId] = useState(() => crypto.randomUUID());
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -63,7 +66,7 @@ export default function Page() {
       const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, history }),
+        body: JSON.stringify({ query, history, session_id: sessionId }),
       });
       const data = await res.json();
 

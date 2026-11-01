@@ -37,6 +37,12 @@ route_total = meter.create_counter(
     "route", description="Routing decisions by intent and source"
 )
 
+route_latency_seconds = meter.create_histogram(
+    "route_latency",
+    unit="s",
+    description="Routing/query-rewrite LLM call latency",
+    explicit_bucket_boundaries_advisory=LLM_LATENCY_BUCKETS,
+)
 retrieve_latency_seconds = meter.create_histogram(
     "retrieve_latency",
     unit="s",

@@ -400,6 +400,26 @@ def test_retrieve_opens_a_hybrid_retrieve_span(tmp_path, monkeypatch):
     assert "hybrid_retrieve" in fake_tracer.spans
 
 
+def test_retrieve_opens_vector_search_and_bm25_search_spans_inside_hybrid_retrieve(tmp_path, monkeypatch):
+    """Review Focus: hybrid_retrieve used to be one lump span covering both
+    the Chroma vector search and the BM25 scan -- a slow retrieval gave no
+    way to tell which side was slow. These sub-spans fix that."""
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda settings: FakeCache())
+    fake_tracer = FakeTracer()
+    monkeypatch.setattr("ask_the_docs.retrieve.tracer", fake_tracer)
+    settings = make_settings(tmp_path)
+    build_index(
+        [Document(page_content="apples are red fruit", metadata={"source": "a.txt", "source_doc_id": "a"})],
+        settings,
+    )
+
+    retrieve("apples are red fruit", settings, k=1)
+
+    assert "vector_search" in fake_tracer.spans
+    assert "bm25_search" in fake_tracer.spans
+
+
 def test_retrieve_does_not_open_hybrid_retrieve_span_on_the_global_search_short_circuit(tmp_path, monkeypatch):
     """Review Focus: the early-return graph path must not open spans for
     code that never runs."""

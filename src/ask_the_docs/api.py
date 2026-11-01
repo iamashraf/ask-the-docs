@@ -16,6 +16,7 @@ from typing import Literal
 import requests
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import BaseModel, Field
 
@@ -224,6 +225,7 @@ class AskRequest(BaseModel):
     query: str = Field(min_length=1)
     k: int = Field(default=5, ge=1)
     history: list[Turn] = Field(default=[], max_length=50)
+    session_id: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -234,6 +236,11 @@ class AskResponse(BaseModel):
 
 @app.post("/v1/ask")
 def ask(request: AskRequest) -> AskResponse:
+    if request.session_id is not None:
+        # Lets Tempo group every trace in one chat conversation together
+        # (TraceQL `span.session.id = ...`) -- any span in the trace carries
+        # this, so setting it once here is enough, no propagation needed.
+        trace.get_current_span().set_attribute("session.id", request.session_id)
     result = answer(request.query, get_settings(), k=request.k, history=request.history)
     return AskResponse(answer=result.text, citations=result.citations, kind=result.kind)
 
