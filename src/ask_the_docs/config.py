@@ -31,6 +31,7 @@ class ProviderConfig(BaseModel):
     model: str
     api_key: SecretStr | None = None
     base_url: str | None = None
+    think: bool | None = None
 
     @model_validator(mode="after")
     def check_api_key_present_for_hosted_providers(self) -> "ProviderConfig":

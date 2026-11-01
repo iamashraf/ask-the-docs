@@ -62,9 +62,10 @@ class LLMClient(Protocol):
 class OllamaLLMClient:
     """Talks to a local Ollama server over HTTP."""
 
-    def __init__(self, model: str, base_url: str):
+    def __init__(self, model: str, base_url: str, think: bool | None = None):
         self.model = model
         self.base_url = base_url
+        self.think = think
 
     def generate(self, prompt: str, system: str | None = None) -> str:
         return self.generate_with_usage(prompt, system).text
@@ -75,16 +76,20 @@ class OllamaLLMClient:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
+        body = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "keep_alive": OLLAMA_KEEP_ALIVE,
+            "options": {"num_predict": OLLAMA_MAX_OUTPUT_TOKENS},
+        }
+        if self.think is not None:
+            body["think"] = self.think
+
         try:
             response = requests.post(
                 f"{self.base_url}/api/chat",
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "stream": False,
-                    "keep_alive": OLLAMA_KEEP_ALIVE,
-                    "options": {"num_predict": OLLAMA_MAX_OUTPUT_TOKENS},
-                },
+                json=body,
                 timeout=OLLAMA_CHAT_TIMEOUT_SECONDS,
             )
         except (requests.ConnectionError, requests.Timeout) as exc:
@@ -111,17 +116,21 @@ class OllamaLLMClient:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
+        body = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "format": schema,
+            "keep_alive": OLLAMA_KEEP_ALIVE,
+            "options": {"num_predict": OLLAMA_MAX_OUTPUT_TOKENS},
+        }
+        if self.think is not None:
+            body["think"] = self.think
+
         try:
             response = requests.post(
                 f"{self.base_url}/api/chat",
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "stream": False,
-                    "format": schema,
-                    "keep_alive": OLLAMA_KEEP_ALIVE,
-                    "options": {"num_predict": OLLAMA_MAX_OUTPUT_TOKENS},
-                },
+                json=body,
                 timeout=OLLAMA_CHAT_TIMEOUT_SECONDS,
             )
         except (requests.ConnectionError, requests.Timeout) as exc:
@@ -208,7 +217,9 @@ class OpenAILLMClient:
 def get_llm_client(config: ProviderConfig) -> LLMClient:
     """Factory: builds the client matching config.provider."""
     if config.provider == "ollama":
-        return OllamaLLMClient(model=config.model, base_url=config.base_url or "http://localhost:11434")
+        return OllamaLLMClient(
+            model=config.model, base_url=config.base_url or "http://localhost:11434", think=config.think
+        )
     if config.provider == "anthropic":
         return AnthropicLLMClient(model=config.model, api_key=config.api_key.get_secret_value())
     if config.provider == "openai":

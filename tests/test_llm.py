@@ -70,6 +70,49 @@ def test_ollama_client_generate_posts_to_chat_endpoint(monkeypatch):
     assert captured["json"]["messages"] == [{"role": "user", "content": "hi"}]
 
 
+def test_ollama_client_omits_think_field_by_default(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["json"] = json
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"message": {"content": "hello world"}},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="llama3.1:8b", base_url="http://localhost:11434")
+    client.generate("hi")
+
+    assert "think" not in captured["json"]
+
+
+def test_ollama_client_sends_think_false_when_configured(monkeypatch):
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["json"] = json
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"message": {"content": "hello world"}},
+        )
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    client = OllamaLLMClient(model="qwen3:4b", base_url="http://localhost:11434", think=False)
+    client.generate("hi")
+
+    assert captured["json"]["think"] is False
+
+
+def test_get_llm_client_passes_think_to_ollama_client():
+    client = get_llm_client(
+        ProviderConfig(provider="ollama", model="qwen3:4b", base_url="http://localhost:11434", think=False)
+    )
+    assert client.think is False
+
+
 def test_ollama_client_generate_raises_clear_error_on_connection_failure(monkeypatch):
     def fake_post(url, json, timeout):
         raise requests.ConnectionError("boom")
