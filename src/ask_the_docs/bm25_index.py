@@ -27,7 +27,25 @@ def _tokenize(text: str) -> list[str]:
     return _WORD_PATTERN.findall(text.lower())
 
 
-def get_bm25_index(settings: Settings) -> tuple[BM25Okapi, list[Document]]:
+_bm25_cache: dict[tuple[str, int, str], tuple[BM25Okapi | None, list[Document]]] = {}
+_BM25_CACHE_MAXSIZE = 2
+
+
+def get_bm25_index(settings: Settings) -> tuple[BM25Okapi | None, list[Document]]:
+    """Resident per (collection_name, generation, index_dir) within this
+    process, on top of the cross-process Valkey cache _rebuild_bm25_index
+    still uses -- avoids a network round trip + pickle.loads() on every
+    call, not just avoiding a rebuild from Chroma. index_dir is part of the
+    key for the same collision reason load_index's cache includes it."""
+    key = (get_collection_name(settings), get_index_generation(settings), str(settings.index_dir))
+    if key not in _bm25_cache:
+        if len(_bm25_cache) >= _BM25_CACHE_MAXSIZE:
+            _bm25_cache.pop(next(iter(_bm25_cache)))
+        _bm25_cache[key] = _rebuild_bm25_index(settings)
+    return _bm25_cache[key]
+
+
+def _rebuild_bm25_index(settings: Settings) -> tuple[BM25Okapi | None, list[Document]]:
     """Cache key embeds the index generation -- a write from this process
     or another (including a same-chunk-count replace, which chunk count
     alone wouldn't catch) changes the key, so a stale entry is simply

@@ -220,6 +220,44 @@ def test_build_index_then_load_index_round_trips(tmp_path, monkeypatch):
     assert "Attention is all you need" in results[0].page_content
 
 
+def test_load_index_is_resident_across_calls_at_the_same_generation(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.get_index_generation", lambda settings: 1)
+    settings = make_settings(tmp_path)
+
+    first = load_index(settings)
+    second = load_index(settings)
+
+    assert first is second
+
+
+def test_load_index_reloads_when_generation_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    generations = iter([1, 2])
+    monkeypatch.setattr("ask_the_docs.index.get_index_generation", lambda settings: next(generations))
+    settings = make_settings(tmp_path)
+
+    first = load_index(settings)
+    second = load_index(settings)
+
+    assert first is not second
+
+
+def test_load_index_does_not_collide_across_different_index_dirs_at_the_same_generation(tmp_path, monkeypatch):
+    """Same backend (same collection name), same generation (0, both fresh)
+    -- without persist_directory in the cache key, these would incorrectly
+    share a cached Chroma client."""
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.get_index_generation", lambda settings: 0)
+    settings_a = make_settings(tmp_path / "a")
+    settings_b = make_settings(tmp_path / "b")
+
+    first = load_index(settings_a)
+    second = load_index(settings_b)
+
+    assert first is not second
+
+
 def test_build_index_reingesting_unchanged_doc_is_a_noop(tmp_path, monkeypatch):
     counting = CountingEmbeddings()
     monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: counting)

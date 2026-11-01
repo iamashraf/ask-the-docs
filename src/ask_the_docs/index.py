@@ -243,12 +243,27 @@ def build_index(docs: list[Document], settings: Settings) -> Chroma:
     return index
 
 
+_index_cache: dict[tuple[str, int, str], Chroma] = {}
+_INDEX_CACHE_MAXSIZE = 2
+
+
 def load_index(settings: Settings) -> Chroma:
-    return Chroma(
-        collection_name=get_collection_name(settings),
-        embedding_function=get_embeddings(settings),
-        persist_directory=str(settings.index_dir),
-    )
+    """Resident per (collection_name, generation, index_dir) within this
+    process -- avoids reopening the persisted on-disk index on every call.
+    index_dir is part of the key, not just collection_name+generation,
+    because collection_name depends only on the embeddings backend: two
+    different index directories with the same backend and the same
+    generation number would otherwise collide."""
+    key = (get_collection_name(settings), get_index_generation(settings), str(settings.index_dir))
+    if key not in _index_cache:
+        if len(_index_cache) >= _INDEX_CACHE_MAXSIZE:
+            _index_cache.pop(next(iter(_index_cache)))
+        _index_cache[key] = Chroma(
+            collection_name=key[0],
+            embedding_function=get_embeddings(settings),
+            persist_directory=str(settings.index_dir),
+        )
+    return _index_cache[key]
 
 
 def get_all_chunks(settings: Settings) -> list[Document]:

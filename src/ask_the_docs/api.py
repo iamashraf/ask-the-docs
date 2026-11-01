@@ -20,6 +20,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import BaseModel, Field
 
 from ask_the_docs.answer import answer
+from ask_the_docs.bm25_index import get_bm25_index
 from ask_the_docs.config import get_settings
 from ask_the_docs.evaluate import run_evaluation, summarize
 from ask_the_docs.index import load_index
@@ -64,6 +65,11 @@ async def lifespan(app: FastAPI):
         # first real request -- get_reranker is itself lru_cache'd, so this
         # just moves the one-time load cost off the user's first message.
         get_reranker(DEFAULT_RERANKER_MODEL)
+    # Same reasoning, applied to the Chroma/BM25 resident caches added in
+    # this branch -- moves their one-time construction cost off the first
+    # real /v1/ask request instead of paying it on the user's behalf.
+    load_index(settings)
+    get_bm25_index(settings)
     yield
 
 GOLDEN_QUESTIONS_PATH = Path("evals/golden_questions.yaml")
