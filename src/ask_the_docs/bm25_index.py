@@ -6,8 +6,8 @@ import logging
 import pickle
 import re
 
+import bm25s
 from langchain_core.documents import Document
-from rank_bm25 import BM25Okapi
 
 from ask_the_docs.cache import cache_get, cache_set, get_cache_client, make_cache_key
 from ask_the_docs.config import Settings
@@ -27,11 +27,11 @@ def _tokenize(text: str) -> list[str]:
     return _WORD_PATTERN.findall(text.lower())
 
 
-_bm25_cache: dict[tuple[str, int, str], tuple[BM25Okapi | None, list[Document]]] = {}
+_bm25_cache: dict[tuple[str, int, str], tuple[bm25s.BM25 | None, list[Document]]] = {}
 _BM25_CACHE_MAXSIZE = 2
 
 
-def get_bm25_index(settings: Settings) -> tuple[BM25Okapi | None, list[Document]]:
+def get_bm25_index(settings: Settings) -> tuple[bm25s.BM25 | None, list[Document]]:
     """Resident per (collection_name, generation, index_dir) within this
     process, on top of the cross-process Valkey cache _rebuild_bm25_index
     still uses -- avoids a network round trip + pickle.loads() on every
@@ -45,7 +45,7 @@ def get_bm25_index(settings: Settings) -> tuple[BM25Okapi | None, list[Document]
     return _bm25_cache[key]
 
 
-def _rebuild_bm25_index(settings: Settings) -> tuple[BM25Okapi | None, list[Document]]:
+def _rebuild_bm25_index(settings: Settings) -> tuple[bm25s.BM25 | None, list[Document]]:
     """Cache key embeds the index generation -- a write from this process
     or another (including a same-chunk-count replace, which chunk count
     alone wouldn't catch) changes the key, so a stale entry is simply
@@ -60,7 +60,7 @@ def _rebuild_bm25_index(settings: Settings) -> tuple[BM25Okapi | None, list[Docu
         try:
             return pickle.loads(cached)
         except (pickle.UnpicklingError, EOFError, AttributeError):
-            # A corrupted entry, or one from an incompatible rank_bm25
+            # A corrupted entry, or one from an incompatible bm25s
             # version -- treat it as a miss and rebuild, same as the
             # answer cache's corruption handling.
             pass
@@ -70,15 +70,22 @@ def _rebuild_bm25_index(settings: Settings) -> tuple[BM25Okapi | None, list[Docu
     except Exception:
         logger.warning("Reading chunks from Chroma for the BM25 index failed; degrading to no BM25 results.", exc_info=True)
         return None, []
-    # BM25Okapi divides by corpus size internally -- an empty corpus (nothing
-    # ingested yet) would otherwise raise ZeroDivisionError.
-    bm25 = BM25Okapi([_tokenize(chunk.page_content) for chunk in chunks]) if chunks else None
+    # bm25s.BM25().index([]) raises ValueError on an empty corpus (nothing
+    # ingested yet) -- unlike rank_bm25, which only raised on scoring one.
+    if chunks:
+        bm25 = bm25s.BM25()
+        bm25.index([_tokenize(chunk.page_content) for chunk in chunks], show_progress=False)
+    else:
+        bm25 = None
     cache_set(client, key, pickle.dumps((bm25, chunks)), ttl_seconds=BM25_CACHE_TTL_SECONDS)
     return bm25, chunks
 
 
-def score(query: str, settings: Settings) -> list[tuple[Document, float]]:
+def score(query: str, settings: Settings, k: int) -> list[tuple[Document, float]]:
     bm25, chunks = get_bm25_index(settings)
-    if bm25 is None:
+    if bm25 is None or not chunks:
         return []
-    return list(zip(chunks, bm25.get_scores(_tokenize(query))))
+    # bm25s.BM25.retrieve() raises ValueError if k exceeds the corpus size.
+    k = min(k, len(chunks))
+    doc_indices, scores = bm25.retrieve([_tokenize(query)], k=k, show_progress=False)
+    return [(chunks[idx], float(s)) for idx, s in zip(doc_indices[0], scores[0])]

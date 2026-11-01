@@ -64,7 +64,7 @@ def test_score_matches_keyword_despite_surrounding_punctuation(tmp_path, monkeyp
     monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: len(chunks))
     monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
 
-    scores = score("What is LoRA?", settings)
+    scores = score("What is LoRA?", settings, k=10)
 
     by_source = {doc.metadata["source"]: s for doc, s in scores}
     assert by_source["lora.pdf"] > by_source["c.pdf"]
@@ -77,7 +77,7 @@ def test_score_ranks_keyword_matches_higher(tmp_path, monkeypatch):
     monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: len(FIXTURE_CHUNKS))
     monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
 
-    scores = score("transformer attention", settings)
+    scores = score("transformer attention", settings, k=10)
 
     by_source = {doc.metadata["source"]: s for doc, s in scores}
     assert by_source["a.pdf"] > by_source["b.pdf"]
@@ -133,7 +133,43 @@ def test_score_returns_empty_list_for_an_empty_corpus(tmp_path, monkeypatch):
     monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: 0)
     monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
 
-    assert score("anything", settings) == []
+    assert score("anything", settings, k=10) == []
+
+
+def test_score_clamps_k_to_corpus_size(tmp_path, monkeypatch):
+    """bm25s.BM25.retrieve() raises ValueError if k exceeds the corpus size
+    -- score() must clamp instead of propagating that crash."""
+    settings = make_settings(tmp_path)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", lambda s: FIXTURE_CHUNKS)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: 1)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
+
+    results = score("transformer attention", settings, k=1000)
+
+    assert len(results) == len(FIXTURE_CHUNKS)
+
+
+def test_score_respects_k(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", lambda s: FIXTURE_CHUNKS)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: 1)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
+
+    results = score("transformer attention", settings, k=1)
+
+    assert len(results) == 1
+
+
+def test_score_returns_empty_list_for_an_empty_corpus_with_bm25s(tmp_path, monkeypatch):
+    """bm25s.BM25().index([]) raises ValueError (verified) -- the empty-
+    corpus guard must run before .index() is ever called, not rely on the
+    library degrading gracefully."""
+    settings = make_settings(tmp_path)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", lambda s: [])
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: 0)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
+
+    assert score("anything", settings, k=10) == []
 
 
 def test_get_bm25_index_rebuilds_when_index_generation_changes_even_with_same_chunk_count(tmp_path, monkeypatch):
