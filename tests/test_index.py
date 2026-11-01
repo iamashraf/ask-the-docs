@@ -1,5 +1,7 @@
 import hashlib
 import logging
+import threading
+import time
 
 import pytest
 from langchain_core.documents import Document
@@ -256,6 +258,46 @@ def test_load_index_does_not_collide_across_different_index_dirs_at_the_same_gen
     second = load_index(settings_b)
 
     assert first is not second
+
+
+def test_load_index_reloads_only_once_under_concurrent_misses(tmp_path, monkeypatch):
+    """Two threads missing on the same generation at the same time must
+    not each independently reconstruct the Chroma client -- the second
+    should block on the first (the lock) and then reuse its result."""
+    monkeypatch.setattr("ask_the_docs.index.get_index_generation", lambda settings: 1)
+    settings = make_settings(tmp_path)
+
+    build_count = {"n": 0}
+    thread1_in_build = threading.Event()
+    release_thread1 = threading.Event()
+
+    def slow_get_embeddings(s):
+        build_count["n"] += 1
+        thread1_in_build.set()
+        release_thread1.wait(timeout=5)
+        return FakeEmbeddings()
+
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", slow_get_embeddings)
+
+    results = []
+
+    def call():
+        results.append(load_index(settings))
+
+    t1 = threading.Thread(target=call)
+    t1.start()
+    assert thread1_in_build.wait(timeout=5), "thread 1 never reached the build"
+
+    t2 = threading.Thread(target=call)
+    t2.start()
+    time.sleep(0.2)  # give thread 2 time to reach and block on the lock
+
+    release_thread1.set()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    assert build_count["n"] == 1
+    assert results[0] is results[1]
 
 
 def test_build_index_reingesting_unchanged_doc_is_a_noop(tmp_path, monkeypatch):

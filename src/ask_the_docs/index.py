@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -244,7 +245,19 @@ def build_index(docs: list[Document], settings: Settings) -> Chroma:
 
 
 _index_cache: dict[tuple[str, int, str], Chroma] = {}
-_INDEX_CACHE_MAXSIZE = 2
+# 1, not 2: the generation only ever increases and is re-read fresh on
+# every call, so a previous generation's entry is never looked up again
+# the instant a new one lands -- keeping it resident doubles memory for
+# nothing.
+_INDEX_CACHE_MAXSIZE = 1
+# Serializes the miss path only (a cache hit is a plain dict read, done
+# before acquiring this). Without it, every request in flight right after
+# a generation bump misses in parallel and independently constructs a
+# Chroma client for the same identifier at once -- besides the redundant
+# work, chromadb's own SharedSystemClient registry isn't safe against
+# unsynchronized concurrent construction for the same identifier
+# (observed directly: a bare KeyError inside chromadb internals).
+_index_cache_lock = threading.Lock()
 
 
 def load_index(settings: Settings) -> Chroma:
@@ -255,15 +268,18 @@ def load_index(settings: Settings) -> Chroma:
     different index directories with the same backend and the same
     generation number would otherwise collide."""
     key = (get_collection_name(settings), get_index_generation(settings), str(settings.index_dir))
-    if key not in _index_cache:
-        if len(_index_cache) >= _INDEX_CACHE_MAXSIZE:
-            _index_cache.pop(next(iter(_index_cache)))
-        _index_cache[key] = Chroma(
-            collection_name=key[0],
-            embedding_function=get_embeddings(settings),
-            persist_directory=str(settings.index_dir),
-        )
-    return _index_cache[key]
+    if key in _index_cache:
+        return _index_cache[key]
+    with _index_cache_lock:
+        if key not in _index_cache:
+            if len(_index_cache) >= _INDEX_CACHE_MAXSIZE:
+                _index_cache.pop(next(iter(_index_cache)))
+            _index_cache[key] = Chroma(
+                collection_name=key[0],
+                embedding_function=get_embeddings(settings),
+                persist_directory=str(settings.index_dir),
+            )
+        return _index_cache[key]
 
 
 def get_all_chunks(settings: Settings) -> list[Document]:

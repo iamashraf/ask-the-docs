@@ -721,10 +721,10 @@ class _FakeAsyncRedisClient:
 def test_ready_reports_each_dependency_independently(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
 
-    def failing_load_index(settings):
+    def failing_get_chunk_count(settings):
         raise RuntimeError("chroma down")
 
-    monkeypatch.setattr("ask_the_docs.api.load_index", failing_load_index)
+    monkeypatch.setattr("ask_the_docs.api.get_chunk_count", failing_get_chunk_count)
     monkeypatch.setattr(
         "ask_the_docs.api.get_async_cache_client", lambda settings: _FakeAsyncRedisClient()
     )
@@ -745,7 +745,7 @@ def test_ready_reports_each_dependency_independently(monkeypatch):
 
 def test_ready_returns_200_when_all_dependencies_are_reachable(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.get_settings", make_settings)
-    monkeypatch.setattr("ask_the_docs.api.load_index", lambda settings: object())
+    monkeypatch.setattr("ask_the_docs.api.get_chunk_count", lambda settings: 0)
     monkeypatch.setattr(
         "ask_the_docs.api.get_async_cache_client", lambda settings: _FakeAsyncRedisClient()
     )

@@ -23,7 +23,7 @@ from ask_the_docs.answer import answer
 from ask_the_docs.bm25_index import get_bm25_index
 from ask_the_docs.config import get_settings
 from ask_the_docs.evaluate import run_evaluation, summarize
-from ask_the_docs.index import load_index
+from ask_the_docs.index import get_chunk_count, load_index
 from ask_the_docs.ingest import (
     PathSecurityError,
     UnsupportedFileTypeError,
@@ -116,7 +116,12 @@ async def ready() -> JSONResponse:
     dependencies = {}
 
     try:
-        load_index(settings)
+        # Not load_index(settings) -- that's resident (Task 1), so after
+        # one success it never touches Chroma again and would report "ok"
+        # forever even if Chroma died later. get_chunk_count() runs a real
+        # count() query against the resident client's backing store every
+        # single call.
+        get_chunk_count(settings)
         dependencies["chroma"] = "ok"
     except Exception:
         dependencies["chroma"] = "unreachable"

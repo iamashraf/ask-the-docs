@@ -5,6 +5,7 @@ rebuild it from scratch on every query."""
 import logging
 import pickle
 import re
+import threading
 
 import bm25s
 from langchain_core.documents import Document
@@ -33,7 +34,18 @@ def _tokenize(text: str) -> list[str]:
 
 
 _bm25_cache: dict[tuple[str, int, str], tuple[bm25s.BM25 | None, list[Document]]] = {}
-_BM25_CACHE_MAXSIZE = 2
+# 1, not 2: the generation only ever increases and is re-read fresh on
+# every call (nothing captures and reuses a stale value across a
+# request), so a previous generation's entry is never looked up again the
+# instant a new one lands -- keeping it resident doubles memory for
+# nothing.
+_BM25_CACHE_MAXSIZE = 1
+# Serializes the miss path only (a cache hit is a plain dict read, done
+# before acquiring this). Without it, every request in flight right after
+# a generation bump misses in parallel and independently pays the full
+# Chroma-read + bm25s-index cost at once -- N rebuilds and N times the
+# memory instead of one rebuild the rest wait on.
+_bm25_cache_lock = threading.Lock()
 
 
 def get_bm25_index(settings: Settings) -> tuple[bm25s.BM25 | None, list[Document]]:
@@ -42,29 +54,36 @@ def get_bm25_index(settings: Settings) -> tuple[bm25s.BM25 | None, list[Document
     still uses -- avoids a network round trip + pickle.loads() on every
     call, not just avoiding a rebuild from Chroma. index_dir is part of the
     key for the same collision reason load_index's cache includes it."""
-    key = (get_collection_name(settings), get_index_generation(settings), str(settings.index_dir))
-    if key not in _bm25_cache:
-        if len(_bm25_cache) >= _BM25_CACHE_MAXSIZE:
-            _bm25_cache.pop(next(iter(_bm25_cache)))
-        try:
-            rebuilt = _rebuild_bm25_index(settings)
-        except ChromaReadError:
-            # A transient failure must not be cached -- it's not real data
-            # for this generation, just degraded service for this one
-            # call. Caching it would turn one Chroma hiccup into "BM25 off
-            # for the rest of this process's life at this generation."
-            return None, []
-        _bm25_cache[key] = rebuilt
-    return _bm25_cache[key]
+    generation = get_index_generation(settings)
+    key = (get_collection_name(settings), generation, str(settings.index_dir))
+    if key in _bm25_cache:
+        return _bm25_cache[key]
+    with _bm25_cache_lock:
+        if key not in _bm25_cache:
+            if len(_bm25_cache) >= _BM25_CACHE_MAXSIZE:
+                _bm25_cache.pop(next(iter(_bm25_cache)))
+            try:
+                rebuilt = _rebuild_bm25_index(settings, generation)
+            except ChromaReadError:
+                # A transient failure must not be cached -- it's not real
+                # data for this generation, just degraded service for
+                # this one call. Caching it would turn one Chroma hiccup
+                # into "BM25 off for the rest of this process's life at
+                # this generation."
+                return None, []
+            _bm25_cache[key] = rebuilt
+        return _bm25_cache[key]
 
 
-def _rebuild_bm25_index(settings: Settings) -> tuple[bm25s.BM25 | None, list[Document]]:
+def _rebuild_bm25_index(settings: Settings, generation: int) -> tuple[bm25s.BM25 | None, list[Document]]:
     """Cache key embeds the index generation -- a write from this process
     or another (including a same-chunk-count replace, which chunk count
     alone wouldn't catch) changes the key, so a stale entry is simply
-    never looked up again, with no explicit invalidation step."""
+    never looked up again, with no explicit invalidation step. generation
+    is passed in rather than re-read here, so one get_bm25_index() call
+    reads it exactly once, not twice."""
     client = get_cache_client(settings)
-    key = make_cache_key("bm25", get_collection_name(settings), get_index_generation(settings))
+    key = make_cache_key("bm25", get_collection_name(settings), generation)
 
     # pickle is safe here: this cache is exclusively written and read by
     # this service itself, never by an untrusted party.

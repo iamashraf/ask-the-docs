@@ -1,4 +1,6 @@
 import logging
+import threading
+import time
 from unittest.mock import Mock
 
 from langchain_core.documents import Document
@@ -213,15 +215,7 @@ def test_get_bm25_index_rebuilds_when_index_generation_changes_even_with_same_ch
     index generation (bumped on every real write) instead."""
     settings = make_settings(tmp_path)
     calls = {"count": 0}
-    # get_index_generation is now read twice per get_bm25_index() call (once
-    # for the in-process cache key, once inside _rebuild_bm25_index for the
-    # Valkey key) -- the first two reads (both within the first call) return
-    # 2, the next two (within the second call) return 3.
-    generation_reads = {"n": 0}
-
-    def fake_get_index_generation(s):
-        generation_reads["n"] += 1
-        return 2 if generation_reads["n"] <= 2 else 3
+    generations = [2, 3]
 
     def fake_get_all_chunks(s):
         calls["count"] += 1
@@ -229,7 +223,7 @@ def test_get_bm25_index_rebuilds_when_index_generation_changes_even_with_same_ch
 
     shared_cache = FakeCache()
     monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", fake_get_all_chunks)
-    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", fake_get_index_generation)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: generations.pop(0))
     monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: shared_cache)
 
     get_bm25_index(settings)
@@ -287,6 +281,51 @@ def test_get_bm25_index_degrades_to_no_results_when_chroma_fails(tmp_path, monke
     assert bm25 is None
     assert chunks == []
     assert any("chroma" in record.message.lower() or "bm25" in record.message.lower() for record in caplog.records)
+
+
+def test_get_bm25_index_rebuilds_only_once_under_concurrent_misses(tmp_path, monkeypatch):
+    """Two threads missing on the same generation at the same time must
+    not each independently rebuild -- the second should block on the
+    first's rebuild (the lock) and then reuse its result. Thread 1 is
+    held inside the rebuild until thread 2 has had time to reach and
+    block on the same lock; a broken (unlocked) implementation would let
+    thread 2's rebuild run to completion immediately instead of blocking,
+    so it would count 2 rebuilds and finish before thread 1 is released."""
+    settings = make_settings(tmp_path)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_index_generation", lambda s: 1)
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
+
+    rebuild_count = {"n": 0}
+    thread1_in_rebuild = threading.Event()
+    release_thread1 = threading.Event()
+
+    def slow_get_all_chunks(s):
+        rebuild_count["n"] += 1
+        thread1_in_rebuild.set()
+        release_thread1.wait(timeout=5)
+        return FIXTURE_CHUNKS
+
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", slow_get_all_chunks)
+
+    results = []
+
+    def call():
+        results.append(get_bm25_index(settings))
+
+    t1 = threading.Thread(target=call)
+    t1.start()
+    assert thread1_in_rebuild.wait(timeout=5), "thread 1 never reached the rebuild"
+
+    t2 = threading.Thread(target=call)
+    t2.start()
+    time.sleep(0.2)  # give thread 2 time to reach and block on the lock
+
+    release_thread1.set()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    assert rebuild_count["n"] == 1
+    assert results[0] is results[1]
 
 
 def test_get_bm25_index_does_not_cache_a_transient_chroma_failure(tmp_path, monkeypatch):
