@@ -101,7 +101,11 @@ def retrieve(query: str, settings: Settings, k: int = 5, search_query: str | Non
         # crowding out real vector matches.
         bm25_hits = [
             hit
-            for hit in sorted(bm25_score(effective_search_query, settings), key=lambda pair: pair[1], reverse=True)
+            for hit in sorted(
+                bm25_score(effective_search_query, settings, k=settings.candidate_pool_size),
+                key=lambda pair: pair[1],
+                reverse=True,
+            )
             if hit[1] > 0
         ][: settings.candidate_pool_size]
 

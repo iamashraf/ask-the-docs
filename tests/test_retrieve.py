@@ -177,7 +177,7 @@ def test_retrieve_truncates_merged_candidates_to_pool_size_before_rerank(tmp_pat
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
     monkeypatch.setattr(
         "ask_the_docs.retrieve.bm25_score",
-        lambda query, settings: [(doc, 1.0) for doc in bm25_docs],
+        lambda query, settings, k: [(doc, 1.0) for doc in bm25_docs],
     )
 
     captured = {}
@@ -211,7 +211,7 @@ def test_retrieve_excludes_zero_score_bm25_hits_from_merge(tmp_path, monkeypatch
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
     monkeypatch.setattr(
         "ask_the_docs.retrieve.bm25_score",
-        lambda query, settings: [(noise1, 0.0), (noise2, 0.0), (noise3, 0.0)],
+        lambda query, settings, k: [(noise1, 0.0), (noise2, 0.0), (noise3, 0.0)],
     )
 
     settings = make_settings(tmp_path)
@@ -234,7 +234,7 @@ def test_retrieve_searches_with_the_given_query_and_never_calls_an_llm(tmp_path,
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
 
-    def fake_bm25_score(query, settings):
+    def fake_bm25_score(query, settings, k):
         recorded["bm25_query"] = query
         return []
 
@@ -259,7 +259,7 @@ def test_retrieve_uses_search_query_for_vector_and_bm25_but_raw_query_for_rerank
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
 
-    def fake_bm25_score(query, settings):
+    def fake_bm25_score(query, settings, k):
         recorded["bm25_query"] = query
         return []
 
@@ -313,7 +313,7 @@ def test_retrieve_falls_back_to_query_when_search_query_is_none(tmp_path, monkey
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
 
-    def fake_bm25_score(query, settings):
+    def fake_bm25_score(query, settings, k):
         recorded["bm25_query"] = query
         return []
 
@@ -337,7 +337,7 @@ def test_retrieve_skips_classification_when_graph_disabled(tmp_path, monkeypatch
             return [(doc, 0.1)]
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings, k: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": False})
     retrieve("a query", settings)
@@ -362,6 +362,26 @@ def test_retrieve_returns_global_search_results_directly(tmp_path, monkeypatch):
     result = retrieve("what are the themes?", settings, k=5)
 
     assert result == fake_docs
+
+
+def test_retrieve_passes_candidate_pool_size_to_bm25_score(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_score(query, settings, k):
+        captured["k"] = k
+        return []
+
+    class FakeIndex:
+        def similarity_search_with_score(self, query, k):
+            return []
+
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", fake_score)
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
+    settings = make_settings(tmp_path)
+
+    retrieve("a query", settings, k=5)
+
+    assert captured["k"] == settings.candidate_pool_size
 
 
 def test_retrieve_opens_a_hybrid_retrieve_span(tmp_path, monkeypatch):
@@ -413,7 +433,7 @@ def test_retrieve_merges_local_search_into_candidate_pool(tmp_path, monkeypatch)
             return []
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: EmptyIndex())
-    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings, k: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
     result = retrieve("how does BM25 relate to vectors?", settings, k=5)
@@ -435,7 +455,7 @@ def test_retrieve_falls_back_to_hybrid_when_global_search_finds_nothing(tmp_path
             return [(hybrid_doc, 0.1)]
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings, k: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
     result = retrieve("what are the themes?", settings, k=5)
@@ -461,7 +481,7 @@ def test_retrieve_falls_back_to_hybrid_when_global_search_raises(tmp_path, monke
             return [(hybrid_doc, 0.1)]
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings, k: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
     # must not propagate -- a crashing global_search must degrade to hybrid, not crash the request
@@ -483,7 +503,7 @@ def test_retrieve_falls_back_to_hybrid_when_classification_raises(tmp_path, monk
             return [(hybrid_doc, 0.1)]
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings, k: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
     result = retrieve("anything", settings, k=5)
@@ -505,7 +525,7 @@ def test_retrieve_dedupes_local_search_against_existing_hybrid_candidate(tmp_pat
             return [(shared_doc, 0.1)]
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings, k: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
     result = retrieve("how does BM25 relate to vectors?", settings, k=5)
@@ -532,7 +552,7 @@ def test_retrieve_keeps_local_search_match_when_hybrid_pool_is_already_full(tmp_
             return [(doc, 0.1 * (i + 1)) for i, doc in enumerate(hybrid_docs)]
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings, k: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True, "candidate_pool_size": pool_size})
     result = retrieve("how does BM25 relate to vectors?", settings, k=10)
@@ -558,7 +578,7 @@ def test_retrieve_falls_back_to_hybrid_when_local_search_raises(tmp_path, monkey
             return [(hybrid_doc, 0.1)]
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings, k: [])
 
     settings = make_settings(tmp_path).model_copy(update={"graph_enabled": True})
     # must not propagate -- a crashing local_search must degrade to hybrid, not crash the request
@@ -585,7 +605,7 @@ def test_retrieve_keeps_local_search_match_in_top_k_when_rerank_disabled(tmp_pat
             return [(doc, 0.1 * (i + 1)) for i, doc in enumerate(hybrid_docs)]
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings, k: [])
 
     settings = make_settings(tmp_path).model_copy(
         update={"graph_enabled": True, "rerank_enabled": False, "candidate_pool_size": 5}
@@ -603,7 +623,7 @@ def test_retrieve_falls_back_to_bm25_only_when_vector_search_fails(tmp_path, mon
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: BrokenIndex())
     bm25_doc = _doc("b1")
-    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [(bm25_doc, 1.0)])
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings, k: [(bm25_doc, 1.0)])
 
     settings = make_settings(tmp_path)
     with caplog.at_level(logging.WARNING):
@@ -632,7 +652,7 @@ def _stub_hybrid_with_one_hit(monkeypatch) -> None:
             return [(doc, 0.1)]
 
     monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
-    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings: [])
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", lambda query, settings, k: [])
 
 
 def test_retrieve_observes_hybrid_retrieve_latency(tmp_path, monkeypatch):
