@@ -139,6 +139,9 @@ question set.
 
 - [Zheng et al., 2023 — Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena (arXiv:2306.05685)](https://arxiv.org/abs/2306.05685) — measures how well an LLM judge's grades track human preference, and the biases (position, verbosity, self-enhancement) to watch for.
 
+Used this way to compare the generator itself (Ollama vs. hosted) on
+latency, accuracy, and grounding discipline: [MODEL_COMPARISON.md](MODEL_COMPARISON.md).
+
 ## Routing evaluation
 
 A labeled case set (`evals/routing_cases.yaml`) runs every case through
