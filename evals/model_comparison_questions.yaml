@@ -50,6 +50,6 @@
 - question: "How many layers does HNSW use for a 1-billion-vector index, and what's the memory overhead per layer?"
   notes: "hnsw-notes.md gives no concrete numbers for that scale"
   expected_refusal: true
-- question: "What would happen to Self-Consistency's accuracy gains if used with greedy decoding instead of sampling multiple reasoning paths?"
-  notes: "hypothetical extension beyond what the Self-Consistency paper tested"
+- question: "How would Self-Consistency's majority-voting approach need to change to work on open-ended generation tasks that have no single extractable final answer to vote on?"
+  notes: "speculative design extension beyond what the Self-Consistency paper tested (it evaluates tasks with an extractable final answer)"
   expected_refusal: true
