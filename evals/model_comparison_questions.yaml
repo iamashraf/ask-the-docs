@@ -1,0 +1,55 @@
+# Dedicated set for comparing generator models/providers (latency + judge
+# accuracy + refusal correctness), separate from golden_questions.yaml's
+# routing/regression cases. 10 questions the seeded corpus answers, 5
+# in-domain near-misses it doesn't -- not generic off-topic questions --
+# so a model has to actually use the retrieved context, not just pattern-match
+# "this topic sounds familiar."
+
+# --- answerable (grounded in a seeded paper or local note) ---
+- question: "What is the attention mechanism in the Transformer architecture?"
+  notes: "Attention Is All You Need"
+  expected_answer: true
+- question: "How does GPT-3 perform few-shot learning without any fine-tuning?"
+  notes: "Language Models are Few-Shot Learners"
+  expected_answer: true
+- question: "How does Retrieval-Augmented Generation combine a retriever with a generator?"
+  notes: "RAG paper"
+  expected_answer: true
+- question: "How does RLHF align a language model with human preferences, as used in InstructGPT?"
+  notes: "InstructGPT paper"
+  expected_answer: true
+- question: "How does LoRA reduce the number of trainable parameters during fine-tuning?"
+  notes: "LoRA paper"
+  expected_answer: true
+- question: "What is Chain-of-Thought prompting and how does it improve reasoning?"
+  notes: "Chain-of-Thought paper"
+  expected_answer: true
+- question: "How does Self-Consistency improve on standard Chain-of-Thought prompting?"
+  notes: "Self-Consistency paper"
+  expected_answer: true
+- question: "How does the ReAct framework combine reasoning traces with actions?"
+  notes: "ReAct paper"
+  expected_answer: true
+- question: "What is Reciprocal Rank Fusion and why does it avoid needing score normalization?"
+  notes: "rrf-notes.md"
+  expected_answer: true
+- question: "What is HNSW and how does it enable fast approximate nearest-neighbor search?"
+  notes: "hnsw-notes.md"
+  expected_answer: true
+
+# --- in-domain near-misses: same topic, not actually stated ---
+- question: "What would GPT-3's few-shot performance look like if it had only 1 million parameters instead of 175 billion?"
+  notes: "hypothetical extrapolation beyond what the GPT-3 paper tested"
+  expected_refusal: true
+- question: "How would LoRA's performance change if applied to a convolutional vision model instead of a transformer?"
+  notes: "hypothetical extension beyond LoRA paper's actual scope"
+  expected_refusal: true
+- question: "How does Reciprocal Rank Fusion behave with result lists longer than 10,000 documents in a distributed search cluster?"
+  notes: "rrf-notes.md is a short conceptual note, doesn't cover distributed/scale specifics"
+  expected_refusal: true
+- question: "How many layers does HNSW use for a 1-billion-vector index, and what's the memory overhead per layer?"
+  notes: "hnsw-notes.md gives no concrete numbers for that scale"
+  expected_refusal: true
+- question: "How would Self-Consistency's majority-voting approach need to change to work on open-ended generation tasks that have no single extractable final answer to vote on?"
+  notes: "speculative design extension beyond what the Self-Consistency paper tested (it evaluates tasks with an extractable final answer)"
+  expected_refusal: true

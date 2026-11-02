@@ -65,7 +65,8 @@ def _evaluate(args: argparse.Namespace, settings) -> None:
         # through to run_evaluation.
         settings = Settings.model_validate({**settings.model_dump(), **overrides})
 
-    results = run_evaluation(settings, GOLDEN_QUESTIONS_PATH)
+    questions_path = Path(args.questions) if args.questions else GOLDEN_QUESTIONS_PATH
+    results = run_evaluation(settings, questions_path)
     for result in results:
         if result.error:
             print(f"{result.question}: ERROR ({result.error})")
@@ -145,6 +146,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_parser.add_argument("--rerank", choices=["true", "false"], default=None)
     evaluate_parser.add_argument("--query-rewrite", choices=["true", "false"], default=None)
     evaluate_parser.add_argument("--graph", choices=["true", "false"], default=None)
+    evaluate_parser.add_argument("--questions", default=None, help="Path to a golden-question-set YAML; defaults to evals/golden_questions.yaml")
     evaluate_parser.set_defaults(func=_evaluate)
 
     eval_routing_parser = subparsers.add_parser(

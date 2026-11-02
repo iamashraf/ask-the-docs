@@ -95,6 +95,42 @@ def test_evaluate_overrides_embeddings_backend_and_prints_results(capsys, monkey
     assert "Q1" in capsys.readouterr().out
 
 
+def test_evaluate_defaults_to_golden_questions_path(monkeypatch):
+    from pathlib import Path
+
+    captured = {}
+
+    def fake_run_evaluation(settings, questions_path):
+        captured["questions_path"] = questions_path
+        return []
+
+    monkeypatch.setattr("ask_the_docs.cli.run_evaluation", fake_run_evaluation)
+
+    parser = build_parser()
+    args = parser.parse_args(["evaluate"])
+    args.func(args, make_settings())
+
+    assert captured["questions_path"] == Path("evals/golden_questions.yaml")
+
+
+def test_evaluate_overrides_questions_path(monkeypatch):
+    from pathlib import Path
+
+    captured = {}
+
+    def fake_run_evaluation(settings, questions_path):
+        captured["questions_path"] = questions_path
+        return []
+
+    monkeypatch.setattr("ask_the_docs.cli.run_evaluation", fake_run_evaluation)
+
+    parser = build_parser()
+    args = parser.parse_args(["evaluate", "--questions", "evals/model_comparison_questions.yaml"])
+    args.func(args, make_settings())
+
+    assert captured["questions_path"] == Path("evals/model_comparison_questions.yaml")
+
+
 def test_evaluate_overrides_hybrid_alpha(monkeypatch):
     captured_settings = {}
 
