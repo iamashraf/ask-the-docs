@@ -190,7 +190,14 @@ def _compute_answer(query: str, settings: Settings, k: int, search_query: str | 
                     )
                     raw = None
                     structured = None
-                passed = structured is not None and structured_answer_passes(structured, num_chunks=len(chunks))
+                # grounded=False is the model's own deliberate "not in context" signal, not a
+                # malformed response -- retrying it just re-rolls a nondeterministic sample and
+                # risks replacing a correct refusal with a hallucinated answer, so it's accepted
+                # immediately rather than treated as a guardrail failure to retry.
+                is_model_refusal = structured is not None and not structured.grounded
+                passed = is_model_refusal or (
+                    structured is not None and structured_answer_passes(structured, num_chunks=len(chunks))
+                )
                 text = structured.answer if structured is not None else ""
                 input_tokens = raw.input_tokens if raw is not None else None
                 output_tokens = raw.output_tokens if raw is not None else None
@@ -198,7 +205,9 @@ def _compute_answer(query: str, settings: Settings, k: int, search_query: str | 
             else:
                 result = client.generate_with_usage(attempt_prompt, system=system_prompt)
                 text = result.text
-                passed = citation_guardrail_passes(text, num_chunks=len(chunks))
+                # Same reasoning as the structured path's is_model_refusal above.
+                is_model_refusal = text.strip() == REFUSAL_MESSAGE
+                passed = is_model_refusal or citation_guardrail_passes(text, num_chunks=len(chunks))
                 input_tokens = result.input_tokens
                 output_tokens = result.output_tokens
                 response_model = result.response_model
@@ -237,6 +246,9 @@ def _compute_answer(query: str, settings: Settings, k: int, search_query: str | 
                 )
         metrics.citation_guardrail_total.add(1, {"result": "pass" if passed else "fail"})
         if passed:
+            if is_model_refusal:
+                metrics.refusal_total.add(1)
+                return AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal")
             citations = list(dict.fromkeys(chunk.metadata["source"] for chunk in chunks))
             return AnswerResult(text=text, citations=citations, context=context)
         logger.warning(

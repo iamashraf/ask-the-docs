@@ -223,11 +223,14 @@ def test_answer_dedupes_citations_preserving_order(monkeypatch):
 
 
 def test_answer_returns_refusal_message_when_guardrail_fails(monkeypatch):
+    """Every attempt is grounded=True but malformed (missing citations) --
+    a genuinely recoverable-looking failure, not a model refusal -- so the
+    retry loop must exhaust MAX_GENERATION_ATTEMPTS before falling back."""
     chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
     monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
     fake_generate = Mock(
         return_value=StructuredJSONResult(
-            data={"grounded": False, "answer": "", "citations": []},
+            data={"grounded": True, "answer": "a draft with no citations", "citations": []},
             input_tokens=None,
             output_tokens=None,
         )
@@ -246,6 +249,30 @@ def test_answer_returns_refusal_message_when_guardrail_fails(monkeypatch):
     assert fake_generate.call_count == MAX_GENERATION_ATTEMPTS
 
 
+def test_answer_returns_refusal_immediately_when_model_says_not_grounded(monkeypatch):
+    """grounded=False is the model's own deliberate refusal signal, not a
+    malformed response -- retrying it only risks sampling a hallucinated
+    answer on the second attempt, so it must be accepted on attempt 1."""
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
+    fake_generate = Mock(
+        return_value=StructuredJSONResult(
+            data={"grounded": False, "answer": "", "citations": []},
+            input_tokens=None,
+            output_tokens=None,
+        )
+    )
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(generate_structured=fake_generate),
+    )
+
+    result = answer("some question", make_settings())
+
+    assert result == AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal")
+    assert fake_generate.call_count == 1
+
+
 def test_answer_retries_once_when_first_attempt_fails_the_guardrail(monkeypatch):
     """A local LLM's citation formatting is non-deterministic -- a single
     malformed/uncited response must not immediately refuse a genuinely
@@ -255,7 +282,7 @@ def test_answer_retries_once_when_first_attempt_fails_the_guardrail(monkeypatch)
     fake_generate = Mock(
         side_effect=[
             StructuredJSONResult(
-                data={"grounded": False, "answer": "", "citations": []},
+                data={"grounded": True, "answer": "a draft with no citations", "citations": []},
                 input_tokens=None,
                 output_tokens=None,
             ),
@@ -289,7 +316,7 @@ def test_answer_retry_includes_corrective_feedback_not_identical_prompt(monkeypa
         captured_prompts.append(prompt)
         if len(captured_prompts) == 1:
             return StructuredJSONResult(
-                data={"grounded": False, "answer": "", "citations": []},
+                data={"grounded": True, "answer": "a draft with no citations", "citations": []},
                 input_tokens=None,
                 output_tokens=None,
             )
@@ -1551,6 +1578,24 @@ def test_answer_uses_freetext_path_for_non_ollama_provider(monkeypatch):
     result = answer("q", make_freetext_settings())
 
     assert result.text == "the answer [1]"
+
+
+def test_answer_returns_refusal_immediately_for_freetext_provider_when_model_already_refused(monkeypatch):
+    """Same reasoning as the structured path: the exact REFUSAL_MESSAGE is a
+    deliberate refusal, not a malformed/uncited response -- retrying it only
+    risks sampling a hallucinated answer on the second attempt."""
+    chunks = [Document(page_content="chunk one", metadata={"source": "a.pdf"})]
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: chunks)
+    fake_generate = Mock(return_value=GenerationResult(text=REFUSAL_MESSAGE, input_tokens=None, output_tokens=None))
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(generate_with_usage=fake_generate),
+    )
+
+    result = answer("q", make_freetext_settings())
+
+    assert result == AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal")
+    assert fake_generate.call_count == 1
 
 
 def test_answer_retries_freetext_provider_on_guardrail_failure_without_feedback(monkeypatch):
