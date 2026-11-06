@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     cache_url: str = "redis://localhost:6379/0"
     nats_url: str = "nats://localhost:4222"
     otel_exporter_endpoint: str = "http://otel-collector:4317"
+    api_host: str = "127.0.0.1"
 
     graph_enabled: bool = False
     neo4j_uri: str = "bolt://localhost:7687"
