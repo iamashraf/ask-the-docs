@@ -13,6 +13,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROVIDERS_REQUIRING_API_KEY = {"anthropic", "openai"}
 
+WELL_KNOWN_NEO4J_PASSWORDS = {"", "neo4j", "ask-the-docs-graph"}
+
 REFUSAL_MESSAGE = "I don't have enough information in the available documents to answer that."
 
 DEFAULT_SYSTEM_PROMPT_TEMPLATE = (
@@ -78,6 +80,13 @@ class Settings(BaseSettings):
     global_search_top_communities: int = Field(default=3, ge=1)
 
     model_config = SettingsConfigDict(env_nested_delimiter="__", extra="ignore")
+
+    @model_validator(mode="after")
+    def check_neo4j_password_set_when_graph_enabled(self) -> "Settings":
+        """Refuse to start Graph RAG against a blank or publicly known password."""
+        if self.graph_enabled and self.neo4j_password.get_secret_value() in WELL_KNOWN_NEO4J_PASSWORDS:
+            raise ValueError("GRAPH_ENABLED requires a unique NEO4J_PASSWORD (blank or well-known value)")
+        return self
 
 
 @lru_cache

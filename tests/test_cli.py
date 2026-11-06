@@ -190,7 +190,7 @@ def test_evaluate_overrides_graph_enabled(monkeypatch):
 
     parser = build_parser()
     args = parser.parse_args(["evaluate", "--graph", "true"])
-    args.func(args, make_settings())
+    args.func(args, make_settings(neo4j_password="test-only-secret"))
 
     assert captured_settings["graph"] is True
 

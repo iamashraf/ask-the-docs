@@ -35,6 +35,7 @@ def make_settings(tmp_path, embeddings_backend: str = "ollama", graph_enabled: b
         embeddings_backend=embeddings_backend,
         index_dir=tmp_path / "index",
         graph_enabled=graph_enabled,
+        neo4j_password="test-only-secret",
     )
 
 

@@ -166,3 +166,27 @@ def test_existing_settings_construction_unaffected_by_graph_fields():
         judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
     )
     assert settings.graph_enabled is False
+
+
+def _graph_settings(**overrides) -> Settings:
+    return Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+        **overrides,
+    )
+
+
+@pytest.mark.parametrize("password", ["", "neo4j", "ask-the-docs-graph"])
+def test_graph_enabled_rejects_blank_or_well_known_neo4j_password(password):
+    with pytest.raises(ValidationError, match="NEO4J_PASSWORD"):
+        _graph_settings(graph_enabled=True, neo4j_password=password)
+
+
+def test_graph_enabled_accepts_a_custom_neo4j_password():
+    settings = _graph_settings(graph_enabled=True, neo4j_password="a-long-unique-secret")
+
+    assert settings.neo4j_password.get_secret_value() == "a-long-unique-secret"
+
+
+def test_graph_disabled_ignores_the_neo4j_password():
+    assert _graph_settings(graph_enabled=False, neo4j_password="").graph_enabled is False
