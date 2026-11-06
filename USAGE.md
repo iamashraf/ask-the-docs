@@ -32,14 +32,13 @@ point at the right service names for the containerized setup.
 ```bash
 podman compose up -d ollama-init   # starts Ollama, waits until healthy,
                                     # pulls llama3.1:8b + nomic-embed-text
-podman compose build app && podman image prune -f
+podman compose build app
 ```
 
 Model pulls only need to happen once — re-running `ollama-init` later is a
 fast no-op (`ollama pull` skips already-present models).
-`podman image prune -f` reclaims the disk space the multi-stage build's
-intermediate layer leaves behind, at the cost of a slightly slower next
-build.
+Building the app image needs about 20 GB of free disk at its peak. The
+finished image is about 5 GB.
 
 After any later code change, you don't need to re-run `build` as a
 separate step — add `--build` to whichever command you run next instead

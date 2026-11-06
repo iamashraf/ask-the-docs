@@ -66,7 +66,6 @@ git clone <this-repo> && cd ask-the-docs
 cp .env.example .env.local        # reference copy -> your local config
 podman compose up -d ollama-init  # starts Ollama, pulls the models (first run only)
 podman compose up -d --build app  # builds if missing, rebuilds if stale, then starts it
-podman image prune -f             # optional: reclaim the builder stage's disk space
 ```
 
 The first start auto-ingests a curated set of LLM/RAG papers
