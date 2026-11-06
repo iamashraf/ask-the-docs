@@ -30,11 +30,16 @@ They do not stop a determined attacker with access to the API. See
 | Input | Local files: path must stay under the documents folder, extension in `.pdf .docx .txt .md`, size cap | `ingest.py` (`validate_local_path`) | `MAX_FILE_SIZE_MB` (25) | HTTP 400 |
 | Input | URLs: http or https only, every resolved address must be public, redirects re-checked (max 3), size cap, per-read timeout | `ingest.py` (`validate_url`) | `MAX_URL_FETCH_SIZE_MB` (25), `URL_FETCH_TIMEOUT_SECONDS` (10) | HTTP 400 |
 | Retrieval | None beyond returning the nearest chunks | `retrieve.py` | | |
-| Generation | Retrieved chunks sit inside `<documents>` tags and the question inside `<question>` tags. Tag text inside a chunk is escaped. The system prompt says document text is data, not instructions. | `answer.py` (`build_prompt`, `format_context`), `config.py` | `SYSTEM_PROMPT_TEMPLATE` | Reduces risk. A model can still be persuaded. |
+| Generation | Retrieved chunks sit inside `<documents>` tags and the question inside `<question>` tags. Tag text inside a chunk is escaped. The system prompt says document text is data, not instructions. | `answer.py` (`build_prompt`, `format_context`), `config.py` | `SYSTEM_PROMPT_TEMPLATE` (hosted providers only) | Reduces risk. A model can still be persuaded. |
 | Generation | No retrieved chunks means a refusal without calling the model | `answer.py` | | Refusal message |
 | Output | Citation check: the answer needs `[n]` markers and each must match a retrieved chunk | `answer.py` (`citation_guardrail_passes`, `structured_answer_passes`) | `MAX_GENERATION_ATTEMPTS` (2, constant) | One retry, then refusal |
 | Exposure | API listens on `127.0.0.1` by default. Compose publishes every port on the host loopback only. | `config.py` (`api_host`), `docker-compose.yml` | `API_HOST` | |
 | Exposure | Graph RAG refuses to start with a blank or well-known Neo4j password. The Neo4j service only starts with the `graph` compose profile. | `config.py`, `docker-compose.yml` | `NEO4J_PASSWORD` | Startup error |
+
+On Ollama, `answer.py` uses its own structured prompt, and a custom
+`SYSTEM_PROMPT_TEMPLATE` has no effect. On a hosted provider, a custom template
+replaces the default one, including its data-not-instructions line, so keep
+that line.
 
 The citation check confirms the markers exist and are in range. It does not
 confirm that the cited chunk supports the claim.
@@ -59,7 +64,8 @@ a simpler path.
 
 ## Testing
 
-Run everything with `uv run pytest`. The relevant files:
+Run everything with `uv run pytest`. CI (`.github/workflows/ci.yml`) also runs
+`uv run ruff check .`. The relevant files:
 
 - `tests/test_ingest_security.py` covers path and URL checks.
 - `tests/test_answer.py` covers the citation check, retry, refusal, and

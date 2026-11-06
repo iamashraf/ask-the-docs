@@ -91,6 +91,15 @@ chunk supports the claim. This is the project's answer to the open problem
 the original RAG paper names explicitly: giving a generator's output
 traceable provenance.
 
+Retrieved text is also untrusted input. A document can contain a sentence such
+as "ignore your instructions", and a model may follow it. This is called
+indirect prompt injection, because the attacker's text arrives through the
+documents, not through the user's question. The prompt separates the two:
+chunks sit inside `<documents>` tags, the question sits inside `<question>`
+tags, and the system prompt says the document text is data. The project
+escapes any such tag inside a chunk, so a document cannot close the block
+early. This reduces the risk and does not remove it.
+
 - [Lewis et al., 2020 — Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks (arXiv:2005.11401)](https://arxiv.org/abs/2005.11401) — the paper that introduced pairing a generator with a retrieved, non-parametric document index.
 
 ## Graph RAG (local/global search)

@@ -77,6 +77,8 @@ curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" \
   -d '{"query": "What is Tree of Thoughts?"}'
 ```
 
+The services listen on `127.0.0.1` only, and the API has no authentication.
+
 That's the minimum path to a working answer. For every command, the HTTP
 API equivalent, evaluation, bulk re-indexing, and troubleshooting, see
 **[USAGE.md](USAGE.md)**.
@@ -114,6 +116,9 @@ behavior, and gaps, and [SECURITY.md](SECURITY.md) to report a problem.
 
 - `src/ask_the_docs/` — package: `config`, `llm`, `embeddings`,
   `ingest`, `index`, `retrieve`, `answer`, `evaluate`, `cli`, `api`
+- `web/` — the Next.js chat UI
+- `e2e/` — end-to-end tests against the running stack
+- `dev-docs/` — architecture, concepts, model comparison, guardrails
 - `data/documents/` — input documents (git-ignored)
 - `data/index/` — persisted vector store (git-ignored)
 - `evals/` — golden question set for evaluation

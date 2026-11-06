@@ -8,9 +8,11 @@ focused changes are easiest to review.
 ```bash
 uv sync          # installs the locked dependencies
 uv run pytest    # runs the full suite; no containers or API keys needed
+uv run ruff check .
 ```
 
 Run the whole suite before you open a pull request, not only the new tests.
+CI runs both commands on every pull request.
 
 ## How to make a change
 
