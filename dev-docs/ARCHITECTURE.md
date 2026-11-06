@@ -46,7 +46,7 @@ flowchart TD
         RERANK --> CTX[Top-k chunks -> numbered context]
         CTX --> GEN[Generator LLM]
         GEN --> GUARD{Citation guardrail}
-        GUARD -- fails/no match --> REFUSE[Refusal, no retry]
+        GUARD -- fails twice --> REFUSE[Refusal after one retry]
         GUARD -- passes --> ANS
         ANS --> CACHESET[(Cache result)]
         CHITCHAT --> CACHESET
@@ -108,7 +108,8 @@ going through the API or the queue.
   truncating to the final k.
 - **Citation-grounded generation** — the generator must cite `[n]`
   markers tied to the retrieved chunks; a deterministic guardrail (not an
-  LLM) rejects ungrounded or fabricated citations by refusing, not retrying.
+  LLM) rejects missing or out-of-range citations, retries once, then refuses.
+  It does not check that a cited chunk supports the claim.
 - **LLM-as-judge evaluation** — a separately-configured model scores
   answers against a golden question set, so retrieval/config changes can
   be compared objectively.

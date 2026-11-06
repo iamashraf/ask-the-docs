@@ -3,8 +3,9 @@
 A local-first RAG (Retrieval-Augmented Generation) system. Point it at
 PDFs, Word docs, markdown/text files, or URLs — any documents, not just
 research papers — then ask questions grounded in that content with cited
-sources. No data leaves your machine except the LLM calls you explicitly
-configure.
+sources. Everything runs on your machine by default. Data leaves it only
+if you configure a hosted LLM provider (queries and retrieved text are sent
+as is), ingest a URL, or set a telemetry endpoint.
 
 ![Ingesting a document, asking grounded questions about it, then asking something outside its scope and getting a clean refusal](dev-docs/demo.gif)
 
@@ -15,7 +16,8 @@ configure.
 - **Hybrid retrieval** — vector similarity blended with BM25 keyword
   search, with optional LLM query rewriting and cross-encoder reranking.
 - **Grounded generation** — a deterministic citation guardrail refuses to
-  answer unless the model actually cites retrieved content; cached
+  answer unless the model cites retrieved chunks by number (it checks the
+  markers exist, not that the chunk supports the claim); cached
   answers (Valkey) avoid repeating the same retrieval/generation work.
 - **Pluggable everywhere** — swap the generator, the judge, and the
   embeddings backend independently via config, without touching code.
@@ -31,8 +33,10 @@ configure.
 - **Containerized** — `podman compose` (or `docker compose`) runs the
   whole stack (Ollama, Valkey, the app, the chat UI); nothing to install
   beyond that.
-- **Security-hardened ingestion** — path-traversal and SSRF guards on
-  every local file and URL before anything is read.
+- **Ingestion checks** — local paths are checked for traversal, file type,
+  and size; URLs are checked against private, loopback, and internal
+  addresses on every redirect. There is no malware scanning or sandboxed
+  parsing.
 
 ## Architecture
 
@@ -84,8 +88,8 @@ uv sync          # installs locked dependencies for tests/tooling
 uv run pytest    # runs the full test suite (no containers or API keys needed)
 ```
 
-See **[CLAUDE.md](CLAUDE.md)** for architecture and contribution
-conventions.
+See **[dev-docs/ARCHITECTURE.md](dev-docs/ARCHITECTURE.md)** for
+architecture and **[CLAUDE.md](CLAUDE.md)** for contribution conventions.
 
 ## Layout
 

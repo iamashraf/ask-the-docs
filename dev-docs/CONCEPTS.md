@@ -84,8 +84,10 @@ accurate, much more expensive per pair — so it only runs on the already
 The generator is instructed to cite `[n]` markers tied to specific
 retrieved chunks; a deterministic guardrail (`answer.py:
 citation_guardrail_passes`) — not another LLM call — rejects any answer
-with no citations or a citation number that doesn't exist, refusing
-rather than retrying. This is the project's answer to the open problem
+with no citations or a citation number that doesn't exist. A rejected
+answer is retried once with a corrective note, then refused. The check
+confirms the markers exist and are in range; it does not confirm the cited
+chunk supports the claim. This is the project's answer to the open problem
 the original RAG paper names explicitly: giving a generator's output
 traceable provenance.
 

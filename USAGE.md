@@ -133,8 +133,8 @@ What happens:
    hop); a local path is checked against path-traversal, extension, and
    size limits.
 2. The matching loader turns the content into one or more chunks of text,
-   each tagged with its source. A PDF produces one unit per page (pages
-   with no extractable text, e.g. scanned images, are dropped); a PDF
+   each tagged with its source. A PDF becomes one markdown document (a PDF
+   with no extractable text, e.g. scanned images, produces nothing); a PDF
    served directly over HTTP is detected by `Content-Type`, not just
    URL suffix (arXiv's URLs have none).
 3. Each unit is split into ~512-character chunks with overlap, embedded
@@ -196,12 +196,12 @@ What happens:
    similarity and BM25 keyword search each run, get independently
    normalized, and are blended (`hybrid_alpha`); the merged pool is
    optionally reranked by a cross-encoder (`rerank_enabled`). If nothing
-   has been indexed yet, or nothing matches, this returns no results,
-   not an error.
-4. If nothing relevant was found, the answer is the refusal message
-   below (`kind: "refusal"`) and the generator is never called. An
-   empty-context prompt risks a confident-sounding hallucination instead
-   of an honest "I don't know."
+   has been indexed yet, this returns no results, not an error.
+4. If nothing was retrieved (for example, nothing is indexed yet), the
+   answer is the refusal message below (`kind: "refusal"`) and the
+   generator is never called. There is no relevance score cutoff: any
+   non-empty index returns its nearest chunks, and the model refuses when
+   they do not contain the answer.
 5. Otherwise, the retrieved chunks are numbered and given to the
    generator, with grounding/citation instructions in a system prompt
    (kept separate from the question itself). A deterministic guardrail
