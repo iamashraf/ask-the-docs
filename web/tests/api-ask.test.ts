@@ -86,4 +86,43 @@ describe("POST /api/ask", () => {
     expect(res.status).toBe(422);
     expect(typeof (await res.json()).error).toBe("string");
   });
+
+  test("names the offending field and reason for a 422 validation error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: [
+              {
+                loc: ["body", "query"],
+                msg: "String should have at most 4000 characters",
+              },
+            ],
+          }),
+          { status: 422 },
+        ),
+      ),
+    );
+
+    const res = await POST(makeRequest({ query: "q" }));
+
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toBe(
+      "query: String should have at most 4000 characters",
+    );
+  });
+
+  test("falls back to the generic message when a validation list has no usable msg", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ detail: [{}] }), { status: 422 }),
+      ),
+    );
+
+    const res = await POST(makeRequest({ query: "q" }));
+
+    expect((await res.json()).error).toBe("Request failed.");
+  });
 });
