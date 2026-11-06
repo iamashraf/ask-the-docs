@@ -91,6 +91,25 @@ uv run pytest    # runs the full test suite (no containers or API keys needed)
 See **[dev-docs/ARCHITECTURE.md](dev-docs/ARCHITECTURE.md)** for
 architecture and **[CLAUDE.md](CLAUDE.md)** for contribution conventions.
 
+## Guardrails
+
+The checks are layered, and the model is treated as untrusted: its output is
+checked before you see it. **The API has no authentication, so run it on
+localhost only.**
+
+- **Input:** request size limits; path, file type, size, and URL checks
+  (public addresses only) before anything is ingested.
+- **Generation:** retrieved text is fenced in `<documents>` tags and the model
+  is told it is data, not instructions.
+- **Output:** citation markers must match retrieved chunks, with one retry,
+  then a refusal.
+- **Exposure:** loopback-only ports by default, and a required Neo4j password
+  when Graph RAG is on.
+
+Rate limits, PII handling, and output scans are not built yet. See
+[dev-docs/GUARDRAILS.md](dev-docs/GUARDRAILS.md) for details, failure
+behavior, and gaps, and [SECURITY.md](SECURITY.md) to report a problem.
+
 ## Layout
 
 - `src/ask_the_docs/` — package: `config`, `llm`, `embeddings`,
@@ -99,3 +118,7 @@ architecture and **[CLAUDE.md](CLAUDE.md)** for contribution conventions.
 - `data/index/` — persisted vector store (git-ignored)
 - `evals/` — golden question set for evaluation
 - `tests/` — unit tests
+
+## Contributing and license
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Released under the [MIT License](LICENSE).
