@@ -46,6 +46,7 @@ services:
 
   neo4j:
     image: neo4j:5
+    profiles: ["graph"]
     env_file:
       - .env.local
     environment:
