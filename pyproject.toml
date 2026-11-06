@@ -1,8 +1,10 @@
 [project]
 name = "ask-the-docs"
 version = "0.1.0"
-description = "Add your description here"
+description = "Local-first RAG over your own documents: hybrid search, reranking, optional Graph RAG, and a chat UI."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=2.3.0",
