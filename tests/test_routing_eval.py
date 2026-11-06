@@ -1,4 +1,3 @@
-import pytest
 
 from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.router import Route, Turn

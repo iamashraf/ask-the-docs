@@ -6,7 +6,6 @@ from unittest.mock import Mock
 import pytest
 from langchain_core.documents import Document
 
-from ask_the_docs import metrics
 from ask_the_docs.answer import (
     MAX_GENERATION_ATTEMPTS,
     STRUCTURED_SYSTEM_PROMPT_TEMPLATE,
