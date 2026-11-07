@@ -3,8 +3,9 @@
 A local-first RAG (Retrieval-Augmented Generation) system. Point it at
 PDFs, Word docs, markdown/text files, or URLs — any documents, not just
 research papers — then ask questions grounded in that content with cited
-sources. No data leaves your machine except the LLM calls you explicitly
-configure.
+sources. Everything runs on your machine by default. Data leaves it only
+if you configure a hosted LLM provider (queries and retrieved text are sent
+as is), ingest a URL, or set a telemetry endpoint.
 
 ![Ingesting a document, asking grounded questions about it, then asking something outside its scope and getting a clean refusal](dev-docs/demo.gif)
 
@@ -15,7 +16,8 @@ configure.
 - **Hybrid retrieval** — vector similarity blended with BM25 keyword
   search, with optional LLM query rewriting and cross-encoder reranking.
 - **Grounded generation** — a deterministic citation guardrail refuses to
-  answer unless the model actually cites retrieved content; cached
+  answer unless the model cites retrieved chunks by number (it checks the
+  markers exist, not that the chunk supports the claim); cached
   answers (Valkey) avoid repeating the same retrieval/generation work.
 - **Pluggable everywhere** — swap the generator, the judge, and the
   embeddings backend independently via config, without touching code.
@@ -31,8 +33,10 @@ configure.
 - **Containerized** — `podman compose` (or `docker compose`) runs the
   whole stack (Ollama, Valkey, the app, the chat UI); nothing to install
   beyond that.
-- **Security-hardened ingestion** — path-traversal and SSRF guards on
-  every local file and URL before anything is read.
+- **Ingestion checks** — local paths are checked for traversal, file type,
+  and size; URLs are checked against private, loopback, and internal
+  addresses on every redirect. There is no malware scanning or sandboxed
+  parsing.
 
 ## Architecture
 
@@ -62,7 +66,6 @@ git clone <this-repo> && cd ask-the-docs
 cp .env.example .env.local        # reference copy -> your local config
 podman compose up -d ollama-init  # starts Ollama, pulls the models (first run only)
 podman compose up -d --build app  # builds if missing, rebuilds if stale, then starts it
-podman image prune -f             # optional: reclaim the builder stage's disk space
 ```
 
 The first start auto-ingests a curated set of LLM/RAG papers
@@ -72,6 +75,8 @@ The first start auto-ingests a curated set of LLM/RAG papers
 curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" \
   -d '{"query": "What is Tree of Thoughts?"}'
 ```
+
+The services listen on `127.0.0.1` only, and the API has no authentication.
 
 That's the minimum path to a working answer. For every command, the HTTP
 API equivalent, evaluation, bulk re-indexing, and troubleshooting, see
@@ -84,14 +89,40 @@ uv sync          # installs locked dependencies for tests/tooling
 uv run pytest    # runs the full test suite (no containers or API keys needed)
 ```
 
-See **[CLAUDE.md](CLAUDE.md)** for architecture and contribution
-conventions.
+See **[dev-docs/ARCHITECTURE.md](dev-docs/ARCHITECTURE.md)** for
+architecture and **[CLAUDE.md](CLAUDE.md)** for contribution conventions.
+
+## Guardrails
+
+The checks are layered, and the model is treated as untrusted: its output is
+checked before you see it. **The API has no authentication, so run it on
+localhost only.**
+
+- **Input:** request size limits; path, file type, size, and URL checks
+  (public addresses only) before anything is ingested.
+- **Generation:** retrieved text is fenced in `<documents>` tags and the model
+  is told it is data, not instructions.
+- **Output:** citation markers must match retrieved chunks, with one retry,
+  then a refusal.
+- **Exposure:** loopback-only ports by default, and a required Neo4j password
+  when Graph RAG is on.
+
+Rate limits, PII handling, and output scans are not built yet. See
+[dev-docs/GUARDRAILS.md](dev-docs/GUARDRAILS.md) for details, failure
+behavior, and gaps, and [SECURITY.md](SECURITY.md) to report a problem.
 
 ## Layout
 
 - `src/ask_the_docs/` — package: `config`, `llm`, `embeddings`,
   `ingest`, `index`, `retrieve`, `answer`, `evaluate`, `cli`, `api`
+- `web/` — the Next.js chat UI
+- `e2e/` — end-to-end tests against the running stack
+- `dev-docs/` — architecture, concepts, model comparison, guardrails
 - `data/documents/` — input documents (git-ignored)
 - `data/index/` — persisted vector store (git-ignored)
 - `evals/` — golden question set for evaluation
 - `tests/` — unit tests
+
+## Contributing and license
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Released under the [MIT License](LICENSE).

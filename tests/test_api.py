@@ -589,6 +589,38 @@ def test_ask_rejects_non_positive_k():
     assert response.status_code == 422
 
 
+def test_ask_rejects_query_over_the_length_cap():
+    response = TestClient(app).post("/v1/ask", json={"query": "a" * 4001})
+    assert response.status_code == 422
+
+
+def test_ask_accepts_query_at_the_length_cap(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    monkeypatch.setattr(
+        "ask_the_docs.api.answer",
+        lambda query, settings, k, history=None: AnswerResult(text="ok", citations=[], context=""),
+    )
+
+    response = TestClient(app).post("/v1/ask", json={"query": "a" * 4000})
+    assert response.status_code == 200
+
+
+def test_ask_rejects_k_over_the_cap():
+    response = TestClient(app).post("/v1/ask", json={"query": "hi", "k": 51})
+    assert response.status_code == 422
+
+
+def test_ask_accepts_k_at_the_cap(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    monkeypatch.setattr(
+        "ask_the_docs.api.answer",
+        lambda query, settings, k, history=None: AnswerResult(text="ok", citations=[], context=""),
+    )
+
+    response = TestClient(app).post("/v1/ask", json={"query": "hi", "k": 50})
+    assert response.status_code == 200
+
+
 def test_ask_returns_503_when_ollama_unavailable(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
 

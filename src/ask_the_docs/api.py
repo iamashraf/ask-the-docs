@@ -221,9 +221,13 @@ async def get_job_status(job_id: str) -> JobStatusResponse:
     return JobStatusResponse(**job)
 
 
+MAX_QUERY_CHARS = 4000  # same bound as a history turn
+MAX_K = 50  # the retrieval candidate pool's default size
+
+
 class AskRequest(BaseModel):
-    query: str = Field(min_length=1)
-    k: int = Field(default=5, ge=1)
+    query: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)
+    k: int = Field(default=5, ge=1, le=MAX_K)
     history: list[Turn] = Field(default=[], max_length=50)
     session_id: str | None = None
 

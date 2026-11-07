@@ -46,7 +46,7 @@ flowchart TD
         RERANK --> CTX[Top-k chunks -> numbered context]
         CTX --> GEN[Generator LLM]
         GEN --> GUARD{Citation guardrail}
-        GUARD -- fails/no match --> REFUSE[Refusal, no retry]
+        GUARD -- fails twice --> REFUSE[Refusal after one retry]
         GUARD -- passes --> ANS
         ANS --> CACHESET[(Cache result)]
         CHITCHAT --> CACHESET
@@ -73,7 +73,8 @@ enqueue a job on NATS JetStream and return `202` — the actual
 separate `worker` process, not the request handler. For the full
 runtime topology (API, worker, NATS, Chroma, Valkey, Neo4j, Ollama, and
 the trust boundary around them), see the interactive diagram:
-[runtime-architecture.html](../docs/runtime-architecture.html).
+[runtime-architecture.html](../docs/runtime-architecture.html). For the checks the
+system runs and how each one fails, see [GUARDRAILS.md](GUARDRAILS.md).
 
 Graph RAG (triplet extraction, entity resolution, community
 detection/summarization, local/global search) is entirely gated behind
@@ -108,7 +109,11 @@ going through the API or the queue.
   truncating to the final k.
 - **Citation-grounded generation** — the generator must cite `[n]`
   markers tied to the retrieved chunks; a deterministic guardrail (not an
-  LLM) rejects ungrounded or fabricated citations by refusing, not retrying.
+  LLM) rejects missing or out-of-range citations, retries once, then refuses.
+  It does not check that a cited chunk supports the claim. The prompt also
+  fences the chunks in `<documents>` tags, escapes any such tag inside a
+  chunk, and tells the model the content is data. That lowers the chance that
+  a document's text is followed as an instruction. It is not a guarantee.
 - **LLM-as-judge evaluation** — a separately-configured model scores
   answers against a golden question set, so retrieval/config changes can
   be compared objectively.
@@ -151,7 +156,8 @@ going through the API or the queue.
   redelivered on crash) and writes status to Valkey (`jobs.py`) for the
   `/v1/jobs/{id}` polling endpoint.
 - **Neo4j, with GDS** — the graph store for Graph RAG (`graph_store.py`,
-  `community.py`), off by default. Leiden community detection runs
+  `community.py`), off by default. The `neo4j` compose service starts only
+  with the `graph` profile. Leiden community detection runs
   *in the database* via the GDS library against the graph already
   stored there, instead of pulling the whole graph into Python for a
   separate algorithm library.
@@ -164,6 +170,7 @@ going through the API or the queue.
   `LLMClient`/`Embeddings` interface) — e.g. for the judge role in
   evaluation — without touching call sites.
 - **Podman- or Docker-compose** — the whole stack (Ollama, Valkey, NATS,
-  Neo4j, the app, the worker, the web UI) is one standard compose file;
+  the app, the worker, the web UI, and Neo4j under the `graph` profile) is
+  one standard compose file, with every port published on `127.0.0.1`;
   Podman's rootless, daemonless execution is the documented default,
   with Docker Compose working against the same file.

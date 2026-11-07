@@ -190,7 +190,7 @@ def test_evaluate_overrides_graph_enabled(monkeypatch):
 
     parser = build_parser()
     args = parser.parse_args(["evaluate", "--graph", "true"])
-    args.func(args, make_settings())
+    args.func(args, make_settings(neo4j_password="test-only-secret"))
 
     assert captured_settings["graph"] is True
 
@@ -399,8 +399,21 @@ def test_serve_starts_uvicorn(monkeypatch):
     from ask_the_docs.api import app as api_app
 
     assert captured["app"] is api_app
-    assert captured["host"] == "0.0.0.0"
+    assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 8000
+
+
+def test_serve_uses_the_configured_api_host(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "ask_the_docs.cli.uvicorn.run",
+        lambda app, host, port, log_level: captured.update(host=host),
+    )
+
+    args = build_parser().parse_args(["serve"])
+    args.func(args, make_settings(api_host="192.0.2.1"))
+
+    assert captured["host"] == "192.0.2.1"
 
 
 def test_worker_runs_the_worker_loop(monkeypatch):

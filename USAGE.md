@@ -32,14 +32,13 @@ point at the right service names for the containerized setup.
 ```bash
 podman compose up -d ollama-init   # starts Ollama, waits until healthy,
                                     # pulls llama3.1:8b + nomic-embed-text
-podman compose build app && podman image prune -f
+podman compose build app
 ```
 
 Model pulls only need to happen once — re-running `ollama-init` later is a
 fast no-op (`ollama pull` skips already-present models).
-`podman image prune -f` reclaims the disk space the multi-stage build's
-intermediate layer leaves behind, at the cost of a slightly slower next
-build.
+Building the app image needs about 20 GB of free disk at its peak. The
+finished image is about 5 GB.
 
 After any later code change, you don't need to re-run `build` as a
 separate step — add `--build` to whichever command you run next instead
@@ -92,6 +91,33 @@ curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" \
 }
 ```
 
+## Network access
+
+Compose publishes every port on `127.0.0.1` only: the API (8000), the chat UI
+(3000), Ollama (11434), and Neo4j (7687). Only your machine can reach them.
+Inside the `app` container the API listens on `0.0.0.0`, set by `API_HOST`,
+because the port mapping needs that. Outside a container, `API_HOST` defaults
+to `127.0.0.1`.
+
+The API has no authentication. If you publish a port on another interface,
+put your own access control in front of it.
+
+## Enable Graph RAG
+
+Graph RAG is off by default, and the `neo4j` service does not start with the
+rest of the stack. To turn it on:
+
+1. In `.env.local`, set `GRAPH_ENABLED=true`, `NEO4J_PASSWORD=<password>`, and
+   `NEO4J_AUTH=neo4j/<password>`. Use a password of your own.
+2. Start Neo4j with `podman compose --profile graph up -d neo4j`.
+3. Recreate the services that read the setting with
+   `podman compose up -d --force-recreate app worker`.
+
+While `GRAPH_ENABLED=true`, settings validation rejects a blank password,
+`neo4j`, and `ask-the-docs-graph`. Neo4j stores the password it first started
+with in the `neo4j_data` volume, so changing `NEO4J_AUTH` later does not
+change the login of an existing database.
+
 ## Two interfaces, one pipeline
 
 Every operation below has two equivalent forms, both calling the exact
@@ -133,8 +159,8 @@ What happens:
    hop); a local path is checked against path-traversal, extension, and
    size limits.
 2. The matching loader turns the content into one or more chunks of text,
-   each tagged with its source. A PDF produces one unit per page (pages
-   with no extractable text, e.g. scanned images, are dropped); a PDF
+   each tagged with its source. A PDF becomes one markdown document (a PDF
+   with no extractable text, e.g. scanned images, produces nothing); a PDF
    served directly over HTTP is detected by `Content-Type`, not just
    URL suffix (arXiv's URLs have none).
 3. Each unit is split into ~512-character chunks with overlap, embedded
@@ -177,6 +203,9 @@ like "how does it compare to chain-of-thought?" can be resolved into a
 standalone search query. It's an API-only field; the CLI's `ask` always
 sends an empty history.
 
+The API accepts a `query` of up to 4000 characters and a `k` from 1 to 50
+(default 5).
+
 What happens:
 
 1. The query is routed first (`query_rewrite_enabled`, on by default). A
@@ -196,19 +225,21 @@ What happens:
    similarity and BM25 keyword search each run, get independently
    normalized, and are blended (`hybrid_alpha`); the merged pool is
    optionally reranked by a cross-encoder (`rerank_enabled`). If nothing
-   has been indexed yet, or nothing matches, this returns no results,
-   not an error.
-4. If nothing relevant was found, the answer is the refusal message
-   below (`kind: "refusal"`) and the generator is never called. An
-   empty-context prompt risks a confident-sounding hallucination instead
-   of an honest "I don't know."
+   has been indexed yet, this returns no results, not an error.
+4. If nothing was retrieved (for example, nothing is indexed yet), the
+   answer is the refusal message below (`kind: "refusal"`) and the
+   generator is never called. There is no relevance score cutoff: any
+   non-empty index returns its nearest chunks, and the model refuses when
+   they do not contain the answer.
 5. Otherwise, the retrieved chunks are numbered and given to the
-   generator, with grounding/citation instructions in a system prompt
-   (kept separate from the question itself). A deterministic guardrail
-   then checks every `[n]` citation the model used actually exists among
-   the retrieved chunks — an answer with no citations, or one citing a
-   chunk number that doesn't exist, gets the same refusal message instead
-   of an ungrounded answer.
+   generator inside `<documents>` tags, followed by the question inside
+   `<question>` tags. The system prompt holds the grounding and citation
+   instructions and tells the model to treat the documents as data, never
+   as instructions. A deterministic guardrail then checks that every `[n]`
+   citation the model used exists among the retrieved chunks. An answer with
+   no citations, or one citing a chunk number that doesn't exist, is retried
+   once. If the retry fails too, the user gets the refusal message instead of
+   an ungrounded answer.
 6. Citations in a successful response (`kind: "answer"`) come from the
    same chunks' source metadata (deduplicated to unique sources,
    preserving order), so what the model was told to cite and what gets
@@ -310,7 +341,7 @@ The CLI prints errors as text; the API returns real HTTP status codes:
 | `/v1/ingest`/`/v1/index` accepted, job queued | 202 |
 | Bad/unsafe `source` (path traversal, SSRF, unsupported extension) | 400 |
 | File not found, or `/v1/jobs/{job_id}` with an unknown id | 404 |
-| Empty `source`/`query`, `k <= 0`, or a malformed `history` turn | 422 |
+| Empty `source`/`query`, `query` over 4000 characters, `k` outside 1 to 50, or a malformed `history` turn | 422 |
 | Ollama unreachable | 503 |
 
 `GET /health` always returns `200 {"status": "ok"}` independent of
@@ -401,6 +432,14 @@ split as the Python suite above.
   Podman with `--userns=keep-id`.
 - **`evaluate` always errors**: check `JUDGE__API_KEY` is set in
   `.env.local` and valid for whichever `JUDGE__PROVIDER` is configured.
+- **Another machine or phone cannot reach the API or the chat UI**: Compose
+  publishes ports on `127.0.0.1` only. See Network access above.
+- **Error that names `NEO4J_PASSWORD`**: `GRAPH_ENABLED=true` needs a password
+  of your own. See Enable Graph RAG above.
+- **Ollama cuts off long prompts**: raise the context window with
+  `OLLAMA_CONTEXT_LENGTH` (default 8192) in your shell or a project-level
+  `.env` file, then recreate the `ollama` container. Compose does not read it
+  from `.env.local`.
 - **`UrlSecurityError` on a real public URL**: check the host actually
   resolves publicly (`dig <host>`) — this should only trigger for
   private/loopback/internal addresses.

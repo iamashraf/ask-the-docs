@@ -1,0 +1,27 @@
+name: Bug report
+description: Something does not work as documented
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a security problem, do not open an issue. Follow SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw.
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Setup
+      description: OS, how you ran it (compose or `uv run`), generator and embeddings backend. Do not paste API keys.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output. Remove secrets and personal data first.
+      render: text

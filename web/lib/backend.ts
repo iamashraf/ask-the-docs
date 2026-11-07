@@ -1,5 +1,20 @@
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
 
+// FastAPI sends a plain string for errors it raises itself, and a list of
+// {loc, msg} objects for request validation (422). Show the first problem as
+// "field: reason" so the user can see what to change.
+function errorMessage(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const first = detail[0] as { loc?: unknown; msg?: unknown } | undefined;
+    if (typeof first?.msg === "string") {
+      const field = Array.isArray(first.loc) ? first.loc[first.loc.length - 1] : undefined;
+      return typeof field === "string" ? `${field}: ${first.msg}` : first.msg;
+    }
+  }
+  return "Request failed.";
+}
+
 // Shared proxy logic for every /api/* route that forwards to the FastAPI
 // backend: a fetch failure or a non-JSON backend body (an unhandled
 // exception falls through to a plain-text 500) must degrade to a visible
@@ -27,9 +42,8 @@ export async function proxyToBackend(path: string, init: RequestInit): Promise<R
   }
 
   if (!backendResponse.ok) {
-    const detail = (data as { detail?: unknown }).detail;
     return Response.json(
-      { error: typeof detail === "string" ? detail : "Request failed." },
+      { error: errorMessage((data as { detail?: unknown }).detail) },
       { status: backendResponse.status },
     );
   }

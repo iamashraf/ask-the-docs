@@ -25,6 +25,9 @@ data/documents/*
 
 # personal Claude Code settings (hooks, local overrides) -- not team policy
 .claude/settings.local.json
+.claude/worktrees/
 
 graphify-out/
 .archify/
+
+audit/
