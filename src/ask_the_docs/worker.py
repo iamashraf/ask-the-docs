@@ -25,7 +25,7 @@ from ask_the_docs.ingest import (
     make_source_doc_id,
 )
 from ask_the_docs.jobs import close_async_cache_client, get_async_cache_client, update_job
-from ask_the_docs.llm import OllamaUnavailableError
+from ask_the_docs.llm import LLMUnavailableError
 from ask_the_docs.queue import INGEST_JOBS_STREAM, INGEST_JOBS_SUBJECT, ensure_stream
 from ask_the_docs.tracing import configure_logging, configure_metrics, configure_tracing
 
@@ -44,7 +44,7 @@ WORKER_HEARTBEAT_SECONDS = WORKER_ACK_WAIT_SECONDS / 3
 # Errors whose message is written for users; anything else may leak paths or internals.
 USER_FACING_ERRORS = (
     IndexWriteError,
-    OllamaUnavailableError,
+    LLMUnavailableError,
     PathSecurityError,
     UnsupportedFileTypeError,
     UrlSecurityError,

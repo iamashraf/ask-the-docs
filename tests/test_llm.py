@@ -8,6 +8,7 @@ from ask_the_docs.config import ProviderConfig
 from ask_the_docs.llm import (
     AnthropicLLMClient,
     GenerationResult,
+    LLMUnavailableError,
     OLLAMA_KEEP_ALIVE,
     OLLAMA_MAX_OUTPUT_TOKENS,
     OllamaLLMClient,
@@ -639,3 +640,7 @@ def test_strip_code_fence_leaves_unfenced_text_unchanged():
     from ask_the_docs.llm import strip_code_fence
 
     assert strip_code_fence('{"a": 1}') == '{"a": 1}'
+
+
+def test_ollama_unavailable_is_an_llm_unavailable_error():
+    assert issubclass(OllamaUnavailableError, LLMUnavailableError)

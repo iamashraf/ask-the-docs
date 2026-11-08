@@ -40,7 +40,7 @@ from ask_the_docs.jobs import (
     list_jobs,
     update_job,
 )
-from ask_the_docs.llm import OllamaUnavailableError
+from ask_the_docs.llm import LLMUnavailableError
 from ask_the_docs.queue import QueuePublishError, close_publisher, publish_ingest_job
 from ask_the_docs.reranker import DEFAULT_RERANKER_MODEL, get_reranker
 from ask_the_docs.router import Turn
@@ -108,7 +108,7 @@ def _not_found_handler(request: Request, exc: Exception) -> JSONResponse:
 
 
 @app.exception_handler(JobStoreError)
-@app.exception_handler(OllamaUnavailableError)
+@app.exception_handler(LLMUnavailableError)
 def _service_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=503, content={"detail": str(exc)})
 

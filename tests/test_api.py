@@ -11,7 +11,7 @@ from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.evaluate import EvalResult, JudgeScore
 from ask_the_docs.ingest import PathSecurityError, UnsupportedFileTypeError, UrlSecurityError
 from ask_the_docs.jobs import JobStoreError
-from ask_the_docs.llm import OllamaUnavailableError
+from ask_the_docs.llm import LLMUnavailableError, OllamaUnavailableError
 from ask_the_docs.queue import QueuePublishError
 from ask_the_docs.reranker import DEFAULT_RERANKER_MODEL
 from ask_the_docs.router import Turn
@@ -669,6 +669,20 @@ def test_ask_returns_503_when_ollama_unavailable(monkeypatch):
     response = TestClient(app).post("/v1/ask", json={"query": "hi"})
 
     assert response.status_code == 503
+
+
+def test_ask_returns_503_when_hosted_llm_unavailable(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+
+    def raise_error(query, settings, k, history=None):
+        raise LLMUnavailableError("anthropic rate limited")
+
+    monkeypatch.setattr("ask_the_docs.api.answer", raise_error)
+
+    response = TestClient(app).post("/v1/ask", json={"query": "hi"})
+
+    assert response.status_code == 503
+    assert "rate limited" in response.json()["detail"]
 
 
 def test_evaluate_returns_results(monkeypatch):

@@ -44,7 +44,11 @@ OLLAMA_KEEP_ALIVE = "30m"
 OLLAMA_MAX_OUTPUT_TOKENS = 500
 
 
-class OllamaUnavailableError(RuntimeError):
+class LLMUnavailableError(RuntimeError):
+    """A provider could not be reached or refused the call; the message is written for users."""
+
+
+class OllamaUnavailableError(LLMUnavailableError):
     pass
 
 
