@@ -8,8 +8,8 @@ to code and a test.
 
 The project is built for local use by one person on one machine. It has no
 user accounts, no tenants, and no tools or agent loop, so those controls do
-not apply. The API has **no authentication**. Do not expose it to a network
-you do not trust.
+not apply. The API has no authentication. Do not expose it to a network you
+do not trust.
 
 The checks aim to stop these problems:
 
@@ -65,7 +65,7 @@ a simpler path.
 ## Testing
 
 Run everything with `uv run pytest`. CI (`.github/workflows/ci.yml`) also runs
-`uv run ruff check .`. The relevant files:
+`uv run ruff check .`. The relevant test files:
 
 - `tests/test_ingest_security.py` covers path and URL checks.
 - `tests/test_answer.py` covers the citation check, retry, refusal, and
