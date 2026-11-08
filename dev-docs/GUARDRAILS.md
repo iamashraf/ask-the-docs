@@ -56,7 +56,7 @@ a simpler path.
 | Nothing retrieved | Closed | Refusal message, no model call |
 | Request over a limit | Closed | HTTP 422 |
 | Ingest path or URL check, or DNS lookup | Closed | HTTP 400 |
-| Ollama unreachable | Closed | HTTP 503 |
+| Ollama or Anthropic unreachable, rate limited, or rejecting the credential | Closed | HTTP 503 |
 | Intent router errors | Open | Treated as a document question |
 | Graph query classification errors | Open | Local search |
 | Vector search errors | Open | BM25 results only |

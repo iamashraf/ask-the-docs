@@ -1,18 +1,22 @@
 # AskTheDocs
 
-A local-first RAG (Retrieval-Augmented Generation) system. Point it at
-PDFs, Word docs, markdown/text files, or URLs (any documents, not only
-research papers), then ask questions grounded in that content with cited
-sources. Everything runs on your machine by default. Data leaves it only
-if you configure a hosted LLM provider (queries and retrieved text are sent
-as is), ingest a URL, or set a telemetry endpoint.
+A RAG (Retrieval-Augmented Generation) system with local storage and search.
+Point it at PDFs, Word docs, markdown/text files, or URLs (any documents, not
+only research papers), then ask questions grounded in that content with cited
+sources. Documents, the index, search, reranking and embeddings run on your
+machine. By default Claude writes the answers, so each question and its
+retrieved text go to Anthropic as is. Set `GENERATOR__PROVIDER=ollama` to
+keep generation local too. Data also leaves if you ingest a URL or set a
+telemetry endpoint.
 
 ![Ingesting a document, asking grounded questions about it, then asking something outside its scope and getting a clean refusal](dev-docs/demo.gif)
 
 ## Features
 
-- **Local generation by default.** Ollama runs the language model. The core
-  pipeline needs no API key.
+- **Claude by default, Ollama optional.** Claude Haiku writes the answers and
+  Claude Sonnet judges them. Authenticate with `ANTHROPIC_API_KEY` or, for
+  processes outside containers, an `ant auth login` session. Ollama (local) and
+  any OpenAI-compatible endpoint work through config alone.
 - **Hybrid retrieval.** Vector similarity is blended with BM25 keyword
   search. LLM query rewriting and cross-encoder reranking are optional.
 - **Grounded generation.** A deterministic citation guardrail refuses to
@@ -60,7 +64,8 @@ exporters retry and log warnings.
 ```bash
 git clone <this-repo> && cd ask-the-docs
 cp .env.example .env.local        # reference copy -> your local config
-podman compose up -d ollama-init  # starts Ollama, pulls the models (first run only)
+export ANTHROPIC_API_KEY=sk-ant-...  # compose passes it into app and worker
+podman compose up -d ollama-init  # starts Ollama, pulls the embedding model (first run only)
 podman compose up -d --build app  # builds if missing, rebuilds if stale, then starts it
 ```
 

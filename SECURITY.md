@@ -32,5 +32,6 @@ yet.
 - Missing authentication on the API. This is a known limit of the local-use
   design. Run it on localhost, or put your own access control in front of it.
 - Hosted LLM providers receiving your queries and retrieved text. That is how
-  a hosted provider works. Use the local Ollama setup if this matters.
+  a hosted provider works. Claude is the default generator and judge, so this
+  applies out of the box. Use the Ollama setup in `.env.example` if it matters.
 - Model mistakes, such as a wrong or incomplete answer.

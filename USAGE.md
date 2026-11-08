@@ -8,9 +8,11 @@ architecture.
 ## Prerequisites
 
 - Podman (or Docker) with `compose` support.
-- An Anthropic API key, only if you plan to run `evaluate` (the judge
-  defaults to Claude; the generator defaults to local Ollama, which needs
-  no key).
+- An Anthropic API key. The generator and the judge both default to Claude.
+  Export `ANTHROPIC_API_KEY` before `podman compose up`. Processes that run
+  on the host (the CLI, `uv run ask-the-docs serve`) can instead use an
+  `ant auth login` session. To run fully local with no key, set the
+  Ollama variables described in `.env.example`.
 - The external `llm-observability` Docker/Podman network. `app`, `worker`,
   and `web` join it, and Compose refuses to start them without it. Create
   it once with `podman network create llm-observability`. To also collect
@@ -25,16 +27,21 @@ cp .env.example .env.local
 ```
 
 `.env.example` is a committed reference file. The app loads `.env.local`,
-which is git-ignored. Never commit it. Edit `.env.local` to set
-`JUDGE__API_KEY` if you will run `evaluate`. The other defaults already
-use the right service names for the containerized setup.
+which is git-ignored. Never commit it. The defaults
+already use Claude and the right service names for the containerized setup.
+Anthropic looks for a credential in this order: `GENERATOR__API_KEY` or
+`JUDGE__API_KEY`, then `ANTHROPIC_API_KEY`, then the `ant auth login` session
+(host processes only). Containers need `ANTHROPIC_API_KEY`.
 
 ```bash
 podman compose up -d ollama-init   # starts Ollama, waits until healthy,
-                                    # pulls llama3.1:8b + nomic-embed-text
+                                    # pulls nomic-embed-text
 podman compose build app
 ```
 
+Embeddings always run on Ollama, because Anthropic has no embeddings API.
+To also pull local chat models, run
+`OLLAMA_PULL_MODELS="nomic-embed-text llama3.1:8b" podman compose up -d ollama-init`.
 Model pulls happen once. Re-running `ollama-init` later is a
 fast no-op (`ollama pull` skips already-present models).
 Building the app image needs about 20 GB of free disk at its peak. The
@@ -422,8 +429,10 @@ tests above.
 - **Permission denied writing to `data/`.** The app runs as a non-root user
   inside the container. Run `chmod -R a+rwX data/` on the host, or run Podman
   with `--userns=keep-id`.
-- **`evaluate` always errors.** Check that `JUDGE__API_KEY` is set in
-  `.env.local` and valid for the configured `JUDGE__PROVIDER`.
+- **Answers or `evaluate` fail with "No Anthropic credential found" or
+  "rejected the credentials".** Export `ANTHROPIC_API_KEY` in the shell that
+  runs `podman compose`, or set `GENERATOR__API_KEY` and `JUDGE__API_KEY` in
+  `.env.local`. Containers cannot use the `ant auth login` session.
 - **Another machine or phone cannot reach the API or the chat UI.** Compose
   publishes ports on `127.0.0.1` only. See Network access above.
 - **Error that names `NEO4J_PASSWORD`.** `GRAPH_ENABLED=true` needs a password

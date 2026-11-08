@@ -243,11 +243,13 @@ the API or the queue.
 - **FastAPI.** The HTTP API (`api.py`). Its Pydantic request and response
   models reuse the validation approach already used for `Settings`
   (`config.py`), so the project has one validation style.
-- **Ollama, pluggable.** The default LLM and embeddings backend (`llm.py`,
-  `embeddings.py`). It runs locally and needs no API key for the core
-  pipeline. Anthropic and OpenAI swap in through config alone (same
-  `LLMClient`/`Embeddings` interface), for example for the judge role in
-  evaluation, without touching call sites.
+- **Anthropic by default, pluggable.** The generator (`claude-haiku-5-5`)
+  and the judge (`claude-sonnet-5-5`) use Anthropic through `llm.py`. The
+  credential comes from config, then `ANTHROPIC_API_KEY`, then the
+  `ant auth login` session. Ollama and OpenAI swap in through config alone
+  (same `LLMClient` interface), without touching call sites. Embeddings
+  (`embeddings.py`) run on Ollama or HuggingFace, because Anthropic has no
+  embeddings API.
 - **Podman or Docker compose.** One standard compose file defines the whole
   stack (Ollama, Valkey, NATS, the app, the worker, the web UI, and Neo4j
   under the `graph` profile). Every port is published on `127.0.0.1`.
