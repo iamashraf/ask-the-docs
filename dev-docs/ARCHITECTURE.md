@@ -66,7 +66,7 @@ flowchart TD
 The diagram above shows the ingest/query *logic*, not process topology.
 In practice, `/v1/ingest` and `/v1/index` validate the source
 synchronously (so a bad request still gets an immediate 400/404), then
-enqueue a job on NATS JetStream and return `202` — the actual
+enqueue a job on NATS JetStream and return `202`. The
 `dispatch`/`build_index` work in the Ingest subgraph above runs in a
 separate `worker` process, not the request handler. For the full
 runtime topology (API, worker, NATS, Chroma, Valkey, Neo4j, Ollama, and
@@ -75,7 +75,7 @@ the trust boundary around them), see the interactive diagram:
 system runs and how each one fails, see [GUARDRAILS.md](GUARDRAILS.md).
 
 Graph RAG (triplet extraction, entity resolution, community
-detection/summarization, local/global search) is entirely gated behind
+detection/summarization, local/global search) is gated behind
 `graph_enabled` (default `False`). At query time, a Neo4j/LLM failure
 degrades to the plain hybrid path above, and so does a global search where
 no community scores above 0 or every scoring call fails. At ingest time, the
@@ -120,7 +120,7 @@ membership is identical. If Valkey is down, extraction and summarization
 run as before.
 
 Both the CLI (`ingest`/`index`/`ask`/`evaluate`/`serve`/`worker`) and the
-HTTP API (`/v1/...`) drive this same pipeline — no logic is duplicated
+HTTP API (`/v1/...`) drive this same pipeline. No logic is duplicated
 between them. There's one binary, not three: the `app` and `worker`
 containers in `docker-compose.yml` are the same CLI image, started with
 `serve`/`worker` respectively; `ingest`/`index`/`ask`/`evaluate` are the
@@ -129,11 +129,11 @@ going through the API or the queue.
 
 ## Concepts used
 
-- **Vector search** — embed chunks and the query into the same space;
+- **Vector search**: embed chunks and the query into the same space;
   retrieve by similarity. Catches paraphrase/semantic matches.
-- **BM25** — classic sparse keyword scoring (the `bm25s` library, Lucene-style IDF). Catches exact terms/acronyms
+- **BM25**: classic sparse keyword scoring (the `bm25s` library, Lucene-style IDF). Catches exact terms/acronyms
   vector search can miss.
-- **Hybrid fusion** — both sides' scores are min-max normalized, then
+- **Hybrid fusion**: both sides' scores are min-max normalized, then
   blended `alpha * vector + (1 - alpha) * bm25`; a chunk found by only one
   side still competes (missing side scores 0), nothing is dropped outright.
   Each side returns only its top `candidate_pool_size` hits, so min-max
@@ -149,7 +149,7 @@ going through the API or the queue.
   generator gets the user's original wording next to the resolved
   question. A failed source listing for a meta question falls back to
   the resolved queries.
-- **Idempotent ingestion** — each source gets a content hash over its
+- **Idempotent ingestion**: each source gets a content hash over its
   page contents (length-separated), chunk size, chunk overlap, content
   format and the embedding model. An indexed source with the same hash is
   skipped. Changing any of those inputs re-embeds the source on the next
@@ -159,23 +159,23 @@ going through the API or the queue.
   the stale old ids. A failed or repeated run neither loses nor
   duplicates data. A failure partway through a multi-batch insert can
   leave old and new chunks together until the next run cleans up.
-- **Cross-encoder reranking** — a separate, more expensive model scores
+- **Cross-encoder reranking**: a separate, more expensive model scores
   (query, chunk) pairs jointly to re-sort the merged candidate pool before
   truncating to the final k.
-- **Citation-grounded generation** — the generator must cite `[n]`
+- **Citation-grounded generation**: the generator must cite `[n]`
   markers tied to the retrieved chunks; a deterministic guardrail (not an
   LLM) rejects missing or out-of-range citations, retries once, then refuses.
   It does not check that a cited chunk supports the claim. The prompt also
   fences the chunks in `<documents>` tags, escapes any such tag inside a
   chunk, and tells the model the content is data. That lowers the chance that
   a document's text is followed as an instruction. It is not a guarantee.
-- **LLM-as-judge evaluation** — a separately-configured model scores
+- **LLM-as-judge evaluation**: a separately-configured model scores
   answers against a golden question set, so retrieval/config changes can
   be compared objectively.
-- **Pluggable backends** — generator, judge, and embeddings are each a
+- **Pluggable backends**: generator, judge, and embeddings are each a
   `Protocol`/factory pair (`llm.py`, `embeddings.py`), so swapping
   providers is a config change, not a code change.
-- **Caching** — exact-match answer cache (Valkey) with two tiers. Tier 1
+- **Caching**: exact-match answer cache (Valkey) with two tiers. Tier 1
   (in `answer()`) is keyed on the query, the trimmed history,
   `history_max_turns`, the analyze prompt and every setting that affects
   the answer, including the index generation, a counter bumped on every
@@ -190,7 +190,7 @@ going through the API or the queue.
   chunk count. Chitchat and meta
   answers are not cached, and neither is a result built from a degraded
   retrieval (one side failed).
-- **Graph RAG (local/global search)** — at ingest time, an LLM extracts
+- **Graph RAG (local/global search)**: at ingest time, an LLM extracts
   (subject, relation, object) triplets per chunk, resolved to canonical
   entities by embedding similarity and written to Neo4j; Neo4j GDS Leiden
   assigns communities, each summarized once by an LLM. At query time, an
@@ -210,11 +210,11 @@ going through the API or the queue.
 
 ## Tech stack & rationale
 
-- **Chroma** — the vector store (`index.py`). Runs embedded in-process
+- **Chroma**: the vector store (`index.py`). Runs embedded in-process
   against a local persistence directory, so there's no separate database
   server to run or operate, matching this project's local-first,
   minimal-footprint posture.
-- **Valkey** (Redis-protocol) — the cache (`cache.py`): BM25 index
+- **Valkey** (Redis-protocol): the cache (`cache.py`), covering BM25 index
   rebuilds and exact-match answers, both keyed to invalidate
   automatically on re-ingest. In front of the
   Valkey-cached BM25 pickle, each process keeps the BM25 index (and the
@@ -223,7 +223,7 @@ going through the API or the queue.
   error is not cached. An open-source, Linux-Foundation-backed
   fork rather than Redis itself, avoiding Redis Inc.'s post-2024
   source-available licensing.
-- **NATS JetStream** — the ingest job queue (`queue.py`, `worker.py`):
+- **NATS JetStream**: the ingest job queue (`queue.py`, `worker.py`):
   `/v1/ingest`/`/v1/index` publish a job and return `202` immediately,
   so a slow ingest (a large PDF, a remote URL) never ties up a request
   thread; the `worker` process consumes durably (at-least-once,
@@ -235,21 +235,21 @@ going through the API or the queue.
   while a job runs, so a long job is not redelivered mid-run. Redelivery
   is capped (`max_deliver` 5), and an unparseable message is terminated.
   A finished job never goes back to `processing`.
-- **Neo4j, with GDS** — the graph store for Graph RAG (`graph_store.py`,
+- **Neo4j, with GDS**: the graph store for Graph RAG (`graph_store.py`,
   `community.py`), off by default. The `neo4j` compose service starts only
   with the `graph` profile. Leiden community detection runs
   *in the database* via the GDS library against the graph already
   stored there, instead of pulling the whole graph into Python for a
   separate algorithm library.
-- **FastAPI** — the HTTP API (`api.py`). Pydantic request/response
+- **FastAPI**: the HTTP API (`api.py`). Pydantic request/response
   models give it the same validation idiom already used for `Settings`
   (`config.py`), rather than a second one.
-- **Ollama, pluggable** — the default LLM/embeddings backend
+- **Ollama, pluggable**: the default LLM/embeddings backend
   (`llm.py`, `embeddings.py`): runs locally, no API key needed for the
   core pipeline. Anthropic/OpenAI swap in via config alone (same
-  `LLMClient`/`Embeddings` interface) — e.g. for the judge role in
-  evaluation — without touching call sites.
-- **Podman- or Docker-compose** — the whole stack (Ollama, Valkey, NATS,
+  `LLMClient`/`Embeddings` interface), for example for the judge role in
+  evaluation, without touching call sites.
+- **Podman- or Docker-compose**: the whole stack (Ollama, Valkey, NATS,
   the app, the worker, the web UI, and Neo4j under the `graph` profile) is
   one standard compose file, with every port published on `127.0.0.1`;
   Podman's rootless, daemonless execution is the documented default,
