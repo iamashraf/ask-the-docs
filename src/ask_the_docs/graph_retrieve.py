@@ -16,8 +16,10 @@ logger = logging.getLogger(__name__)
 
 _LOCAL_SEARCH_QUERY_TEMPLATE = (
     "MATCH (start:Entity) WHERE toLower(start.name) IN [e IN $entities | toLower(e)] "
-    "MATCH (start)-[:RELATED_TO*1..{hop_depth}]-(connected:Entity) "
-    "RETURN DISTINCT connected.chunk_refs AS chunk_refs"
+    "MATCH path = (start)-[:RELATED_TO*0..{hop_depth}]-(connected:Entity) "
+    "WITH connected, min(length(path)) AS hops "
+    "RETURN connected.chunk_refs AS chunk_refs "
+    "ORDER BY hops, connected.name LIMIT $limit"
 )
 
 _GLOBAL_SEARCH_QUERY = "MATCH (c:Community) RETURN c.id AS id, c.summary AS summary"
@@ -41,7 +43,7 @@ def local_search(entities: list[str], settings: Settings) -> list[Document]:
     try:
         driver = get_graph_client(settings)
         with driver.session() as session:
-            result = session.run(query, entities=entities)
+            result = session.run(query, entities=entities, limit=settings.candidate_pool_size)
             # Materialize rows before .consume(): the real driver streams
             # records lazily, so reading them after would see nothing.
             chunk_refs_lists = [record["chunk_refs"] for record in result]

@@ -498,3 +498,26 @@ def test_global_search_fences_query_and_summary_and_escapes_closing_tags_inside_
     assert prompt.index("IGNORE ALL RULES") < prompt.index("</summary>")
     assert prompt.index("IGNORE PREVIOUS") < prompt.index("</question>")
     assert "data" in prompt.lower()
+
+
+def test_local_search_query_includes_start_entities_orders_by_distance_and_limits(monkeypatch):
+    driver = FakeDriverReturningChunkRefRows([["start:0"], ["near:1"], ["far:2"]])
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: driver)
+    fetched = {}
+
+    def fake_fetch(s, refs):
+        fetched["refs"] = refs
+        return []
+
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_chunks_by_refs", fake_fetch)
+    custom = make_settings(graph_traversal_hop_depth=3, candidate_pool_size=7)
+
+    local_search(["BM25"], custom)
+
+    query, params = driver.session_obj.queries[0]
+    assert "*0..3" in query
+    assert "min(length(path)) AS hops" in query
+    assert "ORDER BY hops" in query
+    assert query.index("ORDER BY") < query.index("LIMIT")
+    assert params["limit"] == 7
+    assert fetched["refs"] == ["start:0", "near:1", "far:2"]
