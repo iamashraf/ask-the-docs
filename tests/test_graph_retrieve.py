@@ -279,6 +279,43 @@ def test_global_search_scores_community_zero_when_llm_raises(monkeypatch):
     assert result[0].page_content == "summary about transformers"
 
 
+def test_global_search_returns_empty_list_when_every_scoring_call_raises(monkeypatch):
+    from ask_the_docs.llm import OllamaUnavailableError
+
+    driver = FakeDriverReturningCommunities([(0, "a"), (1, "b")])
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: driver)
+    monkeypatch.setattr(
+        "ask_the_docs.graph_retrieve.get_llm_client",
+        lambda cfg: FakeClient(responses=[OllamaUnavailableError("down"), OllamaUnavailableError("down")]),
+    )
+
+    assert global_search("q", settings) == []
+
+
+def test_global_search_returns_empty_list_when_no_community_scores_above_zero(monkeypatch):
+    driver = FakeDriverReturningCommunities([(0, "a"), (1, "b")])
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: driver)
+    monkeypatch.setattr(
+        "ask_the_docs.graph_retrieve.get_llm_client",
+        lambda cfg: FakeClient(responses=['{"relevance": 0.0}', '{"relevance": 0}']),
+    )
+
+    assert global_search("q", settings) == []
+
+
+def test_global_search_drops_zero_scored_communities_and_keeps_positive_ones_ranked(monkeypatch):
+    driver = FakeDriverReturningCommunities([(0, "zero"), (1, "low"), (2, "high")])
+    monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: driver)
+    monkeypatch.setattr(
+        "ask_the_docs.graph_retrieve.get_llm_client",
+        lambda cfg: FakeClient(responses=['{"relevance": 0.0}', '{"relevance": 0.2}', '{"relevance": 0.9}']),
+    )
+
+    result = global_search("q", settings)
+
+    assert [d.page_content for d in result] == ["high", "low"]
+
+
 def test_global_search_parses_relevance_score_wrapped_in_markdown_fence(monkeypatch):
     driver = FakeDriverReturningCommunities([(0, "summary about RAG"), (1, "summary about transformers")])
     monkeypatch.setattr("ask_the_docs.graph_retrieve.get_graph_client", lambda s: driver)

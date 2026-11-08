@@ -86,6 +86,8 @@ def global_search(query: str, settings: Settings) -> list[Document]:
             score = 0.0
         scored.append((score, community_id, summary))
 
+    # Zero-scored summaries are noise (or scoring failures); [] lets retrieve() fall back to hybrid.
+    scored = [item for item in scored if item[0] > 0]
     scored.sort(key=lambda item: item[0], reverse=True)
     top = scored[: settings.global_search_top_communities]
     return [
