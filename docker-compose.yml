@@ -27,7 +27,10 @@ services:
         condition: service_healthy
     environment:
       - OLLAMA_HOST=http://ollama:11434
-    entrypoint: ["sh", "-c", "ollama pull llama3.1:8b && ollama pull nomic-embed-text && ollama pull qwen3-coder:30b"]
+      # Embeddings always run here (Anthropic has no embeddings API). Add chat models
+      # for a local generator or judge, e.g. OLLAMA_PULL_MODELS="nomic-embed-text llama3.1:8b".
+      - OLLAMA_PULL_MODELS=${OLLAMA_PULL_MODELS:-nomic-embed-text}
+    entrypoint: ["sh", "-c", "for m in $$OLLAMA_PULL_MODELS; do ollama pull $$m || exit 1; done"]
 
   valkey:
     image: valkey/valkey
@@ -91,6 +94,8 @@ services:
       # reaches it; the host side of the mapping is loopback only.
       - API_HOST=0.0.0.0
       - NATS_URL=nats://nats:4222
+      # Read from the host shell; blank means the app falls back to GENERATOR__API_KEY.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
@@ -124,6 +129,7 @@ services:
       - .env.local
     environment:
       - NATS_URL=nats://nats:4222
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     logging:
       driver: json-file
       options:
