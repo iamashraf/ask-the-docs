@@ -79,18 +79,34 @@ async def test_watch_docs_dir_publishes_an_ingest_job_for_a_modified_file(tmp_pa
     assert [(kind, source) for _, kind, source in published] == [("ingest", "a.txt")]
 
 
-async def test_watch_docs_dir_ignores_deleted_files(tmp_path, monkeypatch):
+async def test_watch_docs_dir_publishes_a_remove_job_for_a_deleted_file(tmp_path, monkeypatch):
     settings = make_settings(docs_dir=tmp_path)
 
     async def fake_awatch(path):
-        yield {(Change.deleted, str(tmp_path / "a.pdf"))}
+        yield {(Change.deleted, str(tmp_path / "a.pdf")), (Change.deleted, str(tmp_path / "notes.swp"))}
 
     monkeypatch.setattr("ask_the_docs.watcher.awatch", fake_awatch)
     created, published, _ = _patch_pipeline(monkeypatch)
 
     await watch_docs_dir(settings)
 
-    assert published == []
+    assert [(kind, source) for _, kind, source in published] == [("remove", "a.pdf")]
+
+
+async def test_watch_docs_dir_ingests_instead_of_removing_a_deleted_path_that_exists_again(tmp_path, monkeypatch):
+    """Editors save via delete+recreate; the file's content must win over the delete."""
+    settings = make_settings(docs_dir=tmp_path)
+    (tmp_path / "a.txt").write_text("hello")
+
+    async def fake_awatch(path):
+        yield {(Change.deleted, str(tmp_path / "a.txt")), (Change.added, str(tmp_path / "a.txt"))}
+
+    monkeypatch.setattr("ask_the_docs.watcher.awatch", fake_awatch)
+    created, published, _ = _patch_pipeline(monkeypatch)
+
+    await watch_docs_dir(settings)
+
+    assert [(kind, source) for _, kind, source in published] == [("ingest", "a.txt")]
 
 
 async def test_watch_docs_dir_ignores_disallowed_extensions(tmp_path, monkeypatch):

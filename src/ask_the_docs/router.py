@@ -12,8 +12,7 @@ from pydantic import BaseModel, Field
 
 from ask_the_docs import metrics
 from ask_the_docs.config import Settings
-from ask_the_docs.llm import get_llm_client
-from ask_the_docs.query_analyzer import _strip_code_fence
+from ask_the_docs.llm import get_llm_client, strip_code_fence
 
 Intent = Literal["doc", "chitchat", "meta"]
 RouteSource = Literal["rules", "llm", "fallback", "disabled"]
@@ -169,7 +168,7 @@ def analyze(query: str, history: list[Turn], settings: Settings) -> Route:
         if settings.generator.provider == "ollama":
             data = result.data
         else:
-            data = json.loads(_strip_code_fence(result.text))
+            data = json.loads(strip_code_fence(result.text))
 
         if not isinstance(data, dict):
             raise ValueError(f"analyze response wasn't a JSON object: {data!r}")

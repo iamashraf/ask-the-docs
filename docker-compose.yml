@@ -41,7 +41,9 @@ services:
 
   nats:
     image: nats:2-alpine
-    command: ["-js", "-m", "8222"]
+    command: ["-js", "-m", "8222", "--store_dir", "/data"]
+    volumes:
+      - nats_data:/data
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
       interval: 5s
@@ -88,6 +90,7 @@ services:
       # Listen on all interfaces inside the container so the published port
       # reaches it; the host side of the mapping is loopback only.
       - API_HOST=0.0.0.0
+      - NATS_URL=nats://nats:4222
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
@@ -119,6 +122,8 @@ services:
       - ./data:/app/data
     env_file:
       - .env.local
+    environment:
+      - NATS_URL=nats://nats:4222
     logging:
       driver: json-file
       options:
@@ -153,6 +158,7 @@ networks:
 volumes:
   ollama_data:
   valkey_data:
+  nats_data:
   neo4j_data:
   neo4j_logs:
   neo4j_plugins:

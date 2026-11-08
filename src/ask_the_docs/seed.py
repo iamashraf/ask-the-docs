@@ -1,6 +1,6 @@
 """One-time startup seeding: ingests a fixed list of sources on first
-server start. A marker file in index_dir prevents re-ingesting (and
-duplicating chunks, since there's no dedup yet) on every restart."""
+server start. A marker file in index_dir avoids re-fetching and re-embedding
+the sources on every restart."""
 
 import logging
 from pathlib import Path

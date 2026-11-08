@@ -36,4 +36,16 @@ describe("GET /api/jobs/[id]", () => {
 
     expect(res.status).toBe(404);
   });
+
+  test("encodes the id so it cannot alter the backend path", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ detail: "Job not found" }), { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await GET(new Request("http://localhost/api/jobs/x"), makeParams("../health?x=1#"));
+
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url.endsWith("/v1/jobs/..%2Fhealth%3Fx%3D1%23")).toBe(true);
+  });
 });

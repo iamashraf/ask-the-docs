@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import UTC, datetime
 from unittest.mock import Mock
 
@@ -9,9 +10,11 @@ from langchain_core.documents import Document
 
 from ask_the_docs import worker
 from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.ingest import PathSecurityError
 from ask_the_docs.worker import (
     DURABLE_CONSUMER_NAME,
     WORKER_ACK_WAIT_SECONDS,
+    WORKER_MAX_DELIVER,
     _consume_once,
     _sample_queue_depth,
     process_job,
@@ -64,7 +67,7 @@ async def test_process_job_ingests_and_marks_done(monkeypatch, caplog):
     docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
     monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
     built = {}
-    monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: built.setdefault("docs", d))
+    monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: built.setdefault("docs", d) and None)
     updates = []
 
     async def fake_update_job(client, job_id, *, status, result=None, error=None):
@@ -80,6 +83,23 @@ async def test_process_job_ingests_and_marks_done(monkeypatch, caplog):
     assert updates[0] == ("job-1", "processing", None, None)
     assert updates[1] == ("job-1", "done", {"documents_ingested": 1}, None)
     assert any("Job job-1 completed" in record.message for record in caplog.records)
+
+
+async def test_process_job_reports_graph_status_and_stays_done_when_graph_failed(monkeypatch):
+    docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
+    monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: "failed: ServiceUnavailable")
+    updates = []
+
+    async def fake_update_job(client, job_id, *, status, result=None, error=None):
+        updates.append((job_id, status, result, error))
+
+    monkeypatch.setattr("ask_the_docs.worker.update_job", fake_update_job)
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    await process_job(make_settings(), {"job_id": "job-g", "kind": "ingest", "source": "a.pdf"})
+
+    assert updates[-1] == ("job-g", "done", {"documents_ingested": 1, "graph": "failed: ServiceUnavailable"}, None)
 
 
 async def test_process_job_marks_failed_on_an_exception(monkeypatch):
@@ -99,13 +119,34 @@ async def test_process_job_marks_failed_on_an_exception(monkeypatch):
 
     assert updates[-1][0] == "job-2"
     assert updates[-1][1] == "failed"
-    assert "load failed" in updates[-1][2]
+    assert updates[-1][2] == "RuntimeError"
+    assert "load failed" not in updates[-1][2]
+
+
+async def test_process_job_keeps_the_message_of_the_projects_typed_errors(monkeypatch):
+    def boom(source):
+        raise PathSecurityError("Path escapes the docs directory")
+
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", boom)
+    updates = []
+
+    async def fake_update_job(client, job_id, *, status, result=None, error=None):
+        updates.append((job_id, status, error))
+
+    monkeypatch.setattr("ask_the_docs.worker.update_job", fake_update_job)
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    await process_job(make_settings(), {"job_id": "job-2", "kind": "ingest", "source": "../x"})
+
+    assert updates[-1][2] == "Path escapes the docs directory"
 
 
 async def test_process_job_handles_the_index_kind(monkeypatch, tmp_path):
     docs = [Document(page_content="hi", metadata={"source": "a.txt", "source_doc_id": "a"})]
     monkeypatch.setattr("ask_the_docs.worker.dispatch_all_under_docs_dir", lambda s: (docs, 3))
     monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: None)
+    pruned = []
+    monkeypatch.setattr("ask_the_docs.worker.prune_missing_docs_sources", lambda s: pruned.append(s))
     updates = []
 
     async def fake_update_job(client, job_id, *, status, result=None, error=None):
@@ -117,6 +158,43 @@ async def test_process_job_handles_the_index_kind(monkeypatch, tmp_path):
     await process_job(make_settings(), {"job_id": "job-3", "kind": "index", "source": None})
 
     assert updates[-1] == ("job-3", "done", {"documents_ingested": 1, "files_found": 3}, None)
+    assert len(pruned) == 1
+
+
+async def test_process_job_prunes_even_when_the_docs_dir_is_now_empty(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.worker.dispatch_all_under_docs_dir", lambda s: ([], 0))
+    pruned = []
+    monkeypatch.setattr("ask_the_docs.worker.prune_missing_docs_sources", lambda s: pruned.append(s))
+    monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    await process_job(make_settings(), {"job_id": "job-3", "kind": "index", "source": None})
+
+    assert len(pruned) == 1
+
+
+async def test_process_job_handles_the_remove_kind(monkeypatch, tmp_path):
+    from ask_the_docs.ingest import make_source_doc_id
+
+    settings = Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+        docs_dir=tmp_path,
+    )
+    removed = []
+    monkeypatch.setattr("ask_the_docs.worker.remove_sources", lambda ids, s: removed.append(ids))
+    updates = []
+
+    async def fake_update_job(client, job_id, *, status, result=None, error=None):
+        updates.append((job_id, status, result, error))
+
+    monkeypatch.setattr("ask_the_docs.worker.update_job", fake_update_job)
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    await process_job(settings, {"job_id": "job-r", "kind": "remove", "source": "a.pdf"})
+
+    assert removed == [{make_source_doc_id(str(tmp_path.resolve() / "a.pdf"))}]
+    assert updates[-1][1] == "done"
 
 
 async def test_process_job_is_safe_to_run_twice_for_the_same_job_id(monkeypatch):
@@ -247,13 +325,42 @@ async def test_process_job_observes_worker_job_latency_when_enqueued_at_present(
     assert after - before == 1.0
 
 
+async def test_process_job_does_not_block_the_event_loop_during_build_index(monkeypatch):
+    docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
+    monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: time.sleep(0.3))
+    monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    ticker_task = asyncio.create_task(ticker())
+    await process_job(make_settings(), {"job_id": "job-11", "kind": "ingest", "source": "a.pdf"})
+    ticker_task.cancel()
+
+    assert ticks > 10
+
+
 class FakeMsg:
     def __init__(self, data: bytes):
         self.data = data
         self.acked = False
+        self.termed = False
+        self.in_progress_calls = 0
 
     async def ack(self):
         self.acked = True
+
+    async def term(self):
+        self.termed = True
+
+    async def in_progress(self):
+        self.in_progress_calls += 1
 
 
 class FakeSub:
@@ -280,6 +387,25 @@ async def test_consume_once_acks_a_successfully_processed_message(monkeypatch):
 
     assert processed == [{"job_id": "job-1", "kind": "ingest", "source": "a.pdf"}]
     assert msg.acked is True
+
+
+async def test_consume_once_keeps_a_long_job_alive_with_in_progress_heartbeats(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.worker.WORKER_HEARTBEAT_SECONDS", 0.02)
+    msg = FakeMsg(json.dumps({"job_id": "job-1", "kind": "ingest", "source": "a.pdf"}).encode())
+    sub = FakeSub([[msg]])
+
+    async def slow_process_job(settings, payload):
+        await asyncio.sleep(0.2)
+
+    monkeypatch.setattr("ask_the_docs.worker.process_job", slow_process_job)
+
+    await _consume_once(make_settings(), sub)
+
+    assert msg.in_progress_calls >= 3
+    assert msg.acked is True
+    calls_at_end = msg.in_progress_calls
+    await asyncio.sleep(0.1)
+    assert msg.in_progress_calls == calls_at_end
 
 
 async def test_consume_once_leaves_a_message_unacked_and_does_not_raise_when_process_job_raises(monkeypatch):
@@ -348,6 +474,20 @@ async def test_consume_once_drops_an_unparseable_message_without_crashing(monkey
     await _consume_once(make_settings(), sub)  # must not raise
 
     assert called == []
+    assert msg.termed is True
+    assert msg.acked is False
+
+
+async def test_consume_once_terminates_a_payload_that_is_not_a_json_object(monkeypatch):
+    msg = FakeMsg(b"[1, 2]")
+    sub = FakeSub([[msg]])
+    called = []
+    monkeypatch.setattr("ask_the_docs.worker.process_job", lambda *a: called.append(a))
+
+    await _consume_once(make_settings(), sub)  # must not raise
+
+    assert called == []
+    assert msg.termed is True
 
 
 async def test_run_worker_subscribes_with_a_generous_ack_wait(monkeypatch):
@@ -377,6 +517,7 @@ async def test_run_worker_subscribes_with_a_generous_ack_wait(monkeypatch):
         await run_worker(make_settings())
 
     assert calls["config"].ack_wait == WORKER_ACK_WAIT_SECONDS
+    assert calls["config"].max_deliver == WORKER_MAX_DELIVER
 
 
 async def test_run_worker_configures_tracing(monkeypatch):
@@ -492,3 +633,59 @@ async def test_sample_queue_depth_logs_and_continues_on_consumer_info_failure(mo
         await _sample_queue_depth(js)  # must not raise
 
     assert any("queue depth" in r.getMessage().lower() for r in caplog.records if r.levelno == logging.WARNING)
+
+
+def _patch_warm_pipeline(monkeypatch, *, bump):
+    state = {"generation": 1}
+    docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
+
+    def fake_build_index(d, s):
+        state["generation"] += bump
+
+    monkeypatch.setattr("ask_the_docs.worker.build_index", fake_build_index)
+    monkeypatch.setattr("ask_the_docs.worker.get_index_generation", lambda s: state["generation"])
+    updates = []
+
+    async def fake_update_job(client, job_id, *, status, result=None, error=None):
+        updates.append((job_id, status, error))
+
+    monkeypatch.setattr("ask_the_docs.worker.update_job", fake_update_job)
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+    return updates
+
+
+async def test_process_job_warms_bm25_once_after_a_job_that_changed_the_index(monkeypatch):
+    updates = _patch_warm_pipeline(monkeypatch, bump=1)
+    warmed = []
+    monkeypatch.setattr("ask_the_docs.worker.get_bm25_index", lambda s: warmed.append(s))
+
+    await process_job(make_settings(), {"job_id": "j", "kind": "ingest", "source": "a.pdf"})
+
+    assert len(warmed) == 1
+    assert updates[-1][1] == "done"
+
+
+async def test_process_job_does_not_warm_bm25_when_the_index_is_unchanged(monkeypatch):
+    _patch_warm_pipeline(monkeypatch, bump=0)
+    warmed = []
+    monkeypatch.setattr("ask_the_docs.worker.get_bm25_index", lambda s: warmed.append(s))
+
+    await process_job(make_settings(), {"job_id": "j", "kind": "ingest", "source": "a.pdf"})
+
+    assert warmed == []
+
+
+async def test_process_job_stays_done_when_the_bm25_warm_fails(monkeypatch, caplog):
+    updates = _patch_warm_pipeline(monkeypatch, bump=1)
+
+    def boom(settings):
+        raise RuntimeError("valkey down")
+
+    monkeypatch.setattr("ask_the_docs.worker.get_bm25_index", boom)
+
+    with caplog.at_level(logging.WARNING):
+        await process_job(make_settings(), {"job_id": "j", "kind": "ingest", "source": "a.pdf"})
+
+    assert updates[-1] == ("j", "done", None)
+    assert "BM25" in caplog.text

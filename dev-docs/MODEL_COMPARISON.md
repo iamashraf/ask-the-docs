@@ -1,16 +1,16 @@
 # Generator model comparison: Ollama vs. hosted
 
 The generator provider/model is config-only (`GENERATOR__PROVIDER`,
-`GENERATOR__MODEL`, `GENERATOR__BASE_URL` — see `config.py`), so switching
+`GENERATOR__MODEL`, `GENERATOR__BASE_URL`; see `config.py`), so switching
 between Ollama and a hosted model needs no code change. This compares the
 local Ollama models against the hosted reference on latency, answer
 accuracy, and grounding discipline, so the default is picked by
-measurement rather than assumption — a fast model that invents answers is
+measurement rather than assumption. A fast model that invents answers is
 worse than a slow one that doesn't.
 
 ## Method
 
-- **Question set**: `evals/model_comparison_questions.yaml` — 10 questions
+- **Question set**: `evals/model_comparison_questions.yaml`: 10 questions
   the seeded corpus answers, and 5 in-domain near-misses (same topic as a
   seeded paper, but a specific fact or extrapolation the paper doesn't
   state), kept separate from `golden_questions.yaml`'s routing/regression
@@ -27,7 +27,7 @@ worse than a slow one that doesn't.
   path) is accepted on the first attempt instead of being retried
   (`answer.py`). Retrying a correct refusal just re-samples the same
   nondeterministic call, and can turn it into a wrong, confidently-cited
-  answer on the second attempt — this matters for reading the near-miss
+  answer on the second attempt. This matters for reading the near-miss
   columns below honestly.
 
 Metrics per candidate, all over the 15-question set:
@@ -42,8 +42,8 @@ Metrics per candidate, all over the 15-question set:
 
 ## Environment
 
-Apple M5 Pro, Ollama running inside a podman container (CPU-only — macOS
-container runtimes have no path to the GPU; the podman machine itself is
+Apple M5 Pro, Ollama running inside a podman container (CPU-only: macOS
+container runtimes have no path to the GPU, and the podman machine itself is
 allocated 8 vCPU / 32 GB). These numbers are specific to that setup, not a
 general claim about any of these models' speed.
 
@@ -68,8 +68,8 @@ answer, so the retry loop exhausts and falls back to refusal.
 The generator stays on the hosted `openai`/`gpt-4o-mini` config. None of
 the tested Ollama models match it on the combination of latency and
 grounding discipline: every faster local model (`granite3.3:2b`,
-`gemma3:4b`, `llama3.2:3b`) trades away grounding — 2–3 hallucinated
-near-misses instead of 1 — and the one local model with grounding as good
+`gemma3:4b`, `llama3.2:3b`) trades away grounding (2 or 3 hallucinated
+near-misses instead of 1), and the one local model with grounding as good
 as `llama3.1:8b` (`granite3.3:8b`) is slower, not faster. `llama3.1:8b`
 remains the best Ollama option, at roughly 2.5x the hosted reference's
 latency.

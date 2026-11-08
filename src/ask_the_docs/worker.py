@@ -13,10 +13,19 @@ from nats.js.api import ConsumerConfig
 from opentelemetry import propagate, trace
 
 from ask_the_docs import metrics
+from ask_the_docs.bm25_index import get_bm25_index
 from ask_the_docs.config import Settings, get_settings
-from ask_the_docs.index import build_index
-from ask_the_docs.ingest import dispatch, dispatch_all_under_docs_dir
-from ask_the_docs.jobs import get_async_cache_client, update_job
+from ask_the_docs.index import IndexWriteError, build_index, get_index_generation, prune_missing_docs_sources, remove_sources
+from ask_the_docs.ingest import (
+    PathSecurityError,
+    UnsupportedFileTypeError,
+    UrlSecurityError,
+    dispatch,
+    dispatch_all_under_docs_dir,
+    make_source_doc_id,
+)
+from ask_the_docs.jobs import close_async_cache_client, get_async_cache_client, update_job
+from ask_the_docs.llm import OllamaUnavailableError
 from ask_the_docs.queue import INGEST_JOBS_STREAM, INGEST_JOBS_SUBJECT, ensure_stream
 from ask_the_docs.tracing import configure_logging, configure_metrics, configure_tracing
 
@@ -28,6 +37,18 @@ DURABLE_CONSUMER_NAME = "ingest-workers"
 # e2e/test_ingest_batch_e2e.py) so a long-running job's ack doesn't become
 # eligible for redelivery while it is still in progress.
 WORKER_ACK_WAIT_SECONDS = 300
+# Bounds redelivery of a job that keeps crashing the worker.
+WORKER_MAX_DELIVER = 5
+WORKER_HEARTBEAT_SECONDS = WORKER_ACK_WAIT_SECONDS / 3
+
+# Errors whose message is written for users; anything else may leak paths or internals.
+USER_FACING_ERRORS = (
+    IndexWriteError,
+    OllamaUnavailableError,
+    PathSecurityError,
+    UnsupportedFileTypeError,
+    UrlSecurityError,
+)
 
 
 def _observe_worker_job_latency(payload: dict) -> None:
@@ -43,34 +64,68 @@ def _observe_worker_job_latency(payload: dict) -> None:
     metrics.worker_job_latency_seconds.record((datetime.now(UTC) - enqueued_dt).total_seconds())
 
 
+async def _warm_bm25_if_changed(settings: Settings, generation_before: int) -> None:
+    """Builds the new generation's BM25 cache so the first query doesn't pay for it; never fails the job."""
+    if get_index_generation(settings) == generation_before:
+        return
+    try:
+        await asyncio.to_thread(get_bm25_index, settings)
+    except Exception:
+        logger.warning("BM25 pre-warm failed; the first query will rebuild it.", exc_info=True)
+
+
 async def process_job(settings: Settings, payload: dict) -> None:
     job_id = payload["job_id"]
     kind = payload["kind"]
     source = payload.get("source")
     client = get_async_cache_client(settings)
     await update_job(client, job_id, status="processing")
+    generation_before = get_index_generation(settings)
     try:
+        if kind == "remove":
+            source_doc_id = make_source_doc_id(str(settings.docs_dir.resolve() / source))
+            await asyncio.to_thread(remove_sources, {source_doc_id}, settings)
+            await _warm_bm25_if_changed(settings, generation_before)
+            await update_job(client, job_id, status="done", result={"sources_removed": 1})
+            metrics.ingest_job_total.add(1, {"status": "success"})
+            return
         if kind == "ingest":
-            docs = dispatch(source)
+            docs = await asyncio.to_thread(dispatch, source)
             file_count = 1
         else:
-            docs, file_count = dispatch_all_under_docs_dir(settings)
+            docs, file_count = await asyncio.to_thread(dispatch_all_under_docs_dir, settings)
+        graph_status = None
         if docs:
             build_start = time.monotonic()
-            build_index(docs, settings)
+            graph_status = await asyncio.to_thread(build_index, docs, settings)
             metrics.build_index_latency_seconds.record(time.monotonic() - build_start)
+        if kind == "index":
+            await asyncio.to_thread(prune_missing_docs_sources, settings)
+        await _warm_bm25_if_changed(settings, generation_before)
         result = {"documents_ingested": len(docs)}
         if kind == "index":
             result["files_found"] = file_count
+        if graph_status:
+            result["graph"] = graph_status
         await update_job(client, job_id, status="done", result=result)
         logger.info("Job %s completed: kind=%s, documents=%d", job_id, kind, len(docs))
         metrics.ingest_job_total.add(1, {"status": "success"})
     except Exception as exc:
         logger.warning("Job %s failed: %s", job_id, exc, exc_info=True)
-        await update_job(client, job_id, status="failed", error=str(exc))
+        await update_job(client, job_id, status="failed", error=str(exc) if isinstance(exc, USER_FACING_ERRORS) else type(exc).__name__)
         metrics.ingest_job_total.add(1, {"status": "failure"})
     finally:
         _observe_worker_job_latency(payload)
+
+
+async def _heartbeat(msg) -> None:
+    """Resets the ack deadline while a job runs so a long job isn't redelivered mid-flight."""
+    while True:
+        await asyncio.sleep(WORKER_HEARTBEAT_SECONDS)
+        try:
+            await msg.in_progress()
+        except Exception:
+            logger.warning("Failed to extend the ack deadline", exc_info=True)
 
 
 async def _consume_once(settings: Settings, sub) -> None:
@@ -85,10 +140,14 @@ async def _consume_once(settings: Settings, sub) -> None:
     for msg in msgs:
         try:
             payload = json.loads(msg.data)
+            if not isinstance(payload, dict):
+                raise ValueError("job payload is not a JSON object")
         except Exception:
             logger.warning("Dropping an unparseable job message", exc_info=True)
+            await msg.term()
             continue
         ctx = propagate.extract({"traceparent": payload.get("traceparent")})
+        heartbeat = asyncio.create_task(_heartbeat(msg))
         try:
             with tracer.start_as_current_span(
                 "process_job",
@@ -103,6 +162,8 @@ async def _consume_once(settings: Settings, sub) -> None:
                 exc_info=True,
             )
             continue
+        finally:
+            heartbeat.cancel()
         await msg.ack()
 
 
@@ -126,12 +187,16 @@ async def run_worker(settings: Settings) -> None:
     sub = await js.pull_subscribe(
         INGEST_JOBS_SUBJECT,
         durable=DURABLE_CONSUMER_NAME,
-        config=ConsumerConfig(ack_wait=WORKER_ACK_WAIT_SECONDS),
+        config=ConsumerConfig(ack_wait=WORKER_ACK_WAIT_SECONDS, max_deliver=WORKER_MAX_DELIVER),
     )
     logger.info("Worker started, consuming %s", INGEST_JOBS_SUBJECT)
-    while True:
-        await _sample_queue_depth(js)
-        await _consume_once(settings, sub)
+    try:
+        while True:
+            await _sample_queue_depth(js)
+            await _consume_once(settings, sub)
+    finally:
+        await nc.close()
+        await close_async_cache_client()
 
 
 def main() -> None:

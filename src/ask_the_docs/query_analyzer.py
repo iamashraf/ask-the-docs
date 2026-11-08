@@ -3,7 +3,6 @@ how a user's question should be routed."""
 
 import json
 import logging
-import re
 import time
 from dataclasses import dataclass
 from typing import Literal
@@ -12,7 +11,7 @@ from opentelemetry import trace
 
 from ask_the_docs import metrics
 from ask_the_docs.config import Settings
-from ask_the_docs.llm import get_llm_client
+from ask_the_docs.llm import get_llm_client, strip_code_fence
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -29,16 +28,6 @@ Respond with ONLY a JSON object of this exact shape:
 {{"label": "local" or "global", "entities": ["<string>", ...]}}
 """
 
-
-FENCED_BLOCK_PATTERN = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL)
-
-
-def _strip_code_fence(raw: str) -> str:
-    """Small/local models often wrap JSON responses in markdown code fences; non-str input is left to json.loads to reject."""
-    if not isinstance(raw, str):
-        return raw
-    match = FENCED_BLOCK_PATTERN.match(raw.strip())
-    return match.group(1) if match else raw
 
 
 @dataclass
@@ -78,7 +67,7 @@ def classify_query(query: str, settings: Settings) -> QueryClassification:
 
         raw = result.text
         try:
-            data = json.loads(_strip_code_fence(raw))
+            data = json.loads(strip_code_fence(raw))
             label = data["label"]
             if label not in ("local", "global"):
                 raise ValueError(f"unexpected label: {label!r}")

@@ -1,5 +1,5 @@
 """File-watcher mode: observes docs_dir and enqueues an ingest job per
-new/changed file over the existing async pipeline (jobs.py + queue.py +
+new/changed file (and a remove job per deleted one) over the existing async pipeline (jobs.py + queue.py +
 worker.py), instead of ingesting directly. Mirrors api.py's
 _create_and_publish_job so a watcher-triggered job is trackable via
 GET /v1/jobs/{id} exactly like an API-triggered one."""
@@ -18,12 +18,12 @@ from ask_the_docs.queue import QueuePublishError, publish_ingest_job
 logger = logging.getLogger(__name__)
 
 
-async def _enqueue_ingest(settings: Settings, source: str) -> None:
+async def _enqueue(settings: Settings, kind: str, source: str) -> None:
     job_id = str(uuid.uuid4())
     client = get_async_cache_client(settings)
-    await create_job(client, job_id, kind="ingest", source=source)
+    await create_job(client, job_id, kind=kind, source=source)
     try:
-        await publish_ingest_job(settings, job_id, kind="ingest", source=source)
+        await publish_ingest_job(settings, job_id, kind=kind, source=source)
     except QueuePublishError as exc:
         logger.warning("Failed to publish watcher job %s for %s: %s", job_id, source, exc)
         try:
@@ -37,8 +37,6 @@ async def watch_docs_dir(settings: Settings) -> None:
     async for changes in awatch(settings.docs_dir):
         seen_sources: set[str] = set()
         for change, raw_path in changes:
-            if change == Change.deleted:
-                continue
             path = Path(raw_path).resolve()
             if path.suffix.lower() not in ALLOWED_EXTENSIONS:
                 continue
@@ -50,4 +48,6 @@ async def watch_docs_dir(settings: Settings) -> None:
             if source in seen_sources:
                 continue
             seen_sources.add(source)
-            await _enqueue_ingest(settings, source)
+            # A delete+recreate save leaves the file in place: ingest it rather than remove it.
+            kind = "remove" if change == Change.deleted and not path.exists() else "ingest"
+            await _enqueue(settings, kind, source)

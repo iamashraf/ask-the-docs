@@ -2,7 +2,10 @@
 
 import hashlib
 import logging
+import os
+import tempfile
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,8 +22,14 @@ from ask_the_docs.config import Settings
 from ask_the_docs.embeddings import get_embeddings
 from ask_the_docs.entity_resolution import resolve_entities
 from ask_the_docs.graph_client import get_graph_client
-from ask_the_docs.graph_extract import extract_triplets
-from ask_the_docs.graph_store import write_graph
+from ask_the_docs.graph_extract import Triplet, extract_triplets
+from ask_the_docs.graph_store import (
+    clear_graph,
+    get_entity_names,
+    graph_supports_incremental,
+    write_graph,
+)
+from ask_the_docs.graph_store import remove_sources as graph_remove_sources
 from ask_the_docs.llm import OllamaUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -44,32 +53,43 @@ def _generation_path(settings: Settings) -> Path:
 
 
 def get_index_generation(settings: Settings) -> int:
-    """Monotonic counter bumped on every real write to the index (insert
-    or delete-and-replace) -- unlike chunk count, it changes even when a
+    """Monotonic counter bumped after any mutation of the store (insert,
+    replace, pure delete, or a failed run that already changed it), not on an
+    unchanged re-ingest -- unlike chunk count, it changes even when a
     replace produces the same number of chunks, so cache keys built from
     it (answer.py, bm25_index.py) can't be fooled by a same-length edit.
     Reads a local file, not Chroma, so computing a cache key never needs
     the index to be reachable."""
     path = _generation_path(settings)
-    return int(path.read_text()) if path.exists() else 0
+    try:
+        return int(path.read_text())
+    except (FileNotFoundError, ValueError):
+        return 0
 
 
 def _bump_index_generation(settings: Settings) -> None:
     path = _generation_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(get_index_generation(settings) + 1))
+    # shortcut: a bump lost across two concurrent writers is not prevented, upgrade to a lock or Valkey INCR if needed.
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as tmp:
+        tmp.write(str(get_index_generation(settings) + 1))
+    os.replace(tmp.name, path)
 
 
-def _hash_sources(docs: list[Document]) -> dict[str, str]:
-    """SHA-256 of each source_doc_id's full raw content (every Document
-    sharing that id, concatenated in input order), computed before
-    chunking -- lets a re-ingest detect an unchanged source without
-    comparing chunk-by-chunk."""
-    content_by_id: dict[str, str] = {}
+def _hash_sources(docs: list[Document], embedding_model: str) -> dict[str, str]:
+    """SHA-256 per source_doc_id over its length-prefixed page contents and
+    content_format plus everything else that shapes the stored chunks
+    (chunk size/overlap, embedding model), computed before chunking -- lets a
+    re-ingest detect an unchanged source without comparing chunk-by-chunk."""
+    hashers = {}
     for doc in docs:
         doc_id = doc.metadata["source_doc_id"]
-        content_by_id[doc_id] = content_by_id.get(doc_id, "") + doc.page_content
-    return {doc_id: hashlib.sha256(content.encode()).hexdigest() for doc_id, content in content_by_id.items()}
+        if doc_id not in hashers:
+            hashers[doc_id] = hashlib.sha256(f"{CHUNK_SIZE}:{CHUNK_OVERLAP}:{embedding_model}\0".encode())
+        content = doc.page_content.encode()
+        fmt = doc.metadata.get("content_format", "")
+        hashers[doc_id].update(f"{fmt}:{len(content)}:".encode() + content)
+    return {doc_id: h.hexdigest() for doc_id, h in hashers.items()}
 
 
 def _markdown_heading_prefix(section_metadata: dict) -> str:
@@ -105,7 +125,7 @@ def chunk_documents(docs: list[Document], embedding_model: str) -> list[Document
     converted to markdown upstream) are split header-first (see
     _split_markdown_document); every other source type keeps today's plain
     char-based splitting."""
-    source_hashes = _hash_sources(docs)
+    source_hashes = _hash_sources(docs, embedding_model)
     generic_splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     chunks: list[Document] = []
     for doc in docs:
@@ -145,29 +165,79 @@ def _embedding_model_name(settings: Settings) -> str:
     return settings.huggingface_embedding_model
 
 
-def build_graph(chunks: list[Document], settings: Settings) -> None:
-    """Extracts/resolves/writes a knowledge graph from chunks; no-op unless settings.graph_enabled."""
-    if not settings.graph_enabled:
-        return
+def _extract_chunks(chunks: list[Document], settings: Settings) -> tuple[list[Triplet], list[str], str | None]:
+    """Per-chunk triplet extraction; returns (triplets, their chunk refs, first failure's class name)."""
+    triplets = []
+    chunk_refs = []
+    failure = None
+    for chunk in chunks:
+        chunk_ref = f"{chunk.metadata['source_doc_id']}:{chunk.metadata['chunk_index']}"
+        try:
+            chunk_triplets = extract_triplets(chunk.page_content, settings)
+        except Exception as exc:
+            # Isolated per chunk: one transient LLM failure must not abort
+            # graph building for every other chunk in the ingest.
+            logger.warning("Graph triplet extraction failed for chunk %s: %s", chunk_ref, exc)
+            failure = failure or type(exc).__name__
+            continue
+        for triplet in chunk_triplets:
+            triplets.append(triplet)
+            chunk_refs.append(chunk_ref)
+    return triplets, chunk_refs, failure
 
+
+def _build_graph_incremental(new_chunks: list[Document], changed_sources: set[str], settings: Settings) -> str | None:
+    """Returns the build status, or None when the caller must fall back to a full rebuild."""
     try:
-        triplets = []
-        chunk_refs = []
-        for chunk in chunks:
-            chunk_ref = f"{chunk.metadata['source_doc_id']}:{chunk.metadata['chunk_index']}"
-            try:
-                chunk_triplets = extract_triplets(chunk.page_content, settings)
-            except Exception as exc:
-                # Isolated per chunk: one transient LLM failure must not abort
-                # graph building for every other chunk in the ingest.
-                logger.warning("Graph triplet extraction failed for chunk %s: %s", chunk_ref, exc)
-                continue
-            for triplet in chunk_triplets:
-                triplets.append(triplet)
-                chunk_refs.append(chunk_ref)
+        driver = get_graph_client(settings)
+        if not graph_supports_incremental(driver):
+            return None
+        if not new_chunks and not changed_sources:
+            return "ok"
+        triplets, chunk_refs, failure = _extract_chunks(new_chunks, settings)
+        if not triplets and failure:
+            return f"failed: {failure}"
+        resolved_triplets = resolve_entities(triplets, settings, existing_names=get_entity_names(driver)) if triplets else []
+        if not resolved_triplets and not changed_sources:
+            return "skipped"
+        graph_remove_sources(driver, changed_sources)
+        write_failure = resolved_triplets and write_graph(driver, list(zip(resolved_triplets, chunk_refs, strict=True)))
+        if write_failure:
+            return None
+        failure = run_community_detection(driver) or failure
+        failure = summarize_communities(driver, settings) or failure
+        return f"failed: {failure}" if failure else "ok"
+    except Exception:
+        # A half-applied incremental update is repaired by the full rebuild, which re-extracts from the cache.
+        logger.warning("Incremental graph update failed; falling back to a full rebuild.", exc_info=True)
+        return None
+
+
+def build_graph(
+    chunks: list[Document],
+    settings: Settings,
+    changed_sources: set[str] | None = None,
+    all_chunks: Callable[[], list[Document]] | None = None,
+) -> str:
+    """Builds the knowledge graph; returns "ok", "skipped" (disabled or nothing extracted) or "failed: <exception class>".
+    With changed_sources, chunks are only the new ones and a non-empty graph is updated in place; otherwise (or on
+    fallback via all_chunks()) the graph is rebuilt from scratch from chunks."""
+    if not settings.graph_enabled:
+        return "skipped"
+
+    if changed_sources is not None:
+        status = _build_graph_incremental(chunks, changed_sources, settings)
+        if status is not None:
+            return status
+        if all_chunks is not None:
+            chunks = all_chunks()
+
+    failure = None
+    try:
+        triplets, chunk_refs, failure = _extract_chunks(chunks, settings)
 
         if not triplets:
-            return
+            return f"failed: {failure}" if failure else "skipped"
 
         # Resolved once over the whole corpus's triplets, not per chunk -- entity
         # clustering needs every entity name in play to merge well.
@@ -176,19 +246,23 @@ def build_graph(chunks: list[Document], settings: Settings) -> None:
         driver = None
         try:
             driver = get_graph_client(settings)
-            write_graph(driver, list(zip(resolved_triplets, chunk_refs, strict=True)))
-        except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
+            clear_graph(driver)
+            failure = write_graph(driver, list(zip(resolved_triplets, chunk_refs, strict=True))) or failure
+        except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError) as exc:
             logger.warning("Graph write failed; continuing without updating the graph.", exc_info=True)
+            failure = failure or type(exc).__name__
 
         # Skip if get_graph_client itself failed above -- no driver to run
         # community detection/summarization with.
         if driver is not None:
-            run_community_detection(driver)
-            summarize_communities(driver, settings)
-    except Exception:
+            failure = run_community_detection(driver) or failure
+            failure = summarize_communities(driver, settings) or failure
+    except Exception as exc:
         # Graph building is an optional enhancement, same reasoning as
         # retrieve.py's query-rewrite step -- it must never crash ingestion.
         logger.warning("Graph build failed; continuing without updating the graph.", exc_info=True)
+        failure = failure or type(exc).__name__
+    return f"failed: {failure}" if failure else "ok"
 
 
 def _group_by_source(chunks: list[Document]) -> dict[str, list[Document]]:
@@ -198,11 +272,17 @@ def _group_by_source(chunks: list[Document]) -> dict[str, list[Document]]:
     return grouped
 
 
-def build_index(docs: list[Document], settings: Settings) -> Chroma:
+def _chunk_id(chunk: Document) -> str:
+    return f"{chunk.metadata['source_doc_id']}:{chunk.metadata['content_hash'][:16]}:{chunk.metadata['chunk_index']}"
+
+
+def build_index(docs: list[Document], settings: Settings, full_graph_rebuild: bool = False) -> str | None:
     """Idempotent: a source whose existing chunks already match its fresh
     content hash and count is skipped entirely (no re-embed, no re-insert);
     any other source (new, changed, or a stale partial-write leftover) has
-    its existing chunks deleted and replaced."""
+    its existing chunks deleted and replaced. Returns the graph build status
+    (see build_graph), or None when graph_enabled is off. The graph is updated
+    incrementally for the replaced/deleted sources unless full_graph_rebuild."""
     chunks = chunk_documents(docs, embedding_model=_embedding_model_name(settings))
     index = load_index(settings)
     chunks_by_source = _group_by_source(chunks)
@@ -212,36 +292,92 @@ def build_index(docs: list[Document], settings: Settings) -> Chroma:
     # deleted, which a chunks-only loop would silently skip.
     attempted_source_ids = {doc.metadata["source_doc_id"] for doc in docs}
 
-    to_insert: list[Document] = []
-    for source_doc_id in attempted_source_ids:
-        source_chunks = chunks_by_source.get(source_doc_id, [])
-        existing = index.get(where={"source_doc_id": source_doc_id}, include=["metadatas"])
-        if existing["ids"]:
-            # .get(), not [...]: a chunk indexed before content-hash dedup
-            # existed has no "content_hash" key at all, not a mismatched
-            # one -- None here correctly reads as "changed" and triggers
-            # a replace, same as any other mismatch.
-            existing_hashes = {m.get("content_hash") for m in existing["metadatas"]}
-            if (
-                source_chunks
-                and existing_hashes == {source_chunks[0].metadata["content_hash"]}
-                and len(existing["ids"]) == len(source_chunks)
-            ):
-                continue
-            index.delete(ids=existing["ids"])
-        to_insert.extend(source_chunks)
+    pending: list[tuple[str, list[Document], list[str]]] = []
+    mutated = False
+    try:
+        for source_doc_id in attempted_source_ids:
+            source_chunks = chunks_by_source.get(source_doc_id, [])
+            existing = index.get(where={"source_doc_id": source_doc_id}, include=["metadatas"])
+            if existing["ids"]:
+                # .get(), not [...]: a chunk indexed before content-hash dedup
+                # existed has no "content_hash" key at all, not a mismatched
+                # one -- None here correctly reads as "changed" and triggers
+                # a replace, same as any other mismatch.
+                existing_hashes = {m.get("content_hash") for m in existing["metadatas"]}
+                if (
+                    source_chunks
+                    and existing_hashes == {source_chunks[0].metadata["content_hash"]}
+                    and len(existing["ids"]) == len(source_chunks)
+                ):
+                    continue
+            new_ids = {_chunk_id(c) for c in source_chunks}
+            pending.append((source_doc_id, source_chunks, [i for i in existing["ids"] if i not in new_ids]))
 
-    if to_insert:
+        # Insert-then-delete per source with deterministic ids: a failed insert
+        # leaves the old chunks intact, and a redelivered or concurrent run
+        # upserts the same ids instead of duplicating.
+        for _, source_chunks, stale_ids in pending:
+            for i in range(0, len(source_chunks), INDEX_WRITE_BATCH_SIZE):
+                batch = source_chunks[i : i + INDEX_WRITE_BATCH_SIZE]
+                mutated = True
+                index.add_documents(batch, ids=[_chunk_id(c) for c in batch])
+            if stale_ids:
+                mutated = True
+                index.delete(ids=stale_ids)
+    except OllamaUnavailableError:
+        raise
+    except Exception as exc:
+        raise IndexWriteError("Failed to update the index") from exc
+    finally:
+        # Bumped even on failure: a partial insert or delete already changed the store.
+        if mutated:
+            _bump_index_generation(settings)
+    if not settings.graph_enabled:
+        return None
+    if full_graph_rebuild:
+        return build_graph(get_all_chunks(settings), settings)
+    changed_sources = {source_doc_id for source_doc_id, _, _ in pending}
+    new_chunks = [c for _, source_chunks, _ in pending for c in source_chunks]
+    return build_graph(new_chunks, settings, changed_sources, lambda: get_all_chunks(settings))
+
+
+def remove_sources(source_doc_ids: set[str], settings: Settings) -> None:
+    """Deletes these sources' chunks (and graph facts when enabled); absent ids are a no-op."""
+    mutated = False
+    try:
+        index = load_index(settings)
+        for source_doc_id in source_doc_ids:
+            ids = index.get(where={"source_doc_id": source_doc_id}, include=[])["ids"]
+            if ids:
+                mutated = True
+                index.delete(ids=ids)
+    except Exception as exc:
+        raise IndexWriteError("Failed to update the index") from exc
+    finally:
+        if mutated:
+            _bump_index_generation(settings)
+    if mutated and settings.graph_enabled:
         try:
-            for i in range(0, len(to_insert), INDEX_WRITE_BATCH_SIZE):
-                index.add_documents(to_insert[i : i + INDEX_WRITE_BATCH_SIZE])
-        except OllamaUnavailableError:
-            raise
-        except Exception as exc:
-            raise IndexWriteError(f"Failed to write {len(to_insert)} chunk(s) to the index") from exc
-        _bump_index_generation(settings)
-    build_graph(chunks, settings)
-    return index
+            graph_remove_sources(get_graph_client(settings), set(source_doc_ids))
+        except Exception:
+            logger.warning("Graph removal failed; the graph keeps facts of the removed sources.", exc_info=True)
+
+
+def prune_missing_docs_sources(settings: Settings) -> set[str]:
+    """Removes indexed sources whose file lived under docs_dir and is gone; URLs and other non-path sources are never touched."""
+    docs_dir = settings.docs_dir.resolve()
+    try:
+        metadatas = load_index(settings).get(include=["metadatas"])["metadatas"]
+    except Exception as exc:
+        raise IndexWriteError("Failed to read the index") from exc
+    vanished = set()
+    for metadata in metadatas:
+        path = Path(metadata["source"])
+        if path.is_absolute() and path.is_relative_to(docs_dir) and not path.exists():
+            vanished.add(metadata["source_doc_id"])
+    if vanished:
+        remove_sources(vanished, settings)
+    return vanished
 
 
 _index_cache: dict[tuple[str, int, str], Chroma] = {}

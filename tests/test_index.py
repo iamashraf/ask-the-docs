@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import os
 import threading
 import time
 
@@ -11,6 +12,7 @@ from neo4j.exceptions import Neo4jError, ServiceUnavailable
 from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.graph_extract import Triplet
 from ask_the_docs.index import (
+    _bump_index_generation,
     CHUNK_SIZE,
     INDEX_WRITE_BATCH_SIZE,
     IndexWriteError,
@@ -23,6 +25,8 @@ from ask_the_docs.index import (
     get_collection_name,
     get_index_generation,
     list_sources,
+    prune_missing_docs_sources,
+    remove_sources,
     load_index,
 )
 from ask_the_docs.llm import OllamaUnavailableError
@@ -137,6 +141,48 @@ def test_chunk_documents_content_hash_changes_when_content_changes():
     hash_v1 = chunk_documents([doc_v1], embedding_model="m")[0].metadata["content_hash"]
     hash_v2 = chunk_documents([doc_v2], embedding_model="m")[0].metadata["content_hash"]
     assert hash_v1 != hash_v2
+
+
+def _content_hash(pages, embedding_model="m", content_format=None):
+    metadata = {"source": "a.txt", "source_doc_id": "a"}
+    if content_format:
+        metadata["content_format"] = content_format
+    docs = [Document(page_content=p, metadata=dict(metadata)) for p in pages]
+    return chunk_documents(docs, embedding_model=embedding_model)[0].metadata["content_hash"]
+
+
+def test_chunk_documents_content_hash_differs_for_different_page_boundaries():
+    assert _content_hash(["ab", "c"]) != _content_hash(["a", "bc"])
+
+
+def test_chunk_documents_content_hash_changes_with_embedding_model():
+    assert _content_hash(["hello"], embedding_model="m1") != _content_hash(["hello"], embedding_model="m2")
+
+
+def test_chunk_documents_content_hash_changes_with_content_format():
+    assert _content_hash(["hello"]) != _content_hash(["hello"], content_format="markdown")
+
+
+def test_chunk_documents_content_hash_changes_with_chunk_settings(monkeypatch):
+    base = _content_hash(["hello"])
+    monkeypatch.setattr("ask_the_docs.index.CHUNK_SIZE", 256)
+    assert _content_hash(["hello"]) != base
+    monkeypatch.setattr("ask_the_docs.index.CHUNK_SIZE", 512)
+    monkeypatch.setattr("ask_the_docs.index.CHUNK_OVERLAP", 10)
+    assert _content_hash(["hello"]) != base
+
+
+def test_build_index_reembeds_an_unchanged_source_when_the_embedding_model_changes(tmp_path, monkeypatch):
+    counting = CountingEmbeddings()
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: counting)
+    settings = make_settings(tmp_path)
+    doc = Document(page_content="hello world", metadata={"source": "a.txt", "source_doc_id": "a"})
+    build_index([doc], settings)
+    calls = counting.embed_documents_call_count
+
+    build_index([doc], settings.model_copy(update={"ollama_embedding_model": "other-model"}))
+
+    assert counting.embed_documents_call_count == calls + 1
 
 
 def test_chunk_documents_markdown_heading_survives_in_every_chunk_of_its_section():
@@ -389,7 +435,7 @@ def test_build_index_wraps_non_ollama_write_failures(tmp_path, monkeypatch):
         def get(self, where, include):
             return {"ids": [], "metadatas": []}
 
-        def add_documents(self, docs):
+        def add_documents(self, docs, ids=None):
             raise RuntimeError("disk full")
 
     monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: BrokenChroma())
@@ -407,7 +453,7 @@ def test_build_index_lets_ollama_unavailable_propagate_unwrapped(tmp_path, monke
         def get(self, where, include):
             return {"ids": [], "metadatas": []}
 
-        def add_documents(self, docs):
+        def add_documents(self, docs, ids=None):
             raise OllamaUnavailableError("could not reach ollama")
 
     monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: UnreachableChroma())
@@ -415,6 +461,88 @@ def test_build_index_lets_ollama_unavailable_propagate_unwrapped(tmp_path, monke
 
     with pytest.raises(OllamaUnavailableError):
         build_index([doc], make_settings(tmp_path))
+
+
+def test_build_index_surfaces_an_unreachable_ollama_embedder_as_ollama_unavailable(tmp_path, monkeypatch):
+    import requests
+
+    from ask_the_docs.embeddings import OllamaEmbeddings
+
+    def refuse(url, json, timeout):
+        raise requests.ConnectionError("refused")
+
+    monkeypatch.setattr(requests, "post", refuse)
+    monkeypatch.setattr(
+        "ask_the_docs.index.get_embeddings", lambda settings: OllamaEmbeddings(model="m", base_url="http://x")
+    )
+    doc = Document(page_content="hello", metadata={"source": "a.txt", "source_doc_id": "a"})
+
+    with pytest.raises(OllamaUnavailableError):
+        build_index([doc], make_settings(tmp_path))
+
+
+@pytest.mark.parametrize("failing_call", ["get", "delete"])
+def test_build_index_wraps_chroma_read_and_delete_failures(tmp_path, monkeypatch, failing_call):
+    class BrokenChroma:
+        def get(self, where, include):
+            if failing_call == "get":
+                raise RuntimeError("chroma down")
+            return {"ids": ["old"], "metadatas": [{"content_hash": "stale"}]}
+
+        def delete(self, ids):
+            raise RuntimeError("chroma down")
+
+        def add_documents(self, docs, ids=None):
+            pass
+
+    monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: BrokenChroma())
+    doc = Document(page_content="hello", metadata={"source": "a.txt", "source_doc_id": "a"})
+
+    with pytest.raises(IndexWriteError):
+        build_index([doc], make_settings(tmp_path))
+
+
+def test_build_index_failed_insert_leaves_the_old_chunks_intact(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    build_index([Document(page_content="v1 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+    index = load_index(settings)
+    old_ids = index.get()["ids"]
+    monkeypatch.setattr(index, "add_documents", lambda docs, **kw: (_ for _ in ()).throw(RuntimeError("disk full")))
+
+    with pytest.raises(IndexWriteError):
+        build_index([Document(page_content="v2 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+
+    assert index.get()["ids"] == old_ids
+
+
+def test_build_index_replace_leaves_only_the_new_deterministic_chunk_ids(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    build_index([Document(page_content="v1 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+    doc_v2 = Document(page_content="v2 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    build_index([doc_v2], settings)
+
+    new_hash = chunk_documents([doc_v2], embedding_model="nomic-embed-text")[0].metadata["content_hash"]
+    assert load_index(settings).get()["ids"] == [f"docA:{new_hash[:16]}:0"]
+
+
+def test_build_index_running_the_same_replace_twice_does_not_duplicate(tmp_path, monkeypatch):
+    """Simulates redelivery/a concurrent worker that planned before the first finished."""
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    build_index([Document(page_content="v1 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+    doc_v2 = Document(page_content="v2 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})
+    build_index([doc_v2], settings)
+    index = load_index(settings)
+    stale_view = {"ids": [], "metadatas": []}
+    monkeypatch.setattr(index, "get", lambda **kw: stale_view)
+    monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: index)
+
+    build_index([doc_v2], settings)
+
+    assert index._collection.count() == 1
 
 
 def test_get_all_chunks_returns_every_indexed_chunk(tmp_path, monkeypatch):
@@ -589,6 +717,7 @@ def test_build_graph_continues_past_extraction_failure_for_one_chunk(tmp_path, m
     monkeypatch.setattr("ask_the_docs.index.extract_triplets", flaky_extract)
     monkeypatch.setattr("ask_the_docs.index.resolve_entities", lambda triplets, s: triplets)
     monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "fake-driver")
+    monkeypatch.setattr("ask_the_docs.index.clear_graph", lambda d: None)
     monkeypatch.setattr(
         "ask_the_docs.index.write_graph", lambda driver, chunk_triplets: written.update(ct=chunk_triplets)
     )
@@ -633,6 +762,7 @@ def test_build_graph_pairs_resolved_triplets_with_correct_chunk_refs(tmp_path, m
     monkeypatch.setattr("ask_the_docs.index.extract_triplets", fake_extract)
     monkeypatch.setattr("ask_the_docs.index.resolve_entities", fake_resolve)
     monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "fake-driver")
+    monkeypatch.setattr("ask_the_docs.index.clear_graph", lambda d: None)
     monkeypatch.setattr("ask_the_docs.index.write_graph", fake_write_graph)
 
     chunks = [
@@ -711,6 +841,7 @@ def test_build_graph_runs_community_detection_and_summarization_after_write(tmp_
     monkeypatch.setattr("ask_the_docs.index.extract_triplets", lambda *a, **k: [Triplet("A", "uses", "B")])
     monkeypatch.setattr("ask_the_docs.index.resolve_entities", lambda triplets, s: triplets)
     monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "fake-driver")
+    monkeypatch.setattr("ask_the_docs.index.clear_graph", lambda d: None)
     monkeypatch.setattr(
         "ask_the_docs.index.write_graph", lambda *a, **k: calls.append(("write", a[0]))
     )
@@ -733,12 +864,178 @@ def test_build_graph_runs_community_detection_and_summarization_after_write(tmp_
     ]
 
 
+def test_build_graph_clears_graph_after_extraction_and_before_write_on_every_run(tmp_path, monkeypatch):
+    calls = []
+    extracted = {"text": [Triplet("A", "uses", "B")]}
+    monkeypatch.setattr(
+        "ask_the_docs.index.extract_triplets", lambda text, s: calls.append(("extract", text)) or extracted[text.split()[0]]
+    )
+    monkeypatch.setattr("ask_the_docs.index.resolve_entities", lambda triplets, s: triplets)
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "fake-driver")
+    monkeypatch.setattr("ask_the_docs.index.clear_graph", lambda d: calls.append(("clear", d)))
+    monkeypatch.setattr("ask_the_docs.index.write_graph", lambda d, ct: calls.append(("write", len(ct))))
+    monkeypatch.setattr("ask_the_docs.index.run_community_detection", lambda d: None)
+    monkeypatch.setattr("ask_the_docs.index.summarize_communities", lambda d, s: None)
+    settings = make_settings(tmp_path, graph_enabled=True)
+
+    build_graph([make_chunk("doc1", 0, "text one")], settings)
+    build_graph([make_chunk("doc1", 0, "text one"), make_chunk("doc2", 0, "text two")], settings)
+
+    assert calls == [
+        ("extract", "text one"),
+        ("clear", "fake-driver"),
+        ("write", 1),
+        ("extract", "text one"),
+        ("extract", "text two"),
+        ("clear", "fake-driver"),
+        ("write", 2),
+    ]
+
+
+def test_build_graph_does_not_clear_existing_graph_when_extraction_fails_or_is_empty(tmp_path, monkeypatch):
+    cleared = []
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "fake-driver")
+    monkeypatch.setattr("ask_the_docs.index.clear_graph", lambda d: cleared.append(d))
+    settings = make_settings(tmp_path, graph_enabled=True)
+
+    def boom(text, s):
+        raise OllamaUnavailableError("down")
+
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", boom)
+    build_graph([make_chunk("doc1", 0, "text")], settings)
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", lambda *a, **k: [])
+    build_graph([make_chunk("doc1", 0, "text")], settings)
+
+    assert cleared == []
+
+
+def _capture_build_graph(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        "ask_the_docs.index.build_graph",
+        lambda chunks, settings, changed_sources=None, all_chunks=None: captured.append((chunks, changed_sources, all_chunks)),
+    )
+    monkeypatch.setattr("ask_the_docs.index.get_all_chunks", lambda settings: [make_chunk("docA", 0, "a"), make_chunk("docB", 0, "b")])
+    return captured
+
+
+def test_build_index_passes_only_new_chunks_and_replaced_sources_to_build_graph(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    captured = _capture_build_graph(monkeypatch)
+    settings = make_settings(tmp_path, graph_enabled=True)
+    doc_a = Document(page_content="alpha " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
+    doc_b = Document(page_content="beta " * 400, metadata={"source": "b.pdf", "source_doc_id": "docB"})
+
+    build_index([doc_a], settings)
+    build_index([doc_b], settings)
+
+    chunks, changed, all_chunks = captured[1]
+    assert {c.metadata["source_doc_id"] for c in chunks} == {"docB"}
+    assert changed == {"docB"}
+    assert {c.metadata["source_doc_id"] for c in all_chunks()} == {"docA", "docB"}
+
+
+def test_build_index_unchanged_reingest_reports_no_changed_sources_and_no_new_chunks(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    captured = _capture_build_graph(monkeypatch)
+    settings = make_settings(tmp_path, graph_enabled=True)
+    doc_a = Document(page_content="alpha " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    build_index([doc_a], settings)
+    build_index([doc_a], settings)
+
+    assert captured[1][:2] == ([], set())
+
+
+def test_build_index_reports_a_source_that_now_chunks_to_nothing_as_changed(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    captured = _capture_build_graph(monkeypatch)
+    settings = make_settings(tmp_path, graph_enabled=True)
+    build_index([Document(page_content="alpha " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+
+    build_index([Document(page_content="", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+
+    assert captured[1][:2] == ([], {"docA"})
+
+
+def test_build_index_full_graph_rebuild_flag_requests_a_full_rebuild(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    captured = _capture_build_graph(monkeypatch)
+    settings = make_settings(tmp_path, graph_enabled=True)
+    doc_a = Document(page_content="alpha " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    build_index([doc_a], settings, full_graph_rebuild=True)
+
+    assert captured[0][1] is None
+    assert {c.metadata["source_doc_id"] for c in captured[0][0]} == {"docA", "docB"}
+
+
+def _patch_graph_pipeline(monkeypatch, *, write=None, detect=None, summarize=None, client_error=None):
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", lambda *a, **k: [Triplet("A", "uses", "B")])
+    monkeypatch.setattr("ask_the_docs.index.resolve_entities", lambda triplets, s: triplets)
+
+    def client(s):
+        if client_error:
+            raise client_error
+        return "fake-driver"
+
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", client)
+    monkeypatch.setattr("ask_the_docs.index.clear_graph", lambda d: None)
+    monkeypatch.setattr("ask_the_docs.index.write_graph", lambda d, ct: write)
+    monkeypatch.setattr("ask_the_docs.index.run_community_detection", lambda d: detect)
+    monkeypatch.setattr("ask_the_docs.index.summarize_communities", lambda d, s: summarize)
+
+
+def test_build_graph_returns_skipped_when_disabled_or_nothing_extracted(tmp_path, monkeypatch):
+    chunk = [make_chunk("doc1", 0, "text")]
+    assert build_graph(chunk, make_settings(tmp_path, graph_enabled=False)) == "skipped"
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", lambda *a, **k: [])
+    assert build_graph(chunk, make_settings(tmp_path, graph_enabled=True)) == "skipped"
+
+
+def test_build_graph_returns_ok_on_full_success(tmp_path, monkeypatch):
+    _patch_graph_pipeline(monkeypatch)
+    assert build_graph([make_chunk("doc1", 0, "text")], make_settings(tmp_path, graph_enabled=True)) == "ok"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"write": "Neo4jError"}, "failed: Neo4jError"),
+        ({"detect": "ClientError"}, "failed: ClientError"),
+        ({"summarize": "ServiceUnavailable"}, "failed: ServiceUnavailable"),
+        ({"client_error": ServiceUnavailable("secret-host down")}, "failed: ServiceUnavailable"),
+    ],
+)
+def test_build_graph_returns_failed_with_exception_class_only(tmp_path, monkeypatch, kwargs, expected):
+    _patch_graph_pipeline(monkeypatch, **kwargs)
+    assert build_graph([make_chunk("doc1", 0, "text")], make_settings(tmp_path, graph_enabled=True)) == expected
+
+
+def test_build_graph_returns_failed_when_extraction_raises_for_every_chunk(tmp_path, monkeypatch):
+    def boom(text, s):
+        raise OllamaUnavailableError("ollama is down")
+
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", boom)
+    result = build_graph([make_chunk("doc1", 0, "text")], make_settings(tmp_path, graph_enabled=True))
+    assert result == "failed: OllamaUnavailableError"
+
+
+def test_build_index_returns_graph_status_only_when_graph_enabled(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.build_graph", lambda chunks, settings, *a: "failed: Neo4jError")
+    doc = Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    assert build_index([doc], make_settings(tmp_path, graph_enabled=True)) == "failed: Neo4jError"
+    assert build_index([doc], make_settings(tmp_path / "off", graph_enabled=False)) is None
+
+
 def test_build_index_calls_build_graph_with_its_chunks(tmp_path, monkeypatch):
     monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
     captured = {}
     monkeypatch.setattr(
         "ask_the_docs.index.build_graph",
-        lambda chunks, settings: captured.update(chunks=chunks, settings=settings),
+        lambda chunks, settings, *a: captured.update(chunks=chunks, settings=settings),
     )
     settings = make_settings(tmp_path, graph_enabled=True)
     doc = Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
@@ -804,6 +1101,31 @@ def test_build_index_reingesting_a_source_with_no_content_hash_metadata_replaces
 def test_get_index_generation_starts_at_zero(tmp_path):
     settings = make_settings(tmp_path)
     assert get_index_generation(settings) == 0
+
+
+def test_get_index_generation_treats_an_empty_or_garbage_file_as_zero(tmp_path):
+    settings = make_settings(tmp_path)
+    settings.index_dir.mkdir(parents=True)
+    path = settings.index_dir / ".generation"
+
+    path.write_text("")
+    assert get_index_generation(settings) == 0
+    path.write_text("not-a-number")
+    assert get_index_generation(settings) == 0
+
+
+def test_bump_index_generation_writes_via_atomic_replace(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    replaced = []
+    real_replace = os.replace
+    monkeypatch.setattr("ask_the_docs.index.os.replace", lambda src, dst: (replaced.append((src, dst)), real_replace(src, dst)))
+
+    _bump_index_generation(settings)
+
+    assert len(replaced) == 1
+    assert replaced[0][1] == settings.index_dir / ".generation"
+    assert get_index_generation(settings) == 1
+    assert [p.name for p in settings.index_dir.iterdir()] == [".generation"]
 
 
 def test_build_index_bumps_generation_on_a_real_write(tmp_path, monkeypatch):
@@ -896,6 +1218,31 @@ def test_build_index_deletes_chunks_for_a_source_that_becomes_empty(tmp_path, mo
     assert get_all_chunks(settings) == []
 
 
+def test_build_index_bumps_generation_on_a_pure_delete(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    build_index([Document(page_content="real text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+    gen_before = get_index_generation(settings)
+
+    build_index([Document(page_content="", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+
+    assert get_index_generation(settings) == gen_before + 1
+
+
+def test_build_index_bumps_generation_when_insert_fails_after_a_delete(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    build_index([Document(page_content="v1 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+    gen_before = get_index_generation(settings)
+    index = load_index(settings)
+    monkeypatch.setattr(index, "add_documents", lambda docs: (_ for _ in ()).throw(RuntimeError("disk full")))
+
+    with pytest.raises(IndexWriteError):
+        build_index([Document(page_content="v2 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+
+    assert get_index_generation(settings) > gen_before
+
+
 def test_list_sources_returns_sorted_distinct_sources(tmp_path, monkeypatch):
     monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
     settings = make_settings(tmp_path)
@@ -914,3 +1261,281 @@ def test_list_sources_empty_index_returns_empty_list(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
 
     assert list_sources(settings) == []
+
+
+class _Incremental:
+    """Patches the whole graph pipeline and records the order of side effects."""
+
+    def __init__(self, monkeypatch, *, supports=True, existing=("Transformer",), extract=None, resolve=None, write=None):
+        self.calls = []
+        self.all_chunks_calls = 0
+        calls = self.calls
+
+        def default_extract(text, s):
+            calls.append(("extract", text))
+            return [Triplet(f"{text} subj", "uses", "B")]
+
+        monkeypatch.setattr("ask_the_docs.index.extract_triplets", extract or default_extract)
+        monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "drv")
+        monkeypatch.setattr("ask_the_docs.index.graph_supports_incremental", lambda d: supports)
+        monkeypatch.setattr("ask_the_docs.index.get_entity_names", lambda d: list(existing))
+        monkeypatch.setattr(
+            "ask_the_docs.index.resolve_entities",
+            resolve or (lambda t, s, existing_names=(): calls.append(("resolve", list(existing_names))) or t),
+        )
+        monkeypatch.setattr("ask_the_docs.index.graph_remove_sources", lambda d, srcs: calls.append(("remove", set(srcs))))
+        monkeypatch.setattr("ask_the_docs.index.clear_graph", lambda d: calls.append(("clear",)))
+        monkeypatch.setattr(
+            "ask_the_docs.index.write_graph", lambda d, ct: calls.append(("write", len(ct))) or write
+        )
+        monkeypatch.setattr("ask_the_docs.index.run_community_detection", lambda d: calls.append(("detect",)))
+        monkeypatch.setattr("ask_the_docs.index.summarize_communities", lambda d, s: calls.append(("summarize",)))
+
+    def all_chunks(self):
+        self.all_chunks_calls += 1
+        return [make_chunk("docA", 0, "old a"), make_chunk("docB", 0, "new b")]
+
+
+def test_incremental_update_removes_only_the_changed_source_and_extracts_only_new_chunks(tmp_path, monkeypatch):
+    fake = _Incremental(monkeypatch)
+    settings = make_settings(tmp_path, graph_enabled=True)
+
+    status = build_graph(
+        [make_chunk("docB", 0, "new b")], settings, changed_sources={"docB"}, all_chunks=fake.all_chunks
+    )
+
+    assert status == "ok"
+    assert fake.calls == [
+        ("extract", "new b"),
+        ("resolve", ["Transformer"]),
+        ("remove", {"docB"}),
+        ("write", 1),
+        ("detect",),
+        ("summarize",),
+    ]
+    assert fake.all_chunks_calls == 0
+
+
+def test_incremental_update_with_nothing_changed_does_no_extraction_removal_or_wipe(tmp_path, monkeypatch):
+    fake = _Incremental(monkeypatch)
+
+    status = build_graph([], make_settings(tmp_path, graph_enabled=True), changed_sources=set(), all_chunks=fake.all_chunks)
+
+    assert status == "ok"
+    assert fake.calls == []
+    assert fake.all_chunks_calls == 0
+
+
+def test_incremental_update_for_a_deleted_source_only_removes_it(tmp_path, monkeypatch):
+    fake = _Incremental(monkeypatch)
+
+    status = build_graph([], make_settings(tmp_path, graph_enabled=True), changed_sources={"docA"}, all_chunks=fake.all_chunks)
+
+    assert status == "ok"
+    assert fake.calls == [("remove", {"docA"}), ("detect",), ("summarize",)]
+
+
+def test_empty_or_legacy_graph_takes_the_full_rebuild_path(tmp_path, monkeypatch):
+    fake = _Incremental(monkeypatch, supports=False)
+
+    build_graph([make_chunk("docB", 0, "new b")], make_settings(tmp_path, graph_enabled=True), changed_sources={"docB"}, all_chunks=fake.all_chunks)
+
+    assert fake.all_chunks_calls == 1
+    assert ("clear",) in fake.calls and not any(c[0] == "remove" for c in fake.calls)
+    assert [c for c in fake.calls if c[0] == "extract"] == [("extract", "old a"), ("extract", "new b")]
+
+
+def test_incremental_update_merges_a_new_entity_onto_the_near_existing_canonical_name(tmp_path, monkeypatch):
+    written = {}
+    fake = _Incremental(
+        monkeypatch,
+        extract=lambda text, s: [Triplet("the transformer architecture", "uses", "attention")],
+    )
+    from ask_the_docs.entity_resolution import resolve_entities as real_resolve
+
+    vectors = {"Transformer": [1.0, 0.0], "the transformer architecture": [0.99, 0.01], "attention": [0.0, 1.0]}
+
+    class Emb:
+        def embed_documents(self, texts):
+            return [vectors[t] for t in texts]
+
+    monkeypatch.setattr("ask_the_docs.entity_resolution.get_embeddings", lambda s: Emb())
+    monkeypatch.setattr("ask_the_docs.index.resolve_entities", real_resolve)
+    monkeypatch.setattr("ask_the_docs.index.write_graph", lambda d, ct: written.update(ct=ct))
+    settings = make_settings(tmp_path, graph_enabled=True)
+
+    build_graph([make_chunk("docB", 0, "x")], settings, changed_sources={"docB"}, all_chunks=fake.all_chunks)
+
+    assert written["ct"] == [(Triplet("Transformer", "uses", "attention"), "docB:0")]
+
+
+def test_incremental_error_before_write_falls_back_to_a_full_rebuild(tmp_path, monkeypatch):
+    fake = _Incremental(monkeypatch)
+    calls = fake.calls
+    # Only the incremental attempt fails; the full-rebuild retry succeeds.
+    state = {"n": 0}
+
+    def flaky(t, s, existing_names=()):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise RuntimeError("unexpected")
+        return t
+
+    monkeypatch.setattr("ask_the_docs.index.resolve_entities", flaky)
+
+    status = build_graph([make_chunk("docB", 0, "new b")], make_settings(tmp_path, graph_enabled=True), changed_sources={"docB"}, all_chunks=fake.all_chunks)
+
+    assert status == "ok"
+    assert fake.all_chunks_calls == 1
+    assert ("clear",) in calls and not any(c[0] == "remove" for c in calls)
+
+
+def test_incremental_write_failure_falls_back_to_a_full_rebuild(tmp_path, monkeypatch):
+    results = iter(["Neo4jError", None])
+    fake = _Incremental(monkeypatch)
+    monkeypatch.setattr("ask_the_docs.index.write_graph", lambda d, ct: fake.calls.append(("write", len(ct))) or next(results))
+
+    status = build_graph([make_chunk("docB", 0, "new b")], make_settings(tmp_path, graph_enabled=True), changed_sources={"docB"}, all_chunks=fake.all_chunks)
+
+    assert status == "ok"
+    assert fake.all_chunks_calls == 1
+    assert ("remove", {"docB"}) in fake.calls and ("clear",) in fake.calls
+
+
+def test_incremental_update_does_not_touch_the_graph_when_extraction_wholly_fails(tmp_path, monkeypatch):
+    def boom(text, s):
+        raise OllamaUnavailableError("down")
+
+    fake = _Incremental(monkeypatch, extract=boom)
+
+    status = build_graph([make_chunk("docB", 0, "new b")], make_settings(tmp_path, graph_enabled=True), changed_sources={"docB"}, all_chunks=fake.all_chunks)
+
+    assert status == "failed: OllamaUnavailableError"
+    assert fake.calls == []
+    assert fake.all_chunks_calls == 0
+
+
+def _index_two_docs(tmp_path, monkeypatch, graph_enabled=False):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.build_graph", lambda *a, **k: None)
+    settings = make_settings(tmp_path, graph_enabled=graph_enabled)
+    docs = [
+        Document(page_content="alpha " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"}),
+        Document(page_content="beta " * 400, metadata={"source": "b.pdf", "source_doc_id": "docB"}),
+    ]
+    build_index(docs, settings)
+    return settings
+
+
+def test_remove_sources_deletes_their_chunks_and_bumps_the_generation_once(tmp_path, monkeypatch):
+    settings = _index_two_docs(tmp_path, monkeypatch)
+    generation = get_index_generation(settings)
+
+    remove_sources({"docA", "docB"}, settings)
+
+    assert get_chunk_count(settings) == 0
+    assert get_index_generation(settings) == generation + 1
+
+
+def test_remove_sources_keeps_other_sources(tmp_path, monkeypatch):
+    settings = _index_two_docs(tmp_path, monkeypatch)
+
+    remove_sources({"docA"}, settings)
+
+    assert {c.metadata["source_doc_id"] for c in get_all_chunks(settings)} == {"docB"}
+
+
+def test_remove_sources_of_an_absent_source_is_a_noop_without_a_bump(tmp_path, monkeypatch):
+    settings = _index_two_docs(tmp_path, monkeypatch)
+    generation = get_index_generation(settings)
+    count = get_chunk_count(settings)
+
+    remove_sources({"nope"}, settings)
+
+    assert get_chunk_count(settings) == count
+    assert get_index_generation(settings) == generation
+
+
+def test_remove_sources_removes_graph_facts_only_when_graph_is_enabled(tmp_path, monkeypatch):
+    removed = []
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "driver")
+    monkeypatch.setattr("ask_the_docs.index.graph_remove_sources", lambda d, ids: removed.append((d, ids)))
+    settings = _index_two_docs(tmp_path / "off", monkeypatch)
+    remove_sources({"docA"}, settings)
+    assert removed == []
+
+    settings = _index_two_docs(tmp_path / "on", monkeypatch, graph_enabled=True)
+    remove_sources({"docA"}, settings)
+    assert removed == [("driver", {"docA"})]
+
+
+def test_remove_sources_survives_a_graph_failure(tmp_path, monkeypatch, caplog):
+    def boom(*a):
+        raise ServiceUnavailable("neo4j down")
+
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "driver")
+    monkeypatch.setattr("ask_the_docs.index.graph_remove_sources", boom)
+    settings = _index_two_docs(tmp_path, monkeypatch, graph_enabled=True)
+
+    with caplog.at_level(logging.WARNING):
+        remove_sources({"docA"}, settings)
+
+    assert {c.metadata["source_doc_id"] for c in get_all_chunks(settings)} == {"docB"}
+    assert "graph" in caplog.text.lower()
+
+
+def test_remove_sources_wraps_chroma_failures(tmp_path, monkeypatch):
+    class BrokenChroma:
+        def get(self, where, include):
+            raise RuntimeError("chroma down")
+
+    monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: BrokenChroma())
+
+    with pytest.raises(IndexWriteError):
+        remove_sources({"docA"}, make_settings(tmp_path))
+
+
+def test_prune_missing_docs_sources_removes_only_vanished_docs_dir_files(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.build_graph", lambda *a, **k: None)
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    present = docs_dir / "present.txt"
+    present.write_text("x")
+    settings = make_settings(tmp_path).model_copy(update={"docs_dir": docs_dir})
+    sources = {
+        "present": str(present.resolve()),
+        "gone": str(docs_dir.resolve() / "gone.txt"),
+        "url": "https://example.com/gone.txt",
+        "outside": str(tmp_path.resolve() / "other" / "gone.txt"),
+        "upload": "pasted-text",
+    }
+    build_index(
+        [Document(page_content=f"{k} " * 400, metadata={"source": v, "source_doc_id": k}) for k, v in sources.items()],
+        settings,
+    )
+
+    pruned = prune_missing_docs_sources(settings)
+
+    assert pruned == {"gone"}
+    assert {c.metadata["source_doc_id"] for c in get_all_chunks(settings)} == {"present", "url", "outside", "upload"}
+
+
+def test_prune_missing_docs_sources_is_a_noop_when_nothing_vanished(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    generation = get_index_generation(settings)
+
+    assert prune_missing_docs_sources(settings) == set()
+    assert get_index_generation(settings) == generation
+
+
+def test_prune_missing_docs_sources_wraps_chroma_read_failures(tmp_path, monkeypatch):
+    class BrokenChroma:
+        def get(self, include):
+            raise RuntimeError("chroma down")
+
+    monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: BrokenChroma())
+
+    with pytest.raises(IndexWriteError):
+        prune_missing_docs_sources(make_settings(tmp_path))

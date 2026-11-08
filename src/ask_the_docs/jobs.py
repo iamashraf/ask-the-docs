@@ -1,5 +1,6 @@
 """Job status tracking for async ingestion, stored in Redis."""
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from typing import Literal
@@ -10,6 +11,7 @@ from ask_the_docs.config import Settings
 
 JOB_TTL_SECONDS = 86400
 JOBS_INDEX_KEY = "jobs:index"
+TERMINAL_STATUSES = ("done", "failed")
 JobStatus = Literal["queued", "processing", "done", "failed"]
 
 
@@ -17,8 +19,24 @@ class JobStoreError(RuntimeError):
     pass
 
 
+_client: redis.Redis | None = None
+_client_key: tuple[str, asyncio.AbstractEventLoop] | None = None
+
+
 def get_async_cache_client(settings: Settings) -> redis.Redis:
-    return redis.Redis.from_url(settings.cache_url)
+    """Async twin of cache.get_cache_client; shared per URL and running loop, since pooled connections bind to a loop."""
+    global _client, _client_key
+    key = (settings.cache_url, asyncio.get_running_loop())
+    if _client is None or _client_key != key:
+        _client, _client_key = redis.Redis.from_url(settings.cache_url), key
+    return _client
+
+
+async def close_async_cache_client() -> None:
+    global _client, _client_key
+    client, _client, _client_key = _client, None, None
+    if client is not None:
+        await client.aclose()
 
 
 def _key(job_id: str) -> str:
@@ -46,7 +64,10 @@ async def create_job(client, job_id: str, kind: str, source: str | None) -> None
 
 
 async def get_job(client, job_id: str) -> dict | None:
-    raw = await client.get(_key(job_id))
+    try:
+        raw = await client.get(_key(job_id))
+    except Exception as exc:
+        raise JobStoreError(f"Failed to read job {job_id}") from exc
     return json.loads(raw) if raw is not None else None
 
 
@@ -56,8 +77,14 @@ async def update_job(
     existing = await get_job(client, job_id)
     if existing is None:
         return
+    # A redelivered job must not drag a finished one back to processing.
+    if existing["status"] in TERMINAL_STATUSES and status not in TERMINAL_STATUSES:
+        return
     existing.update(status=status, result=result, error=error, updated_at=datetime.now(UTC).isoformat())
-    await client.set(_key(job_id), json.dumps(existing), ex=JOB_TTL_SECONDS)
+    try:
+        await client.set(_key(job_id), json.dumps(existing), ex=JOB_TTL_SECONDS)
+    except Exception as exc:
+        raise JobStoreError(f"Failed to update job {job_id}") from exc
 
 
 async def list_jobs(client, limit: int = 50) -> list[dict]:

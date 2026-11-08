@@ -7,6 +7,7 @@ from langchain_core.embeddings import Embeddings
 from neo4j.exceptions import SessionExpired
 
 from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.bm25_index import ChromaReadError
 from ask_the_docs.index import build_index
 from ask_the_docs.query_analyzer import QueryClassification
 from ask_the_docs.retrieve import hybrid_merge, retrieve
@@ -710,3 +711,55 @@ def test_retrieve_observes_rerank_latency_when_rerank_enabled(tmp_path, monkeypa
     assert _histogram_count("rerank_latency") - rerank_before == 1.0
     assert _histogram_count("retrieve_latency") - retrieve_before == 1.0
     assert any("Rerank succeeded" in record.message for record in caplog.records)
+
+
+def _stub_retrieve_stores(monkeypatch, vector_fails=False, bm25_fails=False):
+    class FakeIndex:
+        def similarity_search_with_score(self, query, k):
+            if vector_fails:
+                raise RuntimeError("chroma down")
+            return [(_doc("v"), 0.1)]
+
+    def fake_bm25(query, settings, k):
+        if bm25_fails:
+            raise ChromaReadError
+        return [(_doc("b"), 1.0)]
+
+    monkeypatch.setattr("ask_the_docs.retrieve.load_index", lambda settings: FakeIndex())
+    monkeypatch.setattr("ask_the_docs.retrieve.bm25_score", fake_bm25)
+
+
+def test_retrieve_is_not_degraded_when_both_stores_answer(tmp_path, monkeypatch):
+    _stub_retrieve_stores(monkeypatch)
+
+    result = retrieve("q", make_settings(tmp_path), k=5)
+
+    assert len(result) == 2
+    assert result.degraded is False
+
+
+def test_retrieve_flags_degraded_when_vector_search_fails(tmp_path, monkeypatch):
+    _stub_retrieve_stores(monkeypatch, vector_fails=True)
+
+    result = retrieve("q", make_settings(tmp_path), k=5)
+
+    assert [d.metadata["source_doc_id"] for d in result] == ["b"]
+    assert result.degraded is True
+
+
+def test_retrieve_flags_degraded_when_bm25_cannot_read_chroma(tmp_path, monkeypatch):
+    _stub_retrieve_stores(monkeypatch, bm25_fails=True)
+
+    result = retrieve("q", make_settings(tmp_path), k=5)
+
+    assert [d.metadata["source_doc_id"] for d in result] == ["v"]
+    assert result.degraded is True
+
+
+def test_retrieve_flags_degraded_when_both_stores_fail(tmp_path, monkeypatch):
+    _stub_retrieve_stores(monkeypatch, vector_fails=True, bm25_fails=True)
+
+    result = retrieve("q", make_settings(tmp_path), k=5)
+
+    assert list(result) == []
+    assert result.degraded is True

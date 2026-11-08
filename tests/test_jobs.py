@@ -2,7 +2,9 @@ from datetime import datetime
 
 import pytest
 
+from ask_the_docs import jobs
 from ask_the_docs.jobs import JobStoreError, create_job, get_job, list_jobs, update_job
+from tests.test_queue import make_settings
 
 
 class FakeAsyncRedis:
@@ -81,6 +83,31 @@ async def test_create_job_wraps_redis_failures():
         await create_job(BrokenAsyncRedis(), "job-1", kind="ingest", source="a.pdf")
 
 
+@pytest.mark.parametrize("terminal", ["done", "failed"])
+@pytest.mark.parametrize("regressed", ["processing", "queued"])
+async def test_update_job_never_moves_a_terminal_job_back_to_an_active_state(terminal, regressed):
+    client = FakeAsyncRedis()
+    await create_job(client, "job-1", kind="ingest", source="a.pdf")
+    await update_job(client, "job-1", status=terminal, result={"documents_ingested": 3}, error="e")
+
+    await update_job(client, "job-1", status=regressed)
+
+    job = await get_job(client, "job-1")
+    assert job["status"] == terminal
+    assert job["result"] == {"documents_ingested": 3}
+    assert job["error"] == "e"
+
+
+async def test_get_job_wraps_redis_failures():
+    with pytest.raises(JobStoreError):
+        await get_job(BrokenAsyncRedis(), "job-1")
+
+
+async def test_update_job_wraps_redis_failures():
+    with pytest.raises(JobStoreError):
+        await update_job(BrokenAsyncRedis(), "job-1", status="done")
+
+
 async def test_list_jobs_returns_most_recent_first():
     client = FakeAsyncRedis()
     await create_job(client, "job-1", kind="ingest", source="a.pdf")
@@ -138,3 +165,32 @@ async def test_create_job_indexes_by_its_created_at_epoch_seconds():
     job = await get_job(client, "job-1")
     expected_score = datetime.fromisoformat(job["created_at"]).timestamp()
     assert client._zsets["jobs:index"]["job-1"] == expected_score
+
+
+async def test_get_async_cache_client_reuses_one_client_per_process():
+    settings = make_settings()
+
+    first = jobs.get_async_cache_client(settings)
+    second = jobs.get_async_cache_client(settings)
+
+    assert first is second
+    await jobs.close_async_cache_client()
+
+
+async def test_close_async_cache_client_makes_the_next_call_create_a_new_client():
+    settings = make_settings()
+    first = jobs.get_async_cache_client(settings)
+
+    await jobs.close_async_cache_client()
+    second = jobs.get_async_cache_client(settings)
+
+    assert second is not first
+    await jobs.close_async_cache_client()
+
+
+async def test_get_async_cache_client_differs_for_a_different_url():
+    first = jobs.get_async_cache_client(make_settings())
+    other = make_settings().model_copy(update={"cache_url": "redis://other:6379"})
+
+    assert jobs.get_async_cache_client(other) is not first
+    await jobs.close_async_cache_client()

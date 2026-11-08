@@ -9,6 +9,7 @@ from langchain_core.embeddings import Embeddings
 from sentence_transformers import SentenceTransformer
 
 from ask_the_docs.config import Settings
+from ask_the_docs.llm import OllamaUnavailableError
 
 OLLAMA_EMBED_TIMEOUT_SECONDS = 30
 # embed_documents sends every text in the batch as one request, so a flat
@@ -27,26 +28,32 @@ class OllamaEmbeddings(Embeddings):
         self.model = model
         self.base_url = base_url
 
-    def embed_query(self, text: str) -> list[float]:
-        response = requests.post(
-            f"{self.base_url}/api/embeddings",
-            json={"model": self.model, "prompt": text},
-            timeout=OLLAMA_EMBED_TIMEOUT_SECONDS,
-        )
+    def _post(self, path: str, body: dict, timeout: float) -> dict:
+        try:
+            response = requests.post(f"{self.base_url}{path}", json=body, timeout=timeout)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            raise OllamaUnavailableError(
+                f"Could not reach Ollama at {self.base_url}. Is it running? Check OLLAMA_BASE_URL."
+            ) from exc
         response.raise_for_status()
-        return response.json()["embedding"]
+        return response.json()
+
+    def embed_query(self, text: str) -> list[float]:
+        data = self._post("/api/embeddings", {"model": self.model, "prompt": text}, OLLAMA_EMBED_TIMEOUT_SECONDS)
+        if "embedding" not in data:
+            raise ValueError(f"Ollama embeddings response has no 'embedding' key: {str(data)[:200]}")
+        return data["embedding"]
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
         timeout = OLLAMA_EMBED_BATCH_BASE_TIMEOUT_SECONDS + OLLAMA_EMBED_BATCH_PER_TEXT_TIMEOUT_SECONDS * len(texts)
-        response = requests.post(
-            f"{self.base_url}/api/embed",
-            json={"model": self.model, "input": texts},
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        return response.json()["embeddings"]
+        data = self._post("/api/embed", {"model": self.model, "input": texts}, timeout)
+        if "embeddings" not in data:
+            raise ValueError(f"Ollama embed response has no 'embeddings' key: {str(data)[:200]}")
+        if len(data["embeddings"]) != len(texts):
+            raise ValueError(f"Ollama returned {len(data['embeddings'])} embeddings for {len(texts)} texts")
+        return data["embeddings"]
 
 
 class HuggingFaceEmbeddings(Embeddings):
