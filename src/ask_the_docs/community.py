@@ -4,6 +4,7 @@ import logging
 
 import neo4j
 
+from ask_the_docs.cache import GRAPH_CACHE_TTL_SECONDS, cache_get, cache_set, get_cache_client, make_cache_key
 from ask_the_docs.config import Settings
 from ask_the_docs.llm import fence_untrusted, get_llm_client
 
@@ -73,10 +74,17 @@ def summarize_communities(driver: neo4j.Driver, settings: Settings) -> str | Non
             result.consume()
 
             client = get_llm_client(settings.generator)
+            cache = get_cache_client(settings)
             for community_id, names in communities:
                 prompt = _SUMMARY_PROMPT_TEMPLATE.format(names=fence_untrusted("entities", ", ".join(names)))
+                key = "graph:summary:" + make_cache_key(sorted(names), _SUMMARY_PROMPT_TEMPLATE, settings.generator.model)
+                cached = cache_get(cache, key)
                 try:
-                    summary = client.generate(prompt)
+                    if cached is not None:
+                        summary = cached.decode()
+                    else:
+                        summary = client.generate(prompt)
+                        cache_set(cache, key, summary.encode(), GRAPH_CACHE_TTL_SECONDS)
                 except Exception as exc:
                     # Isolated per community: a transient LLM failure (e.g. Ollama
                     # unreachable) on one community must not abort the rest, and must
