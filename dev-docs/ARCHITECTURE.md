@@ -102,6 +102,11 @@ going through the API or the queue.
   doc rewrites it into a standalone search query using conversation
   history. This decides what *kind* of input the query is, not whether
   it's answerable: an off-topic question is still routed as doc.
+  The call returns four fields (intent, standalone query, search query,
+  reply). The search query is used only for hybrid retrieval. The
+  generator gets the user's original wording next to the resolved
+  question. A failed source listing for a meta question falls back to
+  the resolved queries.
 - **Idempotent ingestion** — each source gets a content hash over its
   page contents (length-separated), chunk size, chunk overlap, content
   format and the embedding model. An indexed source with the same hash is
