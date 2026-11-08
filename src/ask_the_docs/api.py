@@ -214,6 +214,10 @@ async def get_jobs(limit: int = Query(default=50, ge=1, le=200)) -> JobListRespo
 
 @app.get("/v1/jobs/{job_id}")
 async def get_job_status(job_id: str) -> JobStatusResponse:
+    try:
+        job_id = str(uuid.UUID(job_id))
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Job not found") from None
     settings = get_settings()
     client = get_async_cache_client(settings)
     job = await get_job(client, job_id)

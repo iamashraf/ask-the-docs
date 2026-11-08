@@ -337,18 +337,19 @@ def test_index_returns_202_with_a_job_id(monkeypatch):
 
 def test_get_job_status_returns_the_job_record(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    known_id = str(uuid.uuid4())
     record = {
-        "job_id": "job-1", "kind": "ingest", "source": "a.pdf", "status": "done",
+        "job_id": known_id, "kind": "ingest", "source": "a.pdf", "status": "done",
         "result": {"documents_ingested": 1}, "error": None,
     }
 
     async def fake_get_job(client, job_id):
-        return record if job_id == "job-1" else None
+        return record if job_id == known_id else None
 
     monkeypatch.setattr("ask_the_docs.api.get_job", fake_get_job)
     monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
 
-    response = TestClient(app).get("/v1/jobs/job-1")
+    response = TestClient(app).get(f"/v1/jobs/{known_id}")
 
     assert response.status_code == 200
     assert response.json()["status"] == "done"
@@ -363,9 +364,25 @@ def test_get_job_status_returns_404_for_an_unknown_job(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.get_job", fake_get_job)
     monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
 
-    response = TestClient(app).get("/v1/jobs/nope")
+    response = TestClient(app).get(f"/v1/jobs/{uuid.uuid4()}")
 
     assert response.status_code == 404
+
+
+def test_get_job_status_returns_404_for_a_malformed_job_id_without_touching_the_store(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    looked_up = []
+
+    async def fake_get_job(client, job_id):
+        looked_up.append(job_id)
+
+    monkeypatch.setattr("ask_the_docs.api.get_job", fake_get_job)
+    monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
+
+    response = TestClient(app).get("/v1/jobs/not-a-uuid")
+
+    assert response.status_code == 404
+    assert looked_up == []
 
 
 def test_list_jobs_returns_the_jobs_from_list_jobs(monkeypatch):

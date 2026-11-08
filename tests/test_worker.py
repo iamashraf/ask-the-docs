@@ -10,6 +10,7 @@ from langchain_core.documents import Document
 
 from ask_the_docs import worker
 from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.ingest import PathSecurityError
 from ask_the_docs.worker import (
     DURABLE_CONSUMER_NAME,
     WORKER_ACK_WAIT_SECONDS,
@@ -101,7 +102,26 @@ async def test_process_job_marks_failed_on_an_exception(monkeypatch):
 
     assert updates[-1][0] == "job-2"
     assert updates[-1][1] == "failed"
-    assert "load failed" in updates[-1][2]
+    assert updates[-1][2] == "RuntimeError"
+    assert "load failed" not in updates[-1][2]
+
+
+async def test_process_job_keeps_the_message_of_the_projects_typed_errors(monkeypatch):
+    def boom(source):
+        raise PathSecurityError("Path escapes the docs directory")
+
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", boom)
+    updates = []
+
+    async def fake_update_job(client, job_id, *, status, result=None, error=None):
+        updates.append((job_id, status, error))
+
+    monkeypatch.setattr("ask_the_docs.worker.update_job", fake_update_job)
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    await process_job(make_settings(), {"job_id": "job-2", "kind": "ingest", "source": "../x"})
+
+    assert updates[-1][2] == "Path escapes the docs directory"
 
 
 async def test_process_job_handles_the_index_kind(monkeypatch, tmp_path):

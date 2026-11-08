@@ -14,9 +14,16 @@ from opentelemetry import propagate, trace
 
 from ask_the_docs import metrics
 from ask_the_docs.config import Settings, get_settings
-from ask_the_docs.index import build_index
-from ask_the_docs.ingest import dispatch, dispatch_all_under_docs_dir
+from ask_the_docs.index import IndexWriteError, build_index
+from ask_the_docs.ingest import (
+    PathSecurityError,
+    UnsupportedFileTypeError,
+    UrlSecurityError,
+    dispatch,
+    dispatch_all_under_docs_dir,
+)
 from ask_the_docs.jobs import get_async_cache_client, update_job
+from ask_the_docs.llm import OllamaUnavailableError
 from ask_the_docs.queue import INGEST_JOBS_STREAM, INGEST_JOBS_SUBJECT, ensure_stream
 from ask_the_docs.tracing import configure_logging, configure_metrics, configure_tracing
 
@@ -31,6 +38,15 @@ WORKER_ACK_WAIT_SECONDS = 300
 # Bounds redelivery of a job that keeps crashing the worker.
 WORKER_MAX_DELIVER = 5
 WORKER_HEARTBEAT_SECONDS = WORKER_ACK_WAIT_SECONDS / 3
+
+# Errors whose message is written for users; anything else may leak paths or internals.
+USER_FACING_ERRORS = (
+    IndexWriteError,
+    OllamaUnavailableError,
+    PathSecurityError,
+    UnsupportedFileTypeError,
+    UrlSecurityError,
+)
 
 
 def _observe_worker_job_latency(payload: dict) -> None:
@@ -70,7 +86,7 @@ async def process_job(settings: Settings, payload: dict) -> None:
         metrics.ingest_job_total.add(1, {"status": "success"})
     except Exception as exc:
         logger.warning("Job %s failed: %s", job_id, exc, exc_info=True)
-        await update_job(client, job_id, status="failed", error=str(exc))
+        await update_job(client, job_id, status="failed", error=str(exc) if isinstance(exc, USER_FACING_ERRORS) else type(exc).__name__)
         metrics.ingest_job_total.add(1, {"status": "failure"})
     finally:
         _observe_worker_job_latency(payload)
