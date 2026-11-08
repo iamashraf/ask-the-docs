@@ -27,9 +27,9 @@ from ask_the_docs.graph_store import (
     clear_graph,
     get_entity_names,
     graph_supports_incremental,
-    remove_sources,
     write_graph,
 )
+from ask_the_docs.graph_store import remove_sources as graph_remove_sources
 from ask_the_docs.llm import OllamaUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -200,7 +200,7 @@ def _build_graph_incremental(new_chunks: list[Document], changed_sources: set[st
         resolved_triplets = resolve_entities(triplets, settings, existing_names=get_entity_names(driver)) if triplets else []
         if not resolved_triplets and not changed_sources:
             return "skipped"
-        remove_sources(driver, changed_sources)
+        graph_remove_sources(driver, changed_sources)
         write_failure = resolved_triplets and write_graph(driver, list(zip(resolved_triplets, chunk_refs, strict=True)))
         if write_failure:
             return None
@@ -339,6 +339,28 @@ def build_index(docs: list[Document], settings: Settings, full_graph_rebuild: bo
     changed_sources = {source_doc_id for source_doc_id, _, _ in pending}
     new_chunks = [c for _, source_chunks, _ in pending for c in source_chunks]
     return build_graph(new_chunks, settings, changed_sources, lambda: get_all_chunks(settings))
+
+
+def remove_sources(source_doc_ids: set[str], settings: Settings) -> None:
+    """Deletes these sources' chunks (and graph facts when enabled); absent ids are a no-op."""
+    mutated = False
+    try:
+        index = load_index(settings)
+        for source_doc_id in source_doc_ids:
+            ids = index.get(where={"source_doc_id": source_doc_id}, include=[])["ids"]
+            if ids:
+                mutated = True
+                index.delete(ids=ids)
+    except Exception as exc:
+        raise IndexWriteError("Failed to update the index") from exc
+    finally:
+        if mutated:
+            _bump_index_generation(settings)
+    if mutated and settings.graph_enabled:
+        try:
+            graph_remove_sources(get_graph_client(settings), set(source_doc_ids))
+        except Exception:
+            logger.warning("Graph removal failed; the graph keeps facts of the removed sources.", exc_info=True)
 
 
 _index_cache: dict[tuple[str, int, str], Chroma] = {}

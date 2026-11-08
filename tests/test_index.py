@@ -25,6 +25,7 @@ from ask_the_docs.index import (
     get_collection_name,
     get_index_generation,
     list_sources,
+    remove_sources,
     load_index,
 )
 from ask_the_docs.llm import OllamaUnavailableError
@@ -1281,7 +1282,7 @@ class _Incremental:
             "ask_the_docs.index.resolve_entities",
             resolve or (lambda t, s, existing_names=(): calls.append(("resolve", list(existing_names))) or t),
         )
-        monkeypatch.setattr("ask_the_docs.index.remove_sources", lambda d, srcs: calls.append(("remove", set(srcs))))
+        monkeypatch.setattr("ask_the_docs.index.graph_remove_sources", lambda d, srcs: calls.append(("remove", set(srcs))))
         monkeypatch.setattr("ask_the_docs.index.clear_graph", lambda d: calls.append(("clear",)))
         monkeypatch.setattr(
             "ask_the_docs.index.write_graph", lambda d, ct: calls.append(("write", len(ct))) or write
@@ -1411,3 +1412,83 @@ def test_incremental_update_does_not_touch_the_graph_when_extraction_wholly_fail
     assert status == "failed: OllamaUnavailableError"
     assert fake.calls == []
     assert fake.all_chunks_calls == 0
+
+
+def _index_two_docs(tmp_path, monkeypatch, graph_enabled=False):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.build_graph", lambda *a, **k: None)
+    settings = make_settings(tmp_path, graph_enabled=graph_enabled)
+    docs = [
+        Document(page_content="alpha " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"}),
+        Document(page_content="beta " * 400, metadata={"source": "b.pdf", "source_doc_id": "docB"}),
+    ]
+    build_index(docs, settings)
+    return settings
+
+
+def test_remove_sources_deletes_their_chunks_and_bumps_the_generation_once(tmp_path, monkeypatch):
+    settings = _index_two_docs(tmp_path, monkeypatch)
+    generation = get_index_generation(settings)
+
+    remove_sources({"docA", "docB"}, settings)
+
+    assert get_chunk_count(settings) == 0
+    assert get_index_generation(settings) == generation + 1
+
+
+def test_remove_sources_keeps_other_sources(tmp_path, monkeypatch):
+    settings = _index_two_docs(tmp_path, monkeypatch)
+
+    remove_sources({"docA"}, settings)
+
+    assert {c.metadata["source_doc_id"] for c in get_all_chunks(settings)} == {"docB"}
+
+
+def test_remove_sources_of_an_absent_source_is_a_noop_without_a_bump(tmp_path, monkeypatch):
+    settings = _index_two_docs(tmp_path, monkeypatch)
+    generation = get_index_generation(settings)
+    count = get_chunk_count(settings)
+
+    remove_sources({"nope"}, settings)
+
+    assert get_chunk_count(settings) == count
+    assert get_index_generation(settings) == generation
+
+
+def test_remove_sources_removes_graph_facts_only_when_graph_is_enabled(tmp_path, monkeypatch):
+    removed = []
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "driver")
+    monkeypatch.setattr("ask_the_docs.index.graph_remove_sources", lambda d, ids: removed.append((d, ids)))
+    settings = _index_two_docs(tmp_path / "off", monkeypatch)
+    remove_sources({"docA"}, settings)
+    assert removed == []
+
+    settings = _index_two_docs(tmp_path / "on", monkeypatch, graph_enabled=True)
+    remove_sources({"docA"}, settings)
+    assert removed == [("driver", {"docA"})]
+
+
+def test_remove_sources_survives_a_graph_failure(tmp_path, monkeypatch, caplog):
+    def boom(*a):
+        raise ServiceUnavailable("neo4j down")
+
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "driver")
+    monkeypatch.setattr("ask_the_docs.index.graph_remove_sources", boom)
+    settings = _index_two_docs(tmp_path, monkeypatch, graph_enabled=True)
+
+    with caplog.at_level(logging.WARNING):
+        remove_sources({"docA"}, settings)
+
+    assert {c.metadata["source_doc_id"] for c in get_all_chunks(settings)} == {"docB"}
+    assert "graph" in caplog.text.lower()
+
+
+def test_remove_sources_wraps_chroma_failures(tmp_path, monkeypatch):
+    class BrokenChroma:
+        def get(self, where, include):
+            raise RuntimeError("chroma down")
+
+    monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: BrokenChroma())
+
+    with pytest.raises(IndexWriteError):
+        remove_sources({"docA"}, make_settings(tmp_path))
