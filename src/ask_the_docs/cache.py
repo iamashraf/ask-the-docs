@@ -12,6 +12,8 @@ from ask_the_docs.config import Settings
 
 logger = logging.getLogger(__name__)
 
+GRAPH_CACHE_TTL_SECONDS = 30 * 24 * 3600
+
 
 def get_cache_client(settings: Settings) -> redis.Redis:
     return redis.Redis.from_url(settings.cache_url)
