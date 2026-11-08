@@ -184,7 +184,11 @@ curl localhost:8000/v1/jobs/<job_id>
 ```
 
 `status` is `queued` → `processing` → `done`/`failed`. `GET /v1/jobs`
-lists recent jobs (newest first) without needing an id.
+lists recent jobs (newest first) without needing an id. A job id is a
+UUID; any other id returns `404`. On `failed`, `error` holds the message
+only for the project's own typed errors (for example an unreachable
+Ollama or an unsafe source). Any other failure shows just the exception
+class name.
 
 ## Ask — query the index
 
@@ -339,9 +343,9 @@ The CLI prints errors as text; the API returns real HTTP status codes:
 |---|---|
 | `/v1/ingest`/`/v1/index` accepted, job queued | 202 |
 | Bad/unsafe `source` (path traversal, SSRF, unsupported extension) | 400 |
-| File not found, or `/v1/jobs/{job_id}` with an unknown id | 404 |
+| File not found, or `/v1/jobs/{job_id}` with an unknown or non-UUID id | 404 |
 | Empty `source`/`query`, `query` over 4000 characters, `k` outside 1 to 50, or a malformed `history` turn | 422 |
-| Ollama unreachable | 503 |
+| Ollama unreachable, or the job queue cannot accept the job | 503 |
 
 `GET /health` always returns `200 {"status": "ok"}` independent of
 Settings or Ollama — it only reflects whether the process is running
