@@ -1,8 +1,10 @@
 from types import SimpleNamespace
 
+import pytest
 import requests
 
 from ask_the_docs.config import ProviderConfig, Settings
+from ask_the_docs.llm import OllamaUnavailableError
 from ask_the_docs.embeddings import (
     OLLAMA_EMBED_BATCH_BASE_TIMEOUT_SECONDS,
     OLLAMA_EMBED_BATCH_PER_TEXT_TIMEOUT_SECONDS,
@@ -150,3 +152,39 @@ def test_ollama_embeddings_embed_query_timeout_is_unaffected_by_batch_timeout_ch
     emb.embed_query("hello")
 
     assert captured["timeout"] == OLLAMA_EMBED_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize("exc", [requests.ConnectionError, requests.Timeout])
+def test_ollama_embeddings_maps_network_failures_to_ollama_unavailable(monkeypatch, exc):
+    def fake_post(url, json, timeout):
+        raise exc("boom")
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    emb = OllamaEmbeddings(model="m", base_url="http://localhost:11434")
+
+    with pytest.raises(OllamaUnavailableError):
+        emb.embed_query("hello")
+    with pytest.raises(OllamaUnavailableError):
+        emb.embed_documents(["a", "b"])
+
+
+def test_ollama_embeddings_embed_documents_rejects_a_mismatched_count(monkeypatch):
+    monkeypatch.setattr(
+        requests, "post", lambda url, json, timeout: SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"embeddings": [[0.1]]})
+    )
+    emb = OllamaEmbeddings(model="m", base_url="http://localhost:11434")
+
+    with pytest.raises(ValueError, match="1 embeddings for 2 texts"):
+        emb.embed_documents(["a", "b"])
+
+
+def test_ollama_embeddings_missing_embeddings_key_is_a_clear_error(monkeypatch):
+    monkeypatch.setattr(
+        requests, "post", lambda url, json, timeout: SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"error": "model not found"})
+    )
+    emb = OllamaEmbeddings(model="m", base_url="http://localhost:11434")
+
+    with pytest.raises(ValueError, match="embeddings"):
+        emb.embed_documents(["a"])
+    with pytest.raises(ValueError, match="embedding"):
+        emb.embed_query("a")

@@ -248,13 +248,12 @@ def build_index(docs: list[Document], settings: Settings) -> Chroma:
 
         if to_insert:
             mutated = True
-            try:
-                for i in range(0, len(to_insert), INDEX_WRITE_BATCH_SIZE):
-                    index.add_documents(to_insert[i : i + INDEX_WRITE_BATCH_SIZE])
-            except OllamaUnavailableError:
-                raise
-            except Exception as exc:
-                raise IndexWriteError(f"Failed to write {len(to_insert)} chunk(s) to the index") from exc
+            for i in range(0, len(to_insert), INDEX_WRITE_BATCH_SIZE):
+                index.add_documents(to_insert[i : i + INDEX_WRITE_BATCH_SIZE])
+    except OllamaUnavailableError:
+        raise
+    except Exception as exc:
+        raise IndexWriteError(f"Failed to update the index ({len(to_insert)} chunk(s) pending)") from exc
     finally:
         # Bumped even on failure: a delete (or partial insert) already changed the store.
         if mutated:

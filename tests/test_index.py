@@ -461,6 +461,45 @@ def test_build_index_lets_ollama_unavailable_propagate_unwrapped(tmp_path, monke
         build_index([doc], make_settings(tmp_path))
 
 
+def test_build_index_surfaces_an_unreachable_ollama_embedder_as_ollama_unavailable(tmp_path, monkeypatch):
+    import requests
+
+    from ask_the_docs.embeddings import OllamaEmbeddings
+
+    def refuse(url, json, timeout):
+        raise requests.ConnectionError("refused")
+
+    monkeypatch.setattr(requests, "post", refuse)
+    monkeypatch.setattr(
+        "ask_the_docs.index.get_embeddings", lambda settings: OllamaEmbeddings(model="m", base_url="http://x")
+    )
+    doc = Document(page_content="hello", metadata={"source": "a.txt", "source_doc_id": "a"})
+
+    with pytest.raises(OllamaUnavailableError):
+        build_index([doc], make_settings(tmp_path))
+
+
+@pytest.mark.parametrize("failing_call", ["get", "delete"])
+def test_build_index_wraps_chroma_read_and_delete_failures(tmp_path, monkeypatch, failing_call):
+    class BrokenChroma:
+        def get(self, where, include):
+            if failing_call == "get":
+                raise RuntimeError("chroma down")
+            return {"ids": ["old"], "metadatas": [{"content_hash": "stale"}]}
+
+        def delete(self, ids):
+            raise RuntimeError("chroma down")
+
+        def add_documents(self, docs):
+            pass
+
+    monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: BrokenChroma())
+    doc = Document(page_content="hello", metadata={"source": "a.txt", "source_doc_id": "a"})
+
+    with pytest.raises(IndexWriteError):
+        build_index([doc], make_settings(tmp_path))
+
+
 def test_get_all_chunks_returns_every_indexed_chunk(tmp_path, monkeypatch):
     monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
     settings = make_settings(tmp_path)
