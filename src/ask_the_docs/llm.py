@@ -6,6 +6,7 @@ and once as the judge (evaluate.py).
 
 import dataclasses
 import json
+import re
 from typing import Protocol
 
 import requests
@@ -13,6 +14,17 @@ from anthropic import Anthropic
 from openai import OpenAI
 
 from ask_the_docs.config import ProviderConfig
+
+FENCED_BLOCK_PATTERN = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL)
+
+
+def strip_code_fence(raw: str) -> str:
+    """Small/local models often wrap JSON responses in markdown code fences; non-str input is left to json.loads to reject."""
+    if not isinstance(raw, str):
+        return raw
+    match = FENCED_BLOCK_PATTERN.match(raw.strip())
+    return match.group(1) if match else raw
+
 
 OLLAMA_CHAT_TIMEOUT_SECONDS = 60
 # Ollama's own default idle-unload is 5m -- without an explicit keep_alive,

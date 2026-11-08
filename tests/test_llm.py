@@ -620,3 +620,22 @@ def test_ollama_generate_structured_defaults_to_none_when_counts_absent(monkeypa
 
     assert result.input_tokens is None and result.output_tokens is None
     assert result.response_model is None
+
+
+def test_strip_code_fence_returns_non_str_input_unchanged():
+    from ask_the_docs.llm import strip_code_fence
+
+    assert strip_code_fence(None) is None
+
+
+def test_strip_code_fence_strips_json_tagged_and_bare_fences():
+    from ask_the_docs.llm import strip_code_fence
+
+    assert strip_code_fence('```json\n{"a": 1}\n```') == '{"a": 1}'
+    assert strip_code_fence('```\n[1]\n```') == "[1]"
+
+
+def test_strip_code_fence_leaves_unfenced_text_unchanged():
+    from ask_the_docs.llm import strip_code_fence
+
+    assert strip_code_fence('{"a": 1}') == '{"a": 1}'

@@ -3,7 +3,6 @@ Global-query retrieval: map step over community summaries, scored for relevance 
 
 import json
 import logging
-import re
 
 import neo4j
 from langchain_core.documents import Document
@@ -11,7 +10,7 @@ from langchain_core.documents import Document
 from ask_the_docs.config import Settings
 from ask_the_docs.graph_client import get_graph_client
 from ask_the_docs.index import get_chunks_by_refs
-from ask_the_docs.llm import get_llm_client
+from ask_the_docs.llm import get_llm_client, strip_code_fence
 
 logger = logging.getLogger(__name__)
 
@@ -30,16 +29,6 @@ _RELEVANCE_PROMPT_TEMPLATE = (
     "Respond with ONLY a JSON object of this exact shape:\n"
     '{{"relevance": <float between 0.0 and 1.0>}}'
 )
-
-FENCED_BLOCK_PATTERN = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL)
-
-
-def _strip_code_fence(raw: str) -> str:
-    """Small/local models often wrap JSON responses in markdown code fences; non-str input is left to json.loads to reject."""
-    if not isinstance(raw, str):
-        return raw
-    match = FENCED_BLOCK_PATTERN.match(raw.strip())
-    return match.group(1) if match else raw
 
 
 def local_search(entities: list[str], settings: Settings) -> list[Document]:
@@ -88,7 +77,7 @@ def global_search(query: str, settings: Settings) -> list[Document]:
         prompt = _RELEVANCE_PROMPT_TEMPLATE.format(query=query, summary=summary)
         try:
             raw = client.generate(prompt)
-            score = float(json.loads(_strip_code_fence(raw))["relevance"])
+            score = float(json.loads(strip_code_fence(raw))["relevance"])
         except Exception:
             # Isolated per community: a scoring failure for one community -- a
             # malformed/non-JSON response or the LLM backend being entirely

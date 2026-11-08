@@ -2,7 +2,6 @@ from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.llm import GenerationResult
 from ask_the_docs.query_analyzer import (
     QueryClassification,
-    _strip_code_fence,
     classify_query,
 )
 from tests.test_metrics import find_data_point, find_metric, get_metrics_data
@@ -99,22 +98,6 @@ def test_classify_query_defaults_to_local_when_entities_not_a_list(monkeypatch):
     result = classify_query("anything", make_settings())
 
     assert result == QueryClassification(label="local", entities=[])
-
-
-def test_strip_code_fence_returns_non_str_input_unchanged():
-    assert _strip_code_fence(None) is None
-
-
-def test_strip_code_fence_strips_json_tagged_fence():
-    assert _strip_code_fence('```json\n{"a": 1}\n```') == '{"a": 1}'
-
-
-def test_strip_code_fence_strips_bare_fence():
-    assert _strip_code_fence('```\n{"a": 1}\n```') == '{"a": 1}'
-
-
-def test_strip_code_fence_leaves_unfenced_text_unchanged():
-    assert _strip_code_fence('{"a": 1}') == '{"a": 1}'
 
 
 def test_classify_query_defaults_to_local_on_non_str_output(monkeypatch):
