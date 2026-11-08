@@ -1,7 +1,7 @@
 # Contributing
 
-Thanks for looking. This is a learning project built in small steps, so small,
-focused changes are easiest to review.
+This is a learning project built in small steps. Small, focused changes are
+easiest to review.
 
 ## Set up
 
@@ -44,7 +44,7 @@ passing, or explain in the pull request why a test had to change.
 - Changes to input limits, prompt building, the citation check, or the path
   and URL checks need a test for the new behavior and for its boundary.
 - If you find a way around a guardrail, add the case as a failing test with
-  the fix. For anything serious, report it privately first. See
+  the fix. Report anything serious privately first. See
   [SECURITY.md](SECURITY.md).
 - If you add a guardrail, add a row to GUARDRAILS.md. Say what it does, how to
   configure it, and whether it fails closed or open. List only what the code
