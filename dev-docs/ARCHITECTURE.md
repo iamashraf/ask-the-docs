@@ -123,9 +123,14 @@ going through the API or the queue.
   `history_max_turns`, the analyze prompt and every setting that affects
   the answer, including the index generation, a counter bumped on every
   ingest write. Tier 2 (on the doc path) is keyed on the resolved
-  standalone query, plus the user's raw wording when it differs. A
-  re-ingest invalidates stale entries automatically, even one that
-  replaces a source with the same chunk count. Chitchat and meta
+  standalone query, plus the user's raw wording when it differs. The
+  generation is a local `.generation` file in the index directory,
+  written atomically. It bumps after any change to the store (insert,
+  replace, pure delete, or a failed run that already changed it) and not
+  on an unchanged re-ingest. App and worker share it through the `./data`
+  mount, so replicas must share that mount. A re-ingest invalidates stale
+  entries automatically, even one that replaces a source with the same
+  chunk count. Chitchat and meta
   answers are not cached, and neither is a result built from a degraded
   retrieval (one side failed).
 - **Graph RAG (local/global search)** — at ingest time, an LLM extracts

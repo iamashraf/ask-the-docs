@@ -46,8 +46,9 @@ def _generation_path(settings: Settings) -> Path:
 
 
 def get_index_generation(settings: Settings) -> int:
-    """Monotonic counter bumped on every real write to the index (insert
-    or delete-and-replace) -- unlike chunk count, it changes even when a
+    """Monotonic counter bumped after any mutation of the store (insert,
+    replace, pure delete, or a failed run that already changed it), not on an
+    unchanged re-ingest -- unlike chunk count, it changes even when a
     replace produces the same number of chunks, so cache keys built from
     it (answer.py, bm25_index.py) can't be fooled by a same-length edit.
     Reads a local file, not Chroma, so computing a cache key never needs
