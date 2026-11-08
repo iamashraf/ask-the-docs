@@ -33,7 +33,7 @@ def _index(args: argparse.Namespace, settings) -> None:
     """Bulk re-index everything already under docs_dir; idempotent."""
     docs, file_count = dispatch_all_under_docs_dir(settings)
     if docs:
-        build_index(docs, settings)
+        build_index(docs, settings, full_graph_rebuild=args.rebuild_graph)
     prune_missing_docs_sources(settings)
     print(f"Indexed {len(docs)} document(s) from {file_count} file(s) under {settings.docs_dir}.")
 
@@ -134,6 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     index_parser = subparsers.add_parser(
         "index", help="Bulk re-index everything under docs_dir (idempotent)"
     )
+    index_parser.add_argument("--rebuild-graph", action="store_true", help="Rebuild the whole knowledge graph instead of updating it incrementally")
     index_parser.set_defaults(func=_index)
 
     ask_parser = subparsers.add_parser("ask", help="Ask a question against the indexed documents")

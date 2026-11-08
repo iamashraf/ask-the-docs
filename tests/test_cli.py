@@ -41,7 +41,7 @@ def test_index_discovers_docs_dir_and_builds_index(tmp_path, monkeypatch):
     )
     captured = {}
     monkeypatch.setattr(
-        "ask_the_docs.cli.build_index", lambda docs, settings: captured.setdefault("docs", docs)
+        "ask_the_docs.cli.build_index", lambda docs, settings, **kw: captured.setdefault("docs", docs)
     )
     monkeypatch.setattr("ask_the_docs.cli.prune_missing_docs_sources", lambda s: captured.setdefault("pruned", s))
 
@@ -514,3 +514,17 @@ def test_evaluate_prints_n_a_summary_when_no_results(capsys, monkeypatch):
     assert "intent_accuracy=n/a" in out
     assert "p50_latency_seconds=n/a" in out
     assert "p95_latency_seconds=n/a" in out
+
+
+def test_index_rebuild_graph_flag_requests_a_full_graph_rebuild(tmp_path, monkeypatch):
+    settings = make_settings(docs_dir=tmp_path)
+    monkeypatch.setattr("ask_the_docs.cli.dispatch_all_under_docs_dir", lambda s: (["doc"], 1))
+    monkeypatch.setattr("ask_the_docs.cli.prune_missing_docs_sources", lambda s: set())
+    calls = []
+    monkeypatch.setattr("ask_the_docs.cli.build_index", lambda docs, settings, **kw: calls.append(kw))
+
+    for argv in (["index"], ["index", "--rebuild-graph"]):
+        args = build_parser().parse_args(argv)
+        args.func(args, settings)
+
+    assert calls == [{"full_graph_rebuild": False}, {"full_graph_rebuild": True}]
