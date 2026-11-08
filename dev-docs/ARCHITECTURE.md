@@ -76,8 +76,12 @@ system runs and how each one fails, see [GUARDRAILS.md](GUARDRAILS.md).
 
 Graph RAG (triplet extraction, entity resolution, community
 detection/summarization, local/global search) is entirely gated behind
-`graph_enabled` (default `False`) and degrades to the plain hybrid path
-above on any Neo4j/LLM failure — it never crashes an ingest or a query.
+`graph_enabled` (default `False`). At query time, a Neo4j/LLM failure
+degrades to the plain hybrid path above, and so does a global search where
+no community scores above 0 or every scoring call fails. At ingest time, the
+build status (`ok`, `skipped` or `failed: <ExceptionClass>`) appears as
+`graph` in the job result. A graph failure never fails the vector index
+job.
 
 Both the CLI (`ingest`/`index`/`ask`/`evaluate`/`serve`/`worker`) and the
 HTTP API (`/v1/...`) drive this same pipeline — no logic is duplicated
@@ -161,7 +165,12 @@ going through the API or the queue.
   against the question and return the top-N summaries directly, bypassing
   hybrid/rerank. Off by default (`graph_enabled`); every Neo4j/LLM call on
   this path degrades to the plain hybrid result rather than failing the
-  request.
+  request. Local search also returns the start
+  entities' own chunks and orders entities by hop distance. Entity
+  resolution compares each entity only against the first-seen entity of
+  each cluster (no chaining). The pairwise comparison is O(n^2) in the
+  worst case. The extraction, summary and scoring prompts fence untrusted
+  text and treat it as data.
 
 ## Tech stack & rationale
 

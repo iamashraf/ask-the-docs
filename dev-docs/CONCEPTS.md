@@ -141,7 +141,18 @@ reduce LLM call.
 Every Neo4j read/write and every LLM call on this path (classification,
 extraction, summarization, relevance scoring) degrades independently —
 a failure logs a warning and falls back to the plain hybrid result,
-never raising into a live request.
+never raising into a live request. A global
+search where no community scores above 0, or every scoring call fails,
+returns nothing, so retrieval falls back to the hybrid path.
+
+Local search includes the start entities' own chunks and orders entities
+by hop distance. Entity resolution compares each entity only against the
+first-seen entity of each cluster, so A~B and B~C never chain A with C.
+The pairwise comparison is O(n^2) in the worst case. The build status
+(`ok`, `skipped` or `failed: <ExceptionClass>`) appears as `graph` in the
+job result, and a graph failure never fails the vector index job. The
+extraction, summary and scoring prompts fence chunk text, entity names,
+queries and summaries as tagged data, and escape closing tags inside them.
 
 - [Edge et al., 2024 — From Local to Global: A Graph RAG Approach to Query-Focused Summarization (arXiv:2404.16130)](https://arxiv.org/abs/2404.16130) — the paper this local/global, community-summary design is based on.
 - [Traag, Waltman & van Eck, 2019 — From Louvain to Leiden: guaranteeing well-connected communities (arXiv:1810.08473)](https://arxiv.org/abs/1810.08473) — why Leiden is used instead of the more commonly-cited Louvain algorithm it improves on.
