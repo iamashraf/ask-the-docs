@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import UTC, datetime
 from unittest.mock import Mock
 
@@ -247,13 +248,42 @@ async def test_process_job_observes_worker_job_latency_when_enqueued_at_present(
     assert after - before == 1.0
 
 
+async def test_process_job_does_not_block_the_event_loop_during_build_index(monkeypatch):
+    docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
+    monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: time.sleep(0.3))
+    monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    ticker_task = asyncio.create_task(ticker())
+    await process_job(make_settings(), {"job_id": "job-11", "kind": "ingest", "source": "a.pdf"})
+    ticker_task.cancel()
+
+    assert ticks > 10
+
+
 class FakeMsg:
     def __init__(self, data: bytes):
         self.data = data
         self.acked = False
+        self.termed = False
+        self.in_progress_calls = 0
 
     async def ack(self):
         self.acked = True
+
+    async def term(self):
+        self.termed = True
+
+    async def in_progress(self):
+        self.in_progress_calls += 1
 
 
 class FakeSub:
@@ -280,6 +310,25 @@ async def test_consume_once_acks_a_successfully_processed_message(monkeypatch):
 
     assert processed == [{"job_id": "job-1", "kind": "ingest", "source": "a.pdf"}]
     assert msg.acked is True
+
+
+async def test_consume_once_keeps_a_long_job_alive_with_in_progress_heartbeats(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.worker.WORKER_HEARTBEAT_SECONDS", 0.02)
+    msg = FakeMsg(json.dumps({"job_id": "job-1", "kind": "ingest", "source": "a.pdf"}).encode())
+    sub = FakeSub([[msg]])
+
+    async def slow_process_job(settings, payload):
+        await asyncio.sleep(0.2)
+
+    monkeypatch.setattr("ask_the_docs.worker.process_job", slow_process_job)
+
+    await _consume_once(make_settings(), sub)
+
+    assert msg.in_progress_calls >= 3
+    assert msg.acked is True
+    calls_at_end = msg.in_progress_calls
+    await asyncio.sleep(0.1)
+    assert msg.in_progress_calls == calls_at_end
 
 
 async def test_consume_once_leaves_a_message_unacked_and_does_not_raise_when_process_job_raises(monkeypatch):

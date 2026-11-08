@@ -28,6 +28,7 @@ DURABLE_CONSUMER_NAME = "ingest-workers"
 # e2e/test_ingest_batch_e2e.py) so a long-running job's ack doesn't become
 # eligible for redelivery while it is still in progress.
 WORKER_ACK_WAIT_SECONDS = 300
+WORKER_HEARTBEAT_SECONDS = WORKER_ACK_WAIT_SECONDS / 3
 
 
 def _observe_worker_job_latency(payload: dict) -> None:
@@ -51,13 +52,13 @@ async def process_job(settings: Settings, payload: dict) -> None:
     await update_job(client, job_id, status="processing")
     try:
         if kind == "ingest":
-            docs = dispatch(source)
+            docs = await asyncio.to_thread(dispatch, source)
             file_count = 1
         else:
-            docs, file_count = dispatch_all_under_docs_dir(settings)
+            docs, file_count = await asyncio.to_thread(dispatch_all_under_docs_dir, settings)
         if docs:
             build_start = time.monotonic()
-            build_index(docs, settings)
+            await asyncio.to_thread(build_index, docs, settings)
             metrics.build_index_latency_seconds.record(time.monotonic() - build_start)
         result = {"documents_ingested": len(docs)}
         if kind == "index":
@@ -71,6 +72,16 @@ async def process_job(settings: Settings, payload: dict) -> None:
         metrics.ingest_job_total.add(1, {"status": "failure"})
     finally:
         _observe_worker_job_latency(payload)
+
+
+async def _heartbeat(msg) -> None:
+    """Resets the ack deadline while a job runs so a long job isn't redelivered mid-flight."""
+    while True:
+        await asyncio.sleep(WORKER_HEARTBEAT_SECONDS)
+        try:
+            await msg.in_progress()
+        except Exception:
+            logger.warning("Failed to extend the ack deadline", exc_info=True)
 
 
 async def _consume_once(settings: Settings, sub) -> None:
@@ -89,6 +100,7 @@ async def _consume_once(settings: Settings, sub) -> None:
             logger.warning("Dropping an unparseable job message", exc_info=True)
             continue
         ctx = propagate.extract({"traceparent": payload.get("traceparent")})
+        heartbeat = asyncio.create_task(_heartbeat(msg))
         try:
             with tracer.start_as_current_span(
                 "process_job",
@@ -103,6 +115,8 @@ async def _consume_once(settings: Settings, sub) -> None:
                 exc_info=True,
             )
             continue
+        finally:
+            heartbeat.cancel()
         await msg.ack()
 
 
