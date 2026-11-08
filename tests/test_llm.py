@@ -1,6 +1,8 @@
 import json
 from types import SimpleNamespace
 
+import anthropic
+import httpx
 import pytest
 import requests
 
@@ -197,7 +199,7 @@ def test_anthropic_client_generate_calls_sdk(monkeypatch):
             return SimpleNamespace(content=[SimpleNamespace(text="hello from claude")])
 
     class FakeAnthropic:
-        def __init__(self, api_key):
+        def __init__(self, **kwargs):
             self.messages = FakeMessages()
 
     monkeypatch.setattr("ask_the_docs.llm.Anthropic", FakeAnthropic)
@@ -216,7 +218,7 @@ def test_anthropic_client_generate_passes_system_kwarg_when_given(monkeypatch):
             return SimpleNamespace(content=[SimpleNamespace(text="hello from claude")])
 
     class FakeAnthropic:
-        def __init__(self, api_key):
+        def __init__(self, **kwargs):
             self.messages = FakeMessages()
 
     monkeypatch.setattr("ask_the_docs.llm.Anthropic", FakeAnthropic)
@@ -338,7 +340,7 @@ def test_anthropic_generate_with_usage_reads_token_counts(monkeypatch):
             )
 
     class FakeAnthropic:
-        def __init__(self, api_key):
+        def __init__(self, **kwargs):
             self.messages = FakeMessages()
 
     monkeypatch.setattr("ask_the_docs.llm.Anthropic", FakeAnthropic)
@@ -360,7 +362,7 @@ def test_anthropic_generate_with_usage_missing_usage_field_returns_none(monkeypa
             return SimpleNamespace(content=[SimpleNamespace(text="hello from claude")])
 
     class FakeAnthropic:
-        def __init__(self, api_key):
+        def __init__(self, **kwargs):
             self.messages = FakeMessages()
 
     monkeypatch.setattr("ask_the_docs.llm.Anthropic", FakeAnthropic)
@@ -644,3 +646,90 @@ def test_strip_code_fence_leaves_unfenced_text_unchanged():
 
 def test_ollama_unavailable_is_an_llm_unavailable_error():
     assert issubclass(OllamaUnavailableError, LLMUnavailableError)
+
+
+def _anthropic_error(cls, status):
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return cls("boom", response=httpx.Response(status, request=request), body=None)
+
+
+def _client_raising(monkeypatch, error):
+    class FakeMessages:
+        def create(self, **kwargs):
+            raise error
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr("ask_the_docs.llm.Anthropic", FakeAnthropic)
+    return AnthropicLLMClient(model="claude-haiku-5-5", api_key="x")
+
+
+def test_anthropic_client_sends_api_key_when_given(monkeypatch):
+    captured = {}
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("ask_the_docs.llm.Anthropic", FakeAnthropic)
+    AnthropicLLMClient(model="claude-haiku-5-5", api_key="sk-x")
+    assert captured == {"api_key": "sk-x"}
+
+
+def test_anthropic_client_sends_bearer_token_when_given(monkeypatch):
+    captured = {}
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("ask_the_docs.llm.Anthropic", FakeAnthropic)
+    AnthropicLLMClient(model="claude-haiku-5-5", auth_token="tok")
+    assert captured == {"auth_token": "tok"}
+
+
+def test_anthropic_client_requires_a_credential():
+    with pytest.raises(ValueError, match="api_key or auth_token"):
+        AnthropicLLMClient(model="claude-haiku-5-5")
+
+
+def test_anthropic_client_uses_configured_max_tokens(monkeypatch):
+    captured = {}
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(content=[SimpleNamespace(text="ok")])
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr("ask_the_docs.llm.Anthropic", FakeAnthropic)
+    AnthropicLLMClient(model="claude-haiku-5-5", api_key="x", max_tokens=2048).generate("hi")
+    assert captured["max_tokens"] == 2048
+    assert "temperature" not in captured
+
+
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (_anthropic_error(anthropic.AuthenticationError, 401), "credentials"),
+        (_anthropic_error(anthropic.PermissionDeniedError, 403), "credentials"),
+        (_anthropic_error(anthropic.RateLimitError, 429), "rate limit"),
+        (_anthropic_error(anthropic.InternalServerError, 529), "unavailable"),
+        (anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.anthropic.com")), "reach"),
+    ],
+)
+def test_anthropic_client_maps_provider_errors_to_llm_unavailable(monkeypatch, error, expected):
+    client = _client_raising(monkeypatch, error)
+    with pytest.raises(LLMUnavailableError, match=expected):
+        client.generate("hi")
+
+
+def test_anthropic_client_does_not_swallow_bad_request_errors(monkeypatch):
+    client = _client_raising(monkeypatch, _anthropic_error(anthropic.BadRequestError, 400))
+    with pytest.raises(anthropic.BadRequestError):
+        client.generate("hi")

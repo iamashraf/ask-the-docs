@@ -10,6 +10,7 @@ import re
 from typing import Protocol
 
 import requests
+import anthropic
 from anthropic import Anthropic
 from openai import OpenAI
 
@@ -178,18 +179,31 @@ class OllamaLLMClient:
         )
 
 
-class AnthropicLLMClient:
-    """Wraps the Anthropic SDK."""
+ANTHROPIC_DEFAULT_MAX_TOKENS = 4096
 
-    def __init__(self, model: str, api_key: str):
+
+class AnthropicLLMClient:
+    """Wraps the Anthropic SDK; takes an API key or an OAuth bearer token (the `ant` CLI login)."""
+
+    def __init__(
+        self,
+        model: str,
+        api_key: str | None = None,
+        auth_token: str | None = None,
+        max_tokens: int = ANTHROPIC_DEFAULT_MAX_TOKENS,
+    ):
+        if api_key is None and auth_token is None:
+            raise ValueError("AnthropicLLMClient needs an api_key or auth_token")
         self.model = model
-        self._client = Anthropic(api_key=api_key)
+        self.max_tokens = max_tokens
+        self._client = Anthropic(api_key=api_key) if api_key is not None else Anthropic(auth_token=auth_token)
 
     def generate(self, prompt: str, system: str | None = None) -> str:
         return self.generate_with_usage(prompt, system).text
 
     def generate_with_usage(self, prompt: str, system: str | None = None) -> GenerationResult:
-        kwargs = {"model": self.model, "max_tokens": 1024, "messages": [{"role": "user", "content": prompt}]}
+        # No temperature: several current Claude models reject it with HTTP 400.
+        kwargs = {"model": self.model, "max_tokens": self.max_tokens, "messages": [{"role": "user", "content": prompt}]}
         if system is not None:
             # Anthropic requires roughly 1024+ tokens (model-dependent) before a
             # cache_control block actually caches anything; below that it's a
@@ -197,7 +211,18 @@ class AnthropicLLMClient:
             # This project's static system prompts are currently all smaller
             # than that, so this is dormant until one of them grows past it.
             kwargs["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-        response = self._client.messages.create(**kwargs)
+        try:
+            response = self._client.messages.create(**kwargs)
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
+            raise LLMUnavailableError(
+                "Anthropic rejected the credentials. Check ANTHROPIC_API_KEY or run `ant auth login`."
+            ) from exc
+        except anthropic.RateLimitError as exc:
+            raise LLMUnavailableError("Anthropic hit a rate limit. Try again shortly.") from exc
+        except anthropic.APIConnectionError as exc:
+            raise LLMUnavailableError("Could not reach the Anthropic API. Check the network connection.") from exc
+        except anthropic.InternalServerError as exc:
+            raise LLMUnavailableError("The Anthropic API is unavailable or overloaded. Try again shortly.") from exc
         usage = getattr(response, "usage", None)
         return GenerationResult(
             text=response.content[0].text,
