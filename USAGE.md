@@ -205,7 +205,9 @@ curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" \
 `{"role": "user"|"assistant", "content": "..."}`, so a follow-up question
 like "how does it compare to chain-of-thought?" can be resolved into a
 standalone search query. It's an API-only field; the CLI's `ask` always
-sends an empty history.
+sends an empty history. The API accepts up to 50 turns, and the server then
+trims them to `HISTORY_MAX_TURNS`. The web chat sends only the most recent 20
+turns, each truncated.
 
 The API accepts a `query` of up to 4000 characters and a `k` from 1 to 50
 (default 5).
