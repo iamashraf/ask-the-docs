@@ -9,45 +9,44 @@ as is), ingest a URL, or set a telemetry endpoint.
 
 ![Ingesting a document, asking grounded questions about it, then asking something outside its scope and getting a clean refusal](dev-docs/demo.gif)
 
-**Key features**
+## Features
 
-- **Local generation by default:** Ollama runs the language model; no
-  API key required for the core pipeline.
-- **Hybrid retrieval:** vector similarity blended with BM25 keyword
-  search, with optional LLM query rewriting and cross-encoder reranking.
-- **Grounded generation:** a deterministic citation guardrail refuses to
-  answer unless the model cites retrieved chunks by number (it checks the
-  markers exist, not that the chunk supports the claim); cached
-  answers (Valkey) avoid repeating the same retrieval/generation work.
-- **Pluggable everywhere:** swap the generator, the judge, and the
-  embeddings backend independently via config, without touching code.
-- **Configurable LLM-as-judge evaluation:** score answer quality on
-  accuracy, relevance, and completeness using a separately-configured
-  model (e.g. Claude), with comparison toggles for the retrieval strategy.
-- **Three interfaces, same logic:** a one-shot CLI, a long-running HTTP
-  API, and a chat UI, all calling identical underlying code.
-- **Graph RAG:** LLM-based triplet extraction, embedding-similarity
-  entity resolution, and Neo4j GDS community detection power a local
-  (entity-traversal) and global (corpus-theme) search path alongside
-  hybrid retrieval, off by default.
-- **Containerized:** `podman compose` (or `docker compose`) runs the
-  whole stack (Ollama, Valkey, the app, the chat UI); nothing to install
-  beyond that.
-- **Ingestion checks:** local paths are checked for traversal, file type,
-  and size; URLs are checked against private, loopback, and internal
+- **Local generation by default.** Ollama runs the language model. The core
+  pipeline needs no API key.
+- **Hybrid retrieval.** Vector similarity is blended with BM25 keyword
+  search. LLM query rewriting and cross-encoder reranking are optional.
+- **Grounded generation.** A deterministic citation guardrail refuses to
+  answer unless the model cites retrieved chunks by number. It checks that the
+  markers exist, not that the chunk supports the claim. Valkey caches answers,
+  so repeated questions skip retrieval and generation.
+- **Swappable backends.** Config selects the generator, the judge, and the
+  embeddings backend independently. No code changes.
+- **LLM-as-judge evaluation.** A separately configured model (for example
+  Claude) scores answers on accuracy, relevance, and completeness. Toggles
+  compare retrieval strategies.
+- **Three interfaces.** A one-shot CLI, a long-running HTTP API, and a chat
+  UI call the same code.
+- **Graph RAG.** LLM-based triplet extraction, embedding-similarity entity
+  resolution, and Neo4j GDS community detection add a local (entity-traversal)
+  and a global (corpus-theme) search path next to hybrid retrieval. It is off
+  by default.
+- **Containerized.** `podman compose` (or `docker compose`) runs the whole
+  stack: Ollama, Valkey, the app, and the chat UI. Nothing else to install.
+- **Ingestion checks.** Local paths are checked for traversal, file type,
+  and size. URLs are checked against private, loopback, and internal
   addresses on every redirect. There is no malware scanning or sandboxed
   parsing.
 
 ## Architecture
 
-[Interactive runtime architecture diagram](https://iamashraf.github.io/ask-the-docs/runtime-architecture.html). It shows components, trust boundaries, and the primary request path, and you can explore it in a browser.
+The [interactive runtime architecture diagram](https://iamashraf.github.io/ask-the-docs/runtime-architecture.html)
+shows components, trust boundaries, and the primary request path.
 
 Ingestion and query share Chroma, Valkey, and Neo4j. Graph RAG and Neo4j
-are off by default. See `dev-docs/ARCHITECTURE.md` for the detailed flow.
-
-See `dev-docs/ARCHITECTURE.md` for the full query/ingest flow and the tech
-stack's rationale, and `dev-docs/CONCEPTS.md` for the concepts (vector
-search, BM25, reranking, Graph RAG, ...) behind each stage.
+are off by default. See `dev-docs/ARCHITECTURE.md` for the full ingest and
+query flow and the reasons behind the tech stack. See `dev-docs/CONCEPTS.md`
+for the concepts behind each stage (vector search, BM25, reranking, Graph
+RAG).
 
 ## Quickstart
 
@@ -55,8 +54,8 @@ search, BM25, reranking, Graph RAG, ...) behind each stage.
 network, and Compose refuses to start them without it. Create it once with
 `podman network create llm-observability`. To also collect traces/metrics/
 logs, start the sibling `llm-observability` repo's stack first (see its
-README's "Start" section); without it, the app runs normally and the OTLP
-exporters just retry/warn.
+README's "Start" section). Without it, the app runs normally and the OTLP
+exporters retry and log warnings.
 
 ```bash
 git clone <this-repo> && cd ask-the-docs
@@ -66,7 +65,7 @@ podman compose up -d --build app  # builds if missing, rebuilds if stale, then s
 ```
 
 The first start auto-ingests a curated set of LLM/RAG papers
-(`seed_sources.yaml`), so there's already content to query:
+(`seed_sources.yaml`), so there is content to query:
 
 ```bash
 curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" \
@@ -75,9 +74,9 @@ curl -X POST localhost:8000/v1/ask -H "Content-Type: application/json" \
 
 The services listen on `127.0.0.1` only, and the API has no authentication.
 
-This is the minimum path to a working answer. For every command, the HTTP
-API equivalent, evaluation, bulk re-indexing, and troubleshooting, see
-**[USAGE.md](USAGE.md)**.
+This is the shortest path to a working answer. [USAGE.md](USAGE.md) covers
+every command, the HTTP API equivalents, evaluation, bulk re-indexing, and
+troubleshooting.
 
 ## Development
 
@@ -91,18 +90,18 @@ architecture and **[CLAUDE.md](CLAUDE.md)** for contribution conventions.
 
 ## Guardrails
 
-The checks are layered, and the model is treated as untrusted: its output is
-checked before you see it. **The API has no authentication, so run it on
-localhost only.**
+The checks are layered, and the project treats the model as untrusted: it
+checks the output before you see it. The API has no authentication, so run it
+on localhost only.
 
-- **Input:** request size limits; path, file type, size, and URL checks
+- **Input.** Request size limits, plus path, file type, size, and URL checks
   (public addresses only) before anything is ingested.
-- **Generation:** retrieved text is fenced in `<documents>` tags and the model
-  is told it is data, not instructions.
-- **Output:** citation markers must match retrieved chunks, with one retry,
-  then a refusal.
-- **Exposure:** loopback-only ports by default, and a required Neo4j password
-  when Graph RAG is on.
+- **Generation.** Retrieved text is fenced in `<documents>` tags, and the
+  prompt tells the model it is data, not instructions.
+- **Output.** Citation markers must match retrieved chunks. The system retries
+  once, then refuses.
+- **Exposure.** Ports are loopback-only by default. Graph RAG requires a Neo4j
+  password.
 
 Rate limits, PII handling, and output scans are not built yet. See
 [dev-docs/GUARDRAILS.md](dev-docs/GUARDRAILS.md) for details, failure
@@ -110,7 +109,7 @@ behavior, and gaps, and [SECURITY.md](SECURITY.md) to report a problem.
 
 ## Layout
 
-- `src/ask_the_docs/`: package: `config`, `llm`, `embeddings`,
+- `src/ask_the_docs/`: the package, with modules `config`, `llm`, `embeddings`,
   `ingest`, `index`, `retrieve`, `answer`, `evaluate`, `cli`, `api`
 - `web/`: the Next.js chat UI
 - `e2e/`: end-to-end tests against the running stack
