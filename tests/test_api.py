@@ -218,7 +218,7 @@ def test_ingest_returns_202_with_a_job_id(monkeypatch):
     assert captured["publish"] == (job_id, "ingest", "a.pdf")
 
 
-def test_ingest_marks_the_job_failed_but_still_returns_202_when_publish_fails(monkeypatch):
+def test_ingest_marks_the_job_failed_and_returns_503_when_publish_fails(monkeypatch):
     monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
     monkeypatch.setattr("ask_the_docs.api.validate_source", lambda source: None)
 
@@ -240,10 +240,30 @@ def test_ingest_marks_the_job_failed_but_still_returns_202_when_publish_fails(mo
 
     response = TestClient(app).post("/v1/ingest", json={"source": "a.pdf"})
 
-    assert response.status_code == 202
-    job_id = response.json()["job_id"]
-    assert updated["call"][0] == job_id
+    assert response.status_code == 503
     assert updated["call"][1] == "failed"
+
+
+def test_ingest_still_returns_503_when_marking_the_job_failed_also_fails(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.api.get_settings", lambda: object())
+    monkeypatch.setattr("ask_the_docs.api.validate_source", lambda source: None)
+
+    async def fake_create_job(client, job_id, kind, source):
+        pass
+
+    async def failing_publish(settings, job_id, kind, source):
+        raise QueuePublishError("nats down")
+
+    async def failing_update_job(client, job_id, *, status, result=None, error=None):
+        raise JobStoreError("redis down")
+
+    monkeypatch.setattr("ask_the_docs.api.create_job", fake_create_job)
+    monkeypatch.setattr("ask_the_docs.api.publish_ingest_job", failing_publish)
+    monkeypatch.setattr("ask_the_docs.api.update_job", failing_update_job)
+    monkeypatch.setattr("ask_the_docs.api.get_async_cache_client", lambda settings: object())
+
+    assert TestClient(app).post("/v1/ingest", json={"source": "a.pdf"}).status_code == 503
+    assert TestClient(app).post("/v1/index").status_code == 503
 
 
 def test_ingest_returns_503_when_job_store_write_fails(monkeypatch):

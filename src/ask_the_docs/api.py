@@ -177,6 +177,7 @@ async def _create_and_publish_job(settings, kind: str, source: str | None) -> Jo
             await update_job(client, job_id, status="failed", error=str(exc))
         except Exception:
             logger.warning("Failed to mark job %s failed after a publish error", job_id, exc_info=True)
+        raise HTTPException(status_code=503, detail="Job queue unavailable") from exc
     return JobAcceptedResponse(job_id=job_id, status="queued")
 
 
