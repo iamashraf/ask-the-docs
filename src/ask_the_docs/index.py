@@ -210,6 +210,10 @@ def _group_by_source(chunks: list[Document]) -> dict[str, list[Document]]:
     return grouped
 
 
+def _chunk_id(chunk: Document) -> str:
+    return f"{chunk.metadata['source_doc_id']}:{chunk.metadata['content_hash'][:16]}:{chunk.metadata['chunk_index']}"
+
+
 def build_index(docs: list[Document], settings: Settings) -> Chroma:
     """Idempotent: a source whose existing chunks already match its fresh
     content hash and count is skipped entirely (no re-embed, no re-insert);
@@ -224,7 +228,7 @@ def build_index(docs: list[Document], settings: Settings) -> Chroma:
     # deleted, which a chunks-only loop would silently skip.
     attempted_source_ids = {doc.metadata["source_doc_id"] for doc in docs}
 
-    to_insert: list[Document] = []
+    pending: list[tuple[list[Document], list[str]]] = []
     mutated = False
     try:
         for source_doc_id in attempted_source_ids:
@@ -242,20 +246,26 @@ def build_index(docs: list[Document], settings: Settings) -> Chroma:
                     and len(existing["ids"]) == len(source_chunks)
                 ):
                     continue
-                mutated = True
-                index.delete(ids=existing["ids"])
-            to_insert.extend(source_chunks)
+            new_ids = {_chunk_id(c) for c in source_chunks}
+            pending.append((source_chunks, [i for i in existing["ids"] if i not in new_ids]))
 
-        if to_insert:
-            mutated = True
-            for i in range(0, len(to_insert), INDEX_WRITE_BATCH_SIZE):
-                index.add_documents(to_insert[i : i + INDEX_WRITE_BATCH_SIZE])
+        # Insert-then-delete per source with deterministic ids: a failed insert
+        # leaves the old chunks intact, and a redelivered or concurrent run
+        # upserts the same ids instead of duplicating.
+        for source_chunks, stale_ids in pending:
+            for i in range(0, len(source_chunks), INDEX_WRITE_BATCH_SIZE):
+                batch = source_chunks[i : i + INDEX_WRITE_BATCH_SIZE]
+                mutated = True
+                index.add_documents(batch, ids=[_chunk_id(c) for c in batch])
+            if stale_ids:
+                mutated = True
+                index.delete(ids=stale_ids)
     except OllamaUnavailableError:
         raise
     except Exception as exc:
-        raise IndexWriteError(f"Failed to update the index ({len(to_insert)} chunk(s) pending)") from exc
+        raise IndexWriteError("Failed to update the index") from exc
     finally:
-        # Bumped even on failure: a delete (or partial insert) already changed the store.
+        # Bumped even on failure: a partial insert or delete already changed the store.
         if mutated:
             _bump_index_generation(settings)
     build_graph(chunks, settings)

@@ -433,7 +433,7 @@ def test_build_index_wraps_non_ollama_write_failures(tmp_path, monkeypatch):
         def get(self, where, include):
             return {"ids": [], "metadatas": []}
 
-        def add_documents(self, docs):
+        def add_documents(self, docs, ids=None):
             raise RuntimeError("disk full")
 
     monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: BrokenChroma())
@@ -451,7 +451,7 @@ def test_build_index_lets_ollama_unavailable_propagate_unwrapped(tmp_path, monke
         def get(self, where, include):
             return {"ids": [], "metadatas": []}
 
-        def add_documents(self, docs):
+        def add_documents(self, docs, ids=None):
             raise OllamaUnavailableError("could not reach ollama")
 
     monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: UnreachableChroma())
@@ -490,7 +490,7 @@ def test_build_index_wraps_chroma_read_and_delete_failures(tmp_path, monkeypatch
         def delete(self, ids):
             raise RuntimeError("chroma down")
 
-        def add_documents(self, docs):
+        def add_documents(self, docs, ids=None):
             pass
 
     monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: BrokenChroma())
@@ -498,6 +498,49 @@ def test_build_index_wraps_chroma_read_and_delete_failures(tmp_path, monkeypatch
 
     with pytest.raises(IndexWriteError):
         build_index([doc], make_settings(tmp_path))
+
+
+def test_build_index_failed_insert_leaves_the_old_chunks_intact(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    build_index([Document(page_content="v1 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+    index = load_index(settings)
+    old_ids = index.get()["ids"]
+    monkeypatch.setattr(index, "add_documents", lambda docs, **kw: (_ for _ in ()).throw(RuntimeError("disk full")))
+
+    with pytest.raises(IndexWriteError):
+        build_index([Document(page_content="v2 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+
+    assert index.get()["ids"] == old_ids
+
+
+def test_build_index_replace_leaves_only_the_new_deterministic_chunk_ids(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    build_index([Document(page_content="v1 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+    doc_v2 = Document(page_content="v2 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    build_index([doc_v2], settings)
+
+    new_hash = chunk_documents([doc_v2], embedding_model="nomic-embed-text")[0].metadata["content_hash"]
+    assert load_index(settings).get()["ids"] == [f"docA:{new_hash[:16]}:0"]
+
+
+def test_build_index_running_the_same_replace_twice_does_not_duplicate(tmp_path, monkeypatch):
+    """Simulates redelivery/a concurrent worker that planned before the first finished."""
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    build_index([Document(page_content="v1 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+    doc_v2 = Document(page_content="v2 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})
+    build_index([doc_v2], settings)
+    index = load_index(settings)
+    stale_view = {"ids": [], "metadatas": []}
+    monkeypatch.setattr(index, "get", lambda **kw: stale_view)
+    monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: index)
+
+    build_index([doc_v2], settings)
+
+    assert index._collection.count() == 1
 
 
 def test_get_all_chunks_returns_every_indexed_chunk(tmp_path, monkeypatch):
