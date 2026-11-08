@@ -156,3 +156,15 @@ def test_write_graph_warns_when_last_triplets_consume_fails(caplog):
 
     assert len(driver.session_obj.queries) == 2
     assert any(record.levelname == "WARNING" for record in caplog.records)
+
+
+def test_clear_graph_deletes_all_entity_and_community_nodes_with_relationships():
+    from ask_the_docs.graph_store import clear_graph
+
+    driver = FakeDriver()
+
+    clear_graph(driver)
+
+    (query, _), = driver.session_obj.queries
+    assert "DETACH DELETE" in query
+    assert "Entity" in query and "Community" in query

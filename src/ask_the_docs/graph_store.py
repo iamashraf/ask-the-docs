@@ -18,6 +18,14 @@ MERGE (o:Entity {name: $object})
 MERGE (s)-[:RELATED_TO {relation: $relation}]->(o)
 """
 
+_CLEAR_GRAPH_QUERY = "MATCH (n) WHERE n:Entity OR n:Community DETACH DELETE n"
+
+
+def clear_graph(driver: neo4j.Driver) -> None:
+    """Wipes entities and communities so a rebuild from all chunks leaves no stale facts; raises on Neo4j errors."""
+    with driver.session() as session:
+        session.run(_CLEAR_GRAPH_QUERY).consume()
+
 
 def write_graph(driver: neo4j.Driver, chunk_triplets: list[tuple[Triplet, str]]) -> None:
     try:

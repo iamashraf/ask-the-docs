@@ -22,7 +22,7 @@ from ask_the_docs.embeddings import get_embeddings
 from ask_the_docs.entity_resolution import resolve_entities
 from ask_the_docs.graph_client import get_graph_client
 from ask_the_docs.graph_extract import extract_triplets
-from ask_the_docs.graph_store import write_graph
+from ask_the_docs.graph_store import clear_graph, write_graph
 from ask_the_docs.llm import OllamaUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -188,6 +188,7 @@ def build_graph(chunks: list[Document], settings: Settings) -> None:
         driver = None
         try:
             driver = get_graph_client(settings)
+            clear_graph(driver)
             write_graph(driver, list(zip(resolved_triplets, chunk_refs, strict=True)))
         except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
             logger.warning("Graph write failed; continuing without updating the graph.", exc_info=True)
@@ -268,7 +269,8 @@ def build_index(docs: list[Document], settings: Settings) -> Chroma:
         # Bumped even on failure: a partial insert or delete already changed the store.
         if mutated:
             _bump_index_generation(settings)
-    build_graph(chunks, settings)
+    # Rebuilt from the whole index, not this batch: the graph is wiped before each write.
+    build_graph(get_all_chunks(settings) if settings.graph_enabled else chunks, settings)
     return index
 
 
