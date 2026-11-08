@@ -154,6 +154,25 @@ job result, and a graph failure never fails the vector index job. The
 extraction, summary and scoring prompts fence chunk text, entity names,
 queries and summaries as tagged data, and escape closing tags inside them.
 
+Graph indexing is incremental. When a source is new, replaced or
+re-ingested with no chunks, `build_index` tells `build_graph` which
+sources changed. The graph drops their facts (`chunk_refs` on entities
+and `RELATED_TO` edges, and any entity or edge left with none) and
+extracts only the new chunks. New entities are resolved against the
+existing entity names, and existing names win as canonical. Community
+detection and summaries then re-run over the whole graph. An unchanged
+re-ingest does no extraction.
+
+A full wipe and rebuild from all chunks happens when the graph is empty,
+when old edges have no `chunk_refs` (the first ingest after upgrading
+re-tags them), or when the incremental update fails before it writes.
+`build_index(..., full_graph_rebuild=True)` forces it, but neither the CLI
+nor the API passes it. Limits:
+
+- Chunks whose extraction failed earlier are not retried on an unchanged re-ingest.
+- Incremental and full rebuild can resolve entities slightly differently (first-seen cluster rule).
+- Every changed ingest still embeds all existing entity names and re-runs Leiden over the whole graph.
+
 - [Edge et al., 2024 — From Local to Global: A Graph RAG Approach to Query-Focused Summarization (arXiv:2404.16130)](https://arxiv.org/abs/2404.16130) — the paper this local/global, community-summary design is based on.
 - [Traag, Waltman & van Eck, 2019 — From Louvain to Leiden: guaranteeing well-connected communities (arXiv:1810.08473)](https://arxiv.org/abs/1810.08473) — why Leiden is used instead of the more commonly-cited Louvain algorithm it improves on.
 - [Neo4j GDS — Leiden algorithm](https://neo4j.com/docs/graph-data-science/current/algorithms/leiden/) — the in-database implementation this project calls directly; notably requires an undirected graph projection.

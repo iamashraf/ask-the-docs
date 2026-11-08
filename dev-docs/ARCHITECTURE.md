@@ -83,6 +83,25 @@ build status (`ok`, `skipped` or `failed: <ExceptionClass>`) appears as
 `graph` in the job result. A graph failure never fails the vector index
 job.
 
+Graph indexing is incremental. `build_index` tells `build_graph` which
+sources were new, replaced or re-ingested with no chunks. The graph drops
+those sources' facts (their `chunk_refs` on entities and `RELATED_TO`
+edges, and any entity or edge left with none) and extracts only the new
+chunks. New entity names are resolved against the existing entity names,
+and existing names win as canonical. Community detection and summaries
+then re-run over the whole graph. An unchanged re-ingest does no
+extraction.
+
+The graph is wiped and rebuilt from all chunks when it is empty, when old
+edges have no `chunk_refs` (the first ingest after upgrading re-tags
+them), or when the incremental update fails before it writes.
+`build_index(..., full_graph_rebuild=True)` forces this rebuild, but
+neither the CLI nor the API passes it. Limits:
+
+- Chunks whose extraction failed earlier are not retried on an unchanged re-ingest.
+- Incremental and full rebuild can resolve entities slightly differently (first-seen cluster rule).
+- Every changed ingest still embeds all existing entity names and re-runs Leiden over the whole graph.
+
 Both the CLI (`ingest`/`index`/`ask`/`evaluate`/`serve`/`worker`) and the
 HTTP API (`/v1/...`) drive this same pipeline — no logic is duplicated
 between them. There's one binary, not three: the `app` and `worker`
