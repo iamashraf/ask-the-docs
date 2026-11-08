@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from ask_the_docs.config import REFUSAL_MESSAGE, ProviderConfig, Settings
@@ -190,3 +191,15 @@ def test_graph_enabled_accepts_a_custom_neo4j_password():
 
 def test_graph_disabled_ignores_the_neo4j_password():
     assert _graph_settings(graph_enabled=False, neo4j_password="").graph_enabled is False
+
+
+def test_compose_persists_nats_jetstream_and_points_app_and_worker_at_it():
+    compose = yaml.safe_load((Path(__file__).parent.parent / "docker-compose.yml").read_text())
+    nats_service = compose["services"]["nats"]
+    command = nats_service["command"]
+    store_dir = command[command.index("--store_dir") + 1]
+
+    volume = next(v for v in nats_service["volumes"] if v.split(":")[1] == store_dir)
+    assert volume.split(":")[0] in compose["volumes"]
+    for name in ("app", "worker"):
+        assert "NATS_URL=nats://nats:4222" in compose["services"][name]["environment"]
