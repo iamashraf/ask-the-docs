@@ -49,8 +49,6 @@ flowchart TD
         GUARD -- fails twice --> REFUSE[Refusal after one retry]
         GUARD -- passes --> ANS
         ANS --> CACHESET[(Cache result)]
-        CHITCHAT --> CACHESET
-        METAREPLY --> CACHESET
         REFUSE --> CACHESET
     end
 
@@ -120,11 +118,16 @@ going through the API or the queue.
 - **Pluggable backends** — generator, judge, and embeddings are each a
   `Protocol`/factory pair (`llm.py`, `embeddings.py`), so swapping
   providers is a config change, not a code change.
-- **Caching** — exact-match query cache (Valkey), keyed on the query plus
-  every setting that affects the answer (including the index generation,
-  a counter bumped on every real ingest write), so a re-ingest
-  invalidates stale entries automatically, even one that replaces a
-  source with the same chunk count.
+- **Caching** — exact-match answer cache (Valkey) with two tiers. Tier 1
+  (in `answer()`) is keyed on the query, the trimmed history,
+  `history_max_turns`, the analyze prompt and every setting that affects
+  the answer, including the index generation, a counter bumped on every
+  ingest write. Tier 2 (on the doc path) is keyed on the resolved
+  standalone query, plus the user's raw wording when it differs. A
+  re-ingest invalidates stale entries automatically, even one that
+  replaces a source with the same chunk count. Chitchat and meta
+  answers are not cached, and neither is a result built from a degraded
+  retrieval (one side failed).
 - **Graph RAG (local/global search)** — at ingest time, an LLM extracts
   (subject, relation, object) triplets per chunk, resolved to canonical
   entities by embedding similarity and written to Neo4j; Neo4j GDS Leiden
