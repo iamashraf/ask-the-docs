@@ -166,8 +166,8 @@ re-ingest does no extraction.
 A full wipe and rebuild from all chunks happens when the graph is empty,
 when old edges have no `chunk_refs` (the first ingest after upgrading
 re-tags them), or when the incremental update fails before it writes.
-`build_index(..., full_graph_rebuild=True)` forces it, but neither the CLI
-nor the API passes it. Limits:
+`ask-the-docs index --rebuild-graph` (or `build_index(...,
+full_graph_rebuild=True)`) forces it; the API does not. Limits:
 
 - Chunks whose extraction failed earlier are not retried on an unchanged re-ingest.
 - Incremental and full rebuild can resolve entities slightly differently (first-seen cluster rule).

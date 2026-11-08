@@ -95,12 +95,21 @@ extraction.
 The graph is wiped and rebuilt from all chunks when it is empty, when old
 edges have no `chunk_refs` (the first ingest after upgrading re-tags
 them), or when the incremental update fails before it writes.
-`build_index(..., full_graph_rebuild=True)` forces this rebuild, but
-neither the CLI nor the API passes it. Limits:
+`ask-the-docs index --rebuild-graph` (or `build_index(...,
+full_graph_rebuild=True)`) forces this rebuild; the API does not. Limits:
 
 - Chunks whose extraction failed earlier are not retried on an unchanged re-ingest.
 - Incremental and full rebuild can resolve entities slightly differently (first-seen cluster rule).
 - Every changed ingest still embeds all existing entity names and re-runs Leiden over the whole graph.
+
+Removing a source deletes its chunks, bumps the index generation once and
+drops its graph facts. A graph error does not fail the removal, and
+community detection is not re-run. The file watcher sends a `remove` job
+for each deleted file, so deploy the worker before the watcher. A full
+index also prunes `docs_dir` sources whose files no longer exist. After a
+job that changed the index, the worker pre-warms the BM25 cache without
+failing the job. The pre-warm moves the rebuild off the first query. BM25
+is still rebuilt in full for each generation.
 
 Two Valkey caches cut repeat LLM calls. Extracted triplets are cached per
 chunk, keyed on chunk text, extraction prompt and model, with a 30 day
