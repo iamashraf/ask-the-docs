@@ -1,7 +1,7 @@
 [project]
 name = "ask-the-docs"
 version = "0.1.0"
-description = "Local-first RAG over your own documents: hybrid search, reranking, optional Graph RAG, and a chat UI."
+description = "RAG over your own documents with local storage and search: hybrid search, reranking, optional Graph RAG, Claude or Ollama for answers, and a chat UI."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
