@@ -28,6 +28,8 @@ DURABLE_CONSUMER_NAME = "ingest-workers"
 # e2e/test_ingest_batch_e2e.py) so a long-running job's ack doesn't become
 # eligible for redelivery while it is still in progress.
 WORKER_ACK_WAIT_SECONDS = 300
+# Bounds redelivery of a job that keeps crashing the worker.
+WORKER_MAX_DELIVER = 5
 WORKER_HEARTBEAT_SECONDS = WORKER_ACK_WAIT_SECONDS / 3
 
 
@@ -96,8 +98,11 @@ async def _consume_once(settings: Settings, sub) -> None:
     for msg in msgs:
         try:
             payload = json.loads(msg.data)
+            if not isinstance(payload, dict):
+                raise ValueError("job payload is not a JSON object")
         except Exception:
             logger.warning("Dropping an unparseable job message", exc_info=True)
+            await msg.term()
             continue
         ctx = propagate.extract({"traceparent": payload.get("traceparent")})
         heartbeat = asyncio.create_task(_heartbeat(msg))
@@ -140,7 +145,7 @@ async def run_worker(settings: Settings) -> None:
     sub = await js.pull_subscribe(
         INGEST_JOBS_SUBJECT,
         durable=DURABLE_CONSUMER_NAME,
-        config=ConsumerConfig(ack_wait=WORKER_ACK_WAIT_SECONDS),
+        config=ConsumerConfig(ack_wait=WORKER_ACK_WAIT_SECONDS, max_deliver=WORKER_MAX_DELIVER),
     )
     logger.info("Worker started, consuming %s", INGEST_JOBS_SUBJECT)
     while True:

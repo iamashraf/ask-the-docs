@@ -13,6 +13,7 @@ from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.worker import (
     DURABLE_CONSUMER_NAME,
     WORKER_ACK_WAIT_SECONDS,
+    WORKER_MAX_DELIVER,
     _consume_once,
     _sample_queue_depth,
     process_job,
@@ -397,6 +398,20 @@ async def test_consume_once_drops_an_unparseable_message_without_crashing(monkey
     await _consume_once(make_settings(), sub)  # must not raise
 
     assert called == []
+    assert msg.termed is True
+    assert msg.acked is False
+
+
+async def test_consume_once_terminates_a_payload_that_is_not_a_json_object(monkeypatch):
+    msg = FakeMsg(b"[1, 2]")
+    sub = FakeSub([[msg]])
+    called = []
+    monkeypatch.setattr("ask_the_docs.worker.process_job", lambda *a: called.append(a))
+
+    await _consume_once(make_settings(), sub)  # must not raise
+
+    assert called == []
+    assert msg.termed is True
 
 
 async def test_run_worker_subscribes_with_a_generous_ack_wait(monkeypatch):
@@ -426,6 +441,7 @@ async def test_run_worker_subscribes_with_a_generous_ack_wait(monkeypatch):
         await run_worker(make_settings())
 
     assert calls["config"].ack_wait == WORKER_ACK_WAIT_SECONDS
+    assert calls["config"].max_deliver == WORKER_MAX_DELIVER
 
 
 async def test_run_worker_configures_tracing(monkeypatch):
