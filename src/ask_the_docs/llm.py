@@ -26,6 +26,12 @@ def strip_code_fence(raw: str) -> str:
     return match.group(1) if match else raw
 
 
+def fence_untrusted(tag: str, text: str) -> str:
+    """Wraps untrusted text in <tag> and escapes any open/close tag inside it so it cannot end the block early."""
+    escaped = re.sub(rf"<(\s*/?\s*{re.escape(tag)}\s*)>", r"&lt;\1&gt;", text, flags=re.IGNORECASE)
+    return f"<{tag}>\n{escaped}\n</{tag}>"
+
+
 OLLAMA_CHAT_TIMEOUT_SECONDS = 60
 # Ollama's own default idle-unload is 5m -- without an explicit keep_alive,
 # a gap between requests longer than that forces the next call to pay a
