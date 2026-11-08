@@ -363,6 +363,23 @@ def remove_sources(source_doc_ids: set[str], settings: Settings) -> None:
             logger.warning("Graph removal failed; the graph keeps facts of the removed sources.", exc_info=True)
 
 
+def prune_missing_docs_sources(settings: Settings) -> set[str]:
+    """Removes indexed sources whose file lived under docs_dir and is gone; URLs and other non-path sources are never touched."""
+    docs_dir = settings.docs_dir.resolve()
+    try:
+        metadatas = load_index(settings).get(include=["metadatas"])["metadatas"]
+    except Exception as exc:
+        raise IndexWriteError("Failed to read the index") from exc
+    vanished = set()
+    for metadata in metadatas:
+        path = Path(metadata["source"])
+        if path.is_absolute() and path.is_relative_to(docs_dir) and not path.exists():
+            vanished.add(metadata["source_doc_id"])
+    if vanished:
+        remove_sources(vanished, settings)
+    return vanished
+
+
 _index_cache: dict[tuple[str, int, str], Chroma] = {}
 # 1, not 2: the generation only ever increases and is re-read fresh on
 # every call, so a previous generation's entry is never looked up again

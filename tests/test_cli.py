@@ -43,12 +43,27 @@ def test_index_discovers_docs_dir_and_builds_index(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "ask_the_docs.cli.build_index", lambda docs, settings: captured.setdefault("docs", docs)
     )
+    monkeypatch.setattr("ask_the_docs.cli.prune_missing_docs_sources", lambda s: captured.setdefault("pruned", s))
 
     parser = build_parser()
     args = parser.parse_args(["index"])
     args.func(args, settings)
 
     assert captured["docs"] == ["doc-for-a.pdf", "doc-for-b.pdf"]
+    assert captured["pruned"] is settings
+
+
+def test_index_prunes_vanished_files_even_when_docs_dir_is_empty(tmp_path, monkeypatch):
+    settings = make_settings(docs_dir=tmp_path)
+    monkeypatch.setattr("ask_the_docs.cli.dispatch_all_under_docs_dir", lambda s: ([], 0))
+    pruned = []
+    monkeypatch.setattr("ask_the_docs.cli.prune_missing_docs_sources", lambda s: pruned.append(s))
+
+    parser = build_parser()
+    args = parser.parse_args(["index"])
+    args.func(args, settings)
+
+    assert pruned == [settings]
 
 
 def test_ask_prints_answer_and_citations(capsys, monkeypatch):

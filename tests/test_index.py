@@ -25,6 +25,7 @@ from ask_the_docs.index import (
     get_collection_name,
     get_index_generation,
     list_sources,
+    prune_missing_docs_sources,
     remove_sources,
     load_index,
 )
@@ -1492,3 +1493,49 @@ def test_remove_sources_wraps_chroma_failures(tmp_path, monkeypatch):
 
     with pytest.raises(IndexWriteError):
         remove_sources({"docA"}, make_settings(tmp_path))
+
+
+def test_prune_missing_docs_sources_removes_only_vanished_docs_dir_files(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.build_graph", lambda *a, **k: None)
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    present = docs_dir / "present.txt"
+    present.write_text("x")
+    settings = make_settings(tmp_path).model_copy(update={"docs_dir": docs_dir})
+    sources = {
+        "present": str(present.resolve()),
+        "gone": str(docs_dir.resolve() / "gone.txt"),
+        "url": "https://example.com/gone.txt",
+        "outside": str(tmp_path.resolve() / "other" / "gone.txt"),
+        "upload": "pasted-text",
+    }
+    build_index(
+        [Document(page_content=f"{k} " * 400, metadata={"source": v, "source_doc_id": k}) for k, v in sources.items()],
+        settings,
+    )
+
+    pruned = prune_missing_docs_sources(settings)
+
+    assert pruned == {"gone"}
+    assert {c.metadata["source_doc_id"] for c in get_all_chunks(settings)} == {"present", "url", "outside", "upload"}
+
+
+def test_prune_missing_docs_sources_is_a_noop_when_nothing_vanished(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    generation = get_index_generation(settings)
+
+    assert prune_missing_docs_sources(settings) == set()
+    assert get_index_generation(settings) == generation
+
+
+def test_prune_missing_docs_sources_wraps_chroma_read_failures(tmp_path, monkeypatch):
+    class BrokenChroma:
+        def get(self, include):
+            raise RuntimeError("chroma down")
+
+    monkeypatch.setattr("ask_the_docs.index.load_index", lambda settings: BrokenChroma())
+
+    with pytest.raises(IndexWriteError):
+        prune_missing_docs_sources(make_settings(tmp_path))

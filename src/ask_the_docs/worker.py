@@ -14,13 +14,14 @@ from opentelemetry import propagate, trace
 
 from ask_the_docs import metrics
 from ask_the_docs.config import Settings, get_settings
-from ask_the_docs.index import IndexWriteError, build_index
+from ask_the_docs.index import IndexWriteError, build_index, prune_missing_docs_sources, remove_sources
 from ask_the_docs.ingest import (
     PathSecurityError,
     UnsupportedFileTypeError,
     UrlSecurityError,
     dispatch,
     dispatch_all_under_docs_dir,
+    make_source_doc_id,
 )
 from ask_the_docs.jobs import close_async_cache_client, get_async_cache_client, update_job
 from ask_the_docs.llm import OllamaUnavailableError
@@ -69,6 +70,12 @@ async def process_job(settings: Settings, payload: dict) -> None:
     client = get_async_cache_client(settings)
     await update_job(client, job_id, status="processing")
     try:
+        if kind == "remove":
+            source_doc_id = make_source_doc_id(str(settings.docs_dir.resolve() / source))
+            await asyncio.to_thread(remove_sources, {source_doc_id}, settings)
+            await update_job(client, job_id, status="done", result={"sources_removed": 1})
+            metrics.ingest_job_total.add(1, {"status": "success"})
+            return
         if kind == "ingest":
             docs = await asyncio.to_thread(dispatch, source)
             file_count = 1
@@ -79,6 +86,8 @@ async def process_job(settings: Settings, payload: dict) -> None:
             build_start = time.monotonic()
             graph_status = await asyncio.to_thread(build_index, docs, settings)
             metrics.build_index_latency_seconds.record(time.monotonic() - build_start)
+        if kind == "index":
+            await asyncio.to_thread(prune_missing_docs_sources, settings)
         result = {"documents_ingested": len(docs)}
         if kind == "index":
             result["files_found"] = file_count

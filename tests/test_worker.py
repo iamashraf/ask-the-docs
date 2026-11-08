@@ -145,6 +145,8 @@ async def test_process_job_handles_the_index_kind(monkeypatch, tmp_path):
     docs = [Document(page_content="hi", metadata={"source": "a.txt", "source_doc_id": "a"})]
     monkeypatch.setattr("ask_the_docs.worker.dispatch_all_under_docs_dir", lambda s: (docs, 3))
     monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: None)
+    pruned = []
+    monkeypatch.setattr("ask_the_docs.worker.prune_missing_docs_sources", lambda s: pruned.append(s))
     updates = []
 
     async def fake_update_job(client, job_id, *, status, result=None, error=None):
@@ -156,6 +158,43 @@ async def test_process_job_handles_the_index_kind(monkeypatch, tmp_path):
     await process_job(make_settings(), {"job_id": "job-3", "kind": "index", "source": None})
 
     assert updates[-1] == ("job-3", "done", {"documents_ingested": 1, "files_found": 3}, None)
+    assert len(pruned) == 1
+
+
+async def test_process_job_prunes_even_when_the_docs_dir_is_now_empty(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.worker.dispatch_all_under_docs_dir", lambda s: ([], 0))
+    pruned = []
+    monkeypatch.setattr("ask_the_docs.worker.prune_missing_docs_sources", lambda s: pruned.append(s))
+    monkeypatch.setattr("ask_the_docs.worker.update_job", lambda *a, **k: _noop())
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    await process_job(make_settings(), {"job_id": "job-3", "kind": "index", "source": None})
+
+    assert len(pruned) == 1
+
+
+async def test_process_job_handles_the_remove_kind(monkeypatch, tmp_path):
+    from ask_the_docs.ingest import make_source_doc_id
+
+    settings = Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+        docs_dir=tmp_path,
+    )
+    removed = []
+    monkeypatch.setattr("ask_the_docs.worker.remove_sources", lambda ids, s: removed.append(ids))
+    updates = []
+
+    async def fake_update_job(client, job_id, *, status, result=None, error=None):
+        updates.append((job_id, status, result, error))
+
+    monkeypatch.setattr("ask_the_docs.worker.update_job", fake_update_job)
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    await process_job(settings, {"job_id": "job-r", "kind": "remove", "source": "a.pdf"})
+
+    assert removed == [{make_source_doc_id(str(tmp_path.resolve() / "a.pdf"))}]
+    assert updates[-1][1] == "done"
 
 
 async def test_process_job_is_safe_to_run_twice_for_the_same_job_id(monkeypatch):

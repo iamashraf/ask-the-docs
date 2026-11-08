@@ -10,7 +10,7 @@ from ask_the_docs.answer import answer
 from ask_the_docs.api import app as api_app
 from ask_the_docs.config import Settings, get_settings
 from ask_the_docs.evaluate import run_evaluation, summarize
-from ask_the_docs.index import build_index
+from ask_the_docs.index import build_index, prune_missing_docs_sources
 from ask_the_docs.ingest import dispatch, dispatch_all_under_docs_dir
 from ask_the_docs.retrieval_eval import retrieval_metrics, retrieval_report, run_retrieval_eval
 from ask_the_docs.routing_eval import routing_report, run_routing_eval
@@ -34,6 +34,7 @@ def _index(args: argparse.Namespace, settings) -> None:
     docs, file_count = dispatch_all_under_docs_dir(settings)
     if docs:
         build_index(docs, settings)
+    prune_missing_docs_sources(settings)
     print(f"Indexed {len(docs)} document(s) from {file_count} file(s) under {settings.docs_dir}.")
 
 
