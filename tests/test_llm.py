@@ -788,3 +788,22 @@ def test_credential_treats_a_blank_config_key_as_unset(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key")
     config = ProviderConfig(provider="anthropic", model="m", api_key="  ")
     assert resolve_anthropic_credential(config) == {"api_key": "env-key"}
+
+
+def test_anthropic_client_skips_thinking_blocks_and_joins_text_blocks(monkeypatch):
+    class FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(type="thinking", thinking="let me think"),
+                    SimpleNamespace(type="text", text="first "),
+                    SimpleNamespace(type="text", text="second"),
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, **kwargs):
+            self.messages = FakeMessages()
+
+    monkeypatch.setattr("ask_the_docs.llm.Anthropic", FakeAnthropic)
+    assert AnthropicLLMClient(model="claude-sonnet-5-5", api_key="x").generate("hi") == "first second"

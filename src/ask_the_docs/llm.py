@@ -227,7 +227,7 @@ class AnthropicLLMClient:
             raise LLMUnavailableError("The Anthropic API is unavailable or overloaded. Try again shortly.") from exc
         usage = getattr(response, "usage", None)
         return GenerationResult(
-            text=response.content[0].text,
+            text="".join(block.text for block in response.content if getattr(block, "type", "text") == "text"),
             input_tokens=getattr(usage, "input_tokens", None),
             output_tokens=getattr(usage, "output_tokens", None),
             response_model=getattr(response, "model", None),
