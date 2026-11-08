@@ -168,3 +168,13 @@ def test_clear_graph_deletes_all_entity_and_community_nodes_with_relationships()
     (query, _), = driver.session_obj.queries
     assert "DETACH DELETE" in query
     assert "Entity" in query and "Community" in query
+
+
+def test_write_graph_returns_none_on_success_and_the_exception_class_name_on_failure():
+    assert write_graph(FakeDriver(), [(Triplet(subject="A", relation="uses", obj="B"), "doc1:0")]) is None
+
+    class BrokenDriver:
+        def session(self):
+            raise ServiceUnavailable("secret-host:7687 down")
+
+    assert write_graph(BrokenDriver(), [(Triplet(subject="A", relation="uses", obj="B"), "doc1:0")]) == "ServiceUnavailable"

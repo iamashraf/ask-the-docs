@@ -921,6 +921,66 @@ def test_build_index_rebuilds_graph_from_every_indexed_chunk_not_just_this_batch
     assert {c.metadata["source_doc_id"] for c in captured[1]} == {"docA", "docB"}
 
 
+def _patch_graph_pipeline(monkeypatch, *, write=None, detect=None, summarize=None, client_error=None):
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", lambda *a, **k: [Triplet("A", "uses", "B")])
+    monkeypatch.setattr("ask_the_docs.index.resolve_entities", lambda triplets, s: triplets)
+
+    def client(s):
+        if client_error:
+            raise client_error
+        return "fake-driver"
+
+    monkeypatch.setattr("ask_the_docs.index.get_graph_client", client)
+    monkeypatch.setattr("ask_the_docs.index.clear_graph", lambda d: None)
+    monkeypatch.setattr("ask_the_docs.index.write_graph", lambda d, ct: write)
+    monkeypatch.setattr("ask_the_docs.index.run_community_detection", lambda d: detect)
+    monkeypatch.setattr("ask_the_docs.index.summarize_communities", lambda d, s: summarize)
+
+
+def test_build_graph_returns_skipped_when_disabled_or_nothing_extracted(tmp_path, monkeypatch):
+    chunk = [make_chunk("doc1", 0, "text")]
+    assert build_graph(chunk, make_settings(tmp_path, graph_enabled=False)) == "skipped"
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", lambda *a, **k: [])
+    assert build_graph(chunk, make_settings(tmp_path, graph_enabled=True)) == "skipped"
+
+
+def test_build_graph_returns_ok_on_full_success(tmp_path, monkeypatch):
+    _patch_graph_pipeline(monkeypatch)
+    assert build_graph([make_chunk("doc1", 0, "text")], make_settings(tmp_path, graph_enabled=True)) == "ok"
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"write": "Neo4jError"}, "failed: Neo4jError"),
+        ({"detect": "ClientError"}, "failed: ClientError"),
+        ({"summarize": "ServiceUnavailable"}, "failed: ServiceUnavailable"),
+        ({"client_error": ServiceUnavailable("secret-host down")}, "failed: ServiceUnavailable"),
+    ],
+)
+def test_build_graph_returns_failed_with_exception_class_only(tmp_path, monkeypatch, kwargs, expected):
+    _patch_graph_pipeline(monkeypatch, **kwargs)
+    assert build_graph([make_chunk("doc1", 0, "text")], make_settings(tmp_path, graph_enabled=True)) == expected
+
+
+def test_build_graph_returns_failed_when_extraction_raises_for_every_chunk(tmp_path, monkeypatch):
+    def boom(text, s):
+        raise OllamaUnavailableError("ollama is down")
+
+    monkeypatch.setattr("ask_the_docs.index.extract_triplets", boom)
+    result = build_graph([make_chunk("doc1", 0, "text")], make_settings(tmp_path, graph_enabled=True))
+    assert result == "failed: OllamaUnavailableError"
+
+
+def test_build_index_returns_graph_status_only_when_graph_enabled(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    monkeypatch.setattr("ask_the_docs.index.build_graph", lambda chunks, settings: "failed: Neo4jError")
+    doc = Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    assert build_index([doc], make_settings(tmp_path, graph_enabled=True)) == "failed: Neo4jError"
+    assert build_index([doc], make_settings(tmp_path / "off", graph_enabled=False)) is None
+
+
 def test_build_index_calls_build_graph_with_its_chunks(tmp_path, monkeypatch):
     monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
     captured = {}

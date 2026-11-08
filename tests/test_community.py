@@ -410,3 +410,17 @@ def test_summarize_communities_deletes_previous_communities_before_writing(monke
     delete_idx = next(i for i, q in enumerate(queries) if "MATCH (c:Community) DETACH DELETE c" in q)
     first_write_idx = next(i for i, q in enumerate(queries) if "MERGE (c:Community" in q)
     assert delete_idx < first_write_idx
+
+
+def test_community_steps_return_none_on_success_and_the_exception_class_name_on_failure(monkeypatch):
+    class BrokenDriver:
+        def session(self):
+            raise ServiceUnavailable("secret-host:7687 down")
+
+    settings = Settings(
+        generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5", api_key="x"),
+    )
+    assert run_community_detection(FakeDriver()) is None
+    assert run_community_detection(BrokenDriver()) == "ServiceUnavailable"
+    assert summarize_communities(BrokenDriver(), settings) == "ServiceUnavailable"

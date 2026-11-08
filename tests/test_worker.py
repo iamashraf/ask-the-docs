@@ -67,7 +67,7 @@ async def test_process_job_ingests_and_marks_done(monkeypatch, caplog):
     docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
     monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
     built = {}
-    monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: built.setdefault("docs", d))
+    monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: built.setdefault("docs", d) and None)
     updates = []
 
     async def fake_update_job(client, job_id, *, status, result=None, error=None):
@@ -83,6 +83,23 @@ async def test_process_job_ingests_and_marks_done(monkeypatch, caplog):
     assert updates[0] == ("job-1", "processing", None, None)
     assert updates[1] == ("job-1", "done", {"documents_ingested": 1}, None)
     assert any("Job job-1 completed" in record.message for record in caplog.records)
+
+
+async def test_process_job_reports_graph_status_and_stays_done_when_graph_failed(monkeypatch):
+    docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
+    monkeypatch.setattr("ask_the_docs.worker.build_index", lambda d, s: "failed: ServiceUnavailable")
+    updates = []
+
+    async def fake_update_job(client, job_id, *, status, result=None, error=None):
+        updates.append((job_id, status, result, error))
+
+    monkeypatch.setattr("ask_the_docs.worker.update_job", fake_update_job)
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+
+    await process_job(make_settings(), {"job_id": "job-g", "kind": "ingest", "source": "a.pdf"})
+
+    assert updates[-1] == ("job-g", "done", {"documents_ingested": 1, "graph": "failed: ServiceUnavailable"}, None)
 
 
 async def test_process_job_marks_failed_on_an_exception(monkeypatch):

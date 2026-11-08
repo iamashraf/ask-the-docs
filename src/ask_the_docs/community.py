@@ -24,7 +24,8 @@ _SUMMARY_PROMPT_TEMPLATE = (
 )
 
 
-def run_community_detection(driver: neo4j.Driver) -> None:
+def run_community_detection(driver: neo4j.Driver) -> str | None:
+    """Returns None on success, else the failure's exception class name."""
     try:
         with driver.session() as session:
             # .consume() forces each query to fully execute now, so an error raised
@@ -46,13 +47,17 @@ def run_community_detection(driver: neo4j.Driver) -> None:
                     session.run("CALL gds.graph.drop($graph_name, false)", graph_name=_GRAPH_NAME).consume()
                 except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
                     logger.warning("Dropping the GDS projection failed.", exc_info=True)
-    except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
+    except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError) as exc:
         logger.warning(
             "Community detection failed; continuing without updating communities.", exc_info=True
         )
+        return type(exc).__name__
+    return None
 
 
-def summarize_communities(driver: neo4j.Driver, settings: Settings) -> None:
+def summarize_communities(driver: neo4j.Driver, settings: Settings) -> str | None:
+    """Returns None on success, else the first failure's exception class name."""
+    failure = None
     try:
         with driver.session() as session:
             # Leiden community IDs aren't stable between runs, so MERGE alone would
@@ -75,12 +80,15 @@ def summarize_communities(driver: neo4j.Driver, settings: Settings) -> None:
                     # unreachable) on one community must not abort the rest, and must
                     # not undo summaries already written for earlier communities.
                     logger.warning("Failed to summarize community %s: %s", community_id, exc)
+                    failure = failure or type(exc).__name__
                     continue
                 # .consume() forces each query to fully execute now, so an error raised
                 # during execution surfaces at this call rather than being deferred and
                 # raised by a later session.run() (neo4j's buffer-on-next-call behavior).
                 session.run(_WRITE_SUMMARY_QUERY, id=community_id, summary=summary).consume()
-    except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
+    except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError) as exc:
         logger.warning(
             "Community summarization failed; continuing without updating summaries.", exc_info=True
         )
+        return type(exc).__name__
+    return failure

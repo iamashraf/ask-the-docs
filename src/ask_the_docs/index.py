@@ -157,11 +157,12 @@ def _embedding_model_name(settings: Settings) -> str:
     return settings.huggingface_embedding_model
 
 
-def build_graph(chunks: list[Document], settings: Settings) -> None:
-    """Extracts/resolves/writes a knowledge graph from chunks; no-op unless settings.graph_enabled."""
+def build_graph(chunks: list[Document], settings: Settings) -> str:
+    """Extracts/resolves/writes a knowledge graph from chunks; returns "ok", "skipped" (disabled or nothing extracted) or "failed: <exception class>"."""
     if not settings.graph_enabled:
-        return
+        return "skipped"
 
+    failure = None
     try:
         triplets = []
         chunk_refs = []
@@ -173,13 +174,14 @@ def build_graph(chunks: list[Document], settings: Settings) -> None:
                 # Isolated per chunk: one transient LLM failure must not abort
                 # graph building for every other chunk in the ingest.
                 logger.warning("Graph triplet extraction failed for chunk %s: %s", chunk_ref, exc)
+                failure = failure or type(exc).__name__
                 continue
             for triplet in chunk_triplets:
                 triplets.append(triplet)
                 chunk_refs.append(chunk_ref)
 
         if not triplets:
-            return
+            return f"failed: {failure}" if failure else "skipped"
 
         # Resolved once over the whole corpus's triplets, not per chunk -- entity
         # clustering needs every entity name in play to merge well.
@@ -189,19 +191,22 @@ def build_graph(chunks: list[Document], settings: Settings) -> None:
         try:
             driver = get_graph_client(settings)
             clear_graph(driver)
-            write_graph(driver, list(zip(resolved_triplets, chunk_refs, strict=True)))
-        except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
+            failure = write_graph(driver, list(zip(resolved_triplets, chunk_refs, strict=True))) or failure
+        except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError) as exc:
             logger.warning("Graph write failed; continuing without updating the graph.", exc_info=True)
+            failure = failure or type(exc).__name__
 
         # Skip if get_graph_client itself failed above -- no driver to run
         # community detection/summarization with.
         if driver is not None:
-            run_community_detection(driver)
-            summarize_communities(driver, settings)
-    except Exception:
+            failure = run_community_detection(driver) or failure
+            failure = summarize_communities(driver, settings) or failure
+    except Exception as exc:
         # Graph building is an optional enhancement, same reasoning as
         # retrieve.py's query-rewrite step -- it must never crash ingestion.
         logger.warning("Graph build failed; continuing without updating the graph.", exc_info=True)
+        failure = failure or type(exc).__name__
+    return f"failed: {failure}" if failure else "ok"
 
 
 def _group_by_source(chunks: list[Document]) -> dict[str, list[Document]]:
@@ -215,11 +220,12 @@ def _chunk_id(chunk: Document) -> str:
     return f"{chunk.metadata['source_doc_id']}:{chunk.metadata['content_hash'][:16]}:{chunk.metadata['chunk_index']}"
 
 
-def build_index(docs: list[Document], settings: Settings) -> Chroma:
+def build_index(docs: list[Document], settings: Settings) -> str | None:
     """Idempotent: a source whose existing chunks already match its fresh
     content hash and count is skipped entirely (no re-embed, no re-insert);
     any other source (new, changed, or a stale partial-write leftover) has
-    its existing chunks deleted and replaced."""
+    its existing chunks deleted and replaced. Returns the graph build status
+    (see build_graph), or None when graph_enabled is off."""
     chunks = chunk_documents(docs, embedding_model=_embedding_model_name(settings))
     index = load_index(settings)
     chunks_by_source = _group_by_source(chunks)
@@ -270,8 +276,8 @@ def build_index(docs: list[Document], settings: Settings) -> Chroma:
         if mutated:
             _bump_index_generation(settings)
     # Rebuilt from the whole index, not this batch: the graph is wiped before each write.
-    build_graph(get_all_chunks(settings) if settings.graph_enabled else chunks, settings)
-    return index
+    graph_status = build_graph(get_all_chunks(settings) if settings.graph_enabled else chunks, settings)
+    return graph_status if settings.graph_enabled else None
 
 
 _index_cache: dict[tuple[str, int, str], Chroma] = {}

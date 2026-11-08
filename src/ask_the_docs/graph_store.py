@@ -27,7 +27,8 @@ def clear_graph(driver: neo4j.Driver) -> None:
         session.run(_CLEAR_GRAPH_QUERY).consume()
 
 
-def write_graph(driver: neo4j.Driver, chunk_triplets: list[tuple[Triplet, str]]) -> None:
+def write_graph(driver: neo4j.Driver, chunk_triplets: list[tuple[Triplet, str]]) -> str | None:
+    """Returns None on success, else the failure's exception class name."""
     try:
         with driver.session() as session:
             for triplet, chunk_ref in chunk_triplets:
@@ -41,5 +42,7 @@ def write_graph(driver: neo4j.Driver, chunk_triplets: list[tuple[Triplet, str]])
                     object=triplet.obj,
                     chunk_ref=chunk_ref,
                 ).consume()
-    except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError):
+    except (neo4j.exceptions.ServiceUnavailable, neo4j.exceptions.Neo4jError) as exc:
         logger.warning("Graph write failed; continuing without updating the graph.", exc_info=True)
+        return type(exc).__name__
+    return None

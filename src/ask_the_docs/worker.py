@@ -74,13 +74,16 @@ async def process_job(settings: Settings, payload: dict) -> None:
             file_count = 1
         else:
             docs, file_count = await asyncio.to_thread(dispatch_all_under_docs_dir, settings)
+        graph_status = None
         if docs:
             build_start = time.monotonic()
-            await asyncio.to_thread(build_index, docs, settings)
+            graph_status = await asyncio.to_thread(build_index, docs, settings)
             metrics.build_index_latency_seconds.record(time.monotonic() - build_start)
         result = {"documents_ingested": len(docs)}
         if kind == "index":
             result["files_found"] = file_count
+        if graph_status:
+            result["graph"] = graph_status
         await update_job(client, job_id, status="done", result=result)
         logger.info("Job %s completed: kind=%s, documents=%d", job_id, kind, len(docs))
         metrics.ingest_job_total.add(1, {"status": "success"})
