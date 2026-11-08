@@ -2,7 +2,9 @@ from datetime import datetime
 
 import pytest
 
+from ask_the_docs import jobs
 from ask_the_docs.jobs import JobStoreError, create_job, get_job, list_jobs, update_job
+from tests.test_queue import make_settings
 
 
 class FakeAsyncRedis:
@@ -163,3 +165,32 @@ async def test_create_job_indexes_by_its_created_at_epoch_seconds():
     job = await get_job(client, "job-1")
     expected_score = datetime.fromisoformat(job["created_at"]).timestamp()
     assert client._zsets["jobs:index"]["job-1"] == expected_score
+
+
+async def test_get_async_cache_client_reuses_one_client_per_process():
+    settings = make_settings()
+
+    first = jobs.get_async_cache_client(settings)
+    second = jobs.get_async_cache_client(settings)
+
+    assert first is second
+    await jobs.close_async_cache_client()
+
+
+async def test_close_async_cache_client_makes_the_next_call_create_a_new_client():
+    settings = make_settings()
+    first = jobs.get_async_cache_client(settings)
+
+    await jobs.close_async_cache_client()
+    second = jobs.get_async_cache_client(settings)
+
+    assert second is not first
+    await jobs.close_async_cache_client()
+
+
+async def test_get_async_cache_client_differs_for_a_different_url():
+    first = jobs.get_async_cache_client(make_settings())
+    other = make_settings().model_copy(update={"cache_url": "redis://other:6379"})
+
+    assert jobs.get_async_cache_client(other) is not first
+    await jobs.close_async_cache_client()

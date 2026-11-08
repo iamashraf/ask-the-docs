@@ -31,7 +31,15 @@ from ask_the_docs.ingest import (
     UrlSecurityError,
     validate_source,
 )
-from ask_the_docs.jobs import JobStoreError, create_job, get_async_cache_client, get_job, list_jobs, update_job
+from ask_the_docs.jobs import (
+    JobStoreError,
+    close_async_cache_client,
+    create_job,
+    get_async_cache_client,
+    get_job,
+    list_jobs,
+    update_job,
+)
 from ask_the_docs.llm import OllamaUnavailableError
 from ask_the_docs.queue import QueuePublishError, close_publisher, publish_ingest_job
 from ask_the_docs.reranker import DEFAULT_RERANKER_MODEL, get_reranker
@@ -78,6 +86,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Warming the resident index/BM25 caches failed; continuing without warm-up.", exc_info=True)
     yield
     await close_publisher()
+    await close_async_cache_client()
 
 GOLDEN_QUESTIONS_PATH = Path("evals/golden_questions.yaml")
 

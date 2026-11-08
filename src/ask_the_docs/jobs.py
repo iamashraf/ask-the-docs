@@ -1,5 +1,6 @@
 """Job status tracking for async ingestion, stored in Redis."""
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from typing import Literal
@@ -18,8 +19,24 @@ class JobStoreError(RuntimeError):
     pass
 
 
+_client: redis.Redis | None = None
+_client_key: tuple[str, asyncio.AbstractEventLoop] | None = None
+
+
 def get_async_cache_client(settings: Settings) -> redis.Redis:
-    return redis.Redis.from_url(settings.cache_url)
+    """Async twin of cache.get_cache_client; shared per URL and running loop, since pooled connections bind to a loop."""
+    global _client, _client_key
+    key = (settings.cache_url, asyncio.get_running_loop())
+    if _client is None or _client_key != key:
+        _client, _client_key = redis.Redis.from_url(settings.cache_url), key
+    return _client
+
+
+async def close_async_cache_client() -> None:
+    global _client, _client_key
+    client, _client, _client_key = _client, None, None
+    if client is not None:
+        await client.aclose()
 
 
 def _key(job_id: str) -> str:

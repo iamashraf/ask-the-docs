@@ -22,7 +22,7 @@ from ask_the_docs.ingest import (
     dispatch,
     dispatch_all_under_docs_dir,
 )
-from ask_the_docs.jobs import get_async_cache_client, update_job
+from ask_the_docs.jobs import close_async_cache_client, get_async_cache_client, update_job
 from ask_the_docs.llm import OllamaUnavailableError
 from ask_the_docs.queue import INGEST_JOBS_STREAM, INGEST_JOBS_SUBJECT, ensure_stream
 from ask_the_docs.tracing import configure_logging, configure_metrics, configure_tracing
@@ -170,6 +170,7 @@ async def run_worker(settings: Settings) -> None:
             await _consume_once(settings, sub)
     finally:
         await nc.close()
+        await close_async_cache_client()
 
 
 def main() -> None:
