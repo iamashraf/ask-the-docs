@@ -164,9 +164,12 @@ async def run_worker(settings: Settings) -> None:
         config=ConsumerConfig(ack_wait=WORKER_ACK_WAIT_SECONDS, max_deliver=WORKER_MAX_DELIVER),
     )
     logger.info("Worker started, consuming %s", INGEST_JOBS_SUBJECT)
-    while True:
-        await _sample_queue_depth(js)
-        await _consume_once(settings, sub)
+    try:
+        while True:
+            await _sample_queue_depth(js)
+            await _consume_once(settings, sub)
+    finally:
+        await nc.close()
 
 
 def main() -> None:
