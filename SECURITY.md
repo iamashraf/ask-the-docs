@@ -7,9 +7,10 @@ today and what it does not.
 
 ## Report a vulnerability
 
-Do not open a public issue for a security problem. Send the report privately
-to `SECURITY_CONTACT_TBD`. Include the steps to reproduce, the commit you
-tested, and what an attacker gains.
+ask-the-docs is a demonstration project and has no private reporting channel
+or response time. Open a GitHub issue to report a problem. Do not include
+secrets, credentials, or personal data in it. Include the steps to reproduce,
+the commit you tested, and what an attacker gains.
 
 ## Supported versions
 
