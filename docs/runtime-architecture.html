@@ -5395,7 +5395,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         </g>
 
         <g id="node-nats" data-node-id="nats" data-node-label="NATS JetStream" tabindex="0" role="button" aria-label="Focus NATS JetStream, ingest.jobs queue, Local deployment (docker-compose network)" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="ingest.jobs queue" data-node-context="Local deployment (docker-compose network)">
-          <title>NATS JetStream · ingest.jobs queue · Local deployment (docker-compose network)</title>
+          <title>NATS JetStream · ingest.jobs queue on a persistent volume · Local deployment (docker-compose network)</title>
           <rect x="340" y="500" width="130" height="60" rx="8" class="c-mask"/>
           <rect x="340" y="500" width="130" height="60" rx="8" class="c-messagebus" data-animate="node" style="--step:7" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(346 506) scale(0.6875)">
@@ -5405,11 +5405,11 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="405" y="528" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">NATS JetStream</text>
-        <text data-detail="context" x="405" y="544" class="t-muted" font-size="9" text-anchor="middle">ingest.jobs queue</text>
+        <text data-detail="context" x="405" y="544" class="t-muted" font-size="9" text-anchor="middle">ingest.jobs, persisted</text>
         </g>
 
         <g id="node-worker" data-node-id="worker" data-node-label="Worker" tabindex="0" role="button" aria-label="Focus Worker, async ingestion, Local deployment (docker-compose network)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="async ingestion" data-node-context="Local deployment (docker-compose network)">
-          <title>Worker · async ingestion · Local deployment (docker-compose network)</title>
+          <title>Worker · async ingest and remove jobs · Local deployment (docker-compose network)</title>
           <rect x="550" y="500" width="130" height="60" rx="8" class="c-mask"/>
           <rect x="550" y="500" width="130" height="60" rx="8" class="c-backend" data-animate="node" style="--step:8" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(556 506) scale(0.6875)">
@@ -5432,7 +5432,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         </g>
 
         <g id="node-valkey" data-node-id="valkey" data-node-label="Valkey" tabindex="0" role="button" aria-label="Focus Valkey, Redis-protocol cache, Local deployment (docker-compose network)" aria-pressed="false" data-node-kind="database" data-node-sublabel="Redis-protocol cache" data-node-context="Local deployment (docker-compose network)">
-          <title>Valkey · Redis-protocol cache · Local deployment (docker-compose network)</title>
+          <title>Valkey · answer, BM25, triplet and summary cache · Local deployment (docker-compose network)</title>
           <rect x="970" y="500" width="130" height="60" rx="8" class="c-mask"/>
           <rect x="970" y="500" width="130" height="60" rx="8" class="c-database" data-animate="node" style="--step:5" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(976 506) scale(0.6875)">
@@ -5750,7 +5750,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         </div>
         <ul>
           <li>CLI and the HTTP API drive the same retrieve/answer pipeline - no logic is duplicated between them</li>
-          <li>Valkey backs both the exact-match answer cache and the cached BM25 index rebuild</li>
+          <li>Valkey backs the answer cache, the cached BM25 index, and the Graph RAG triplet and community summary caches. It also holds job status</li>
+          <li>The worker handles ingest and remove jobs, retries a failed job up to 5 times, and pre-warms BM25 after a job that changed the index</li>
+          <li>JetStream data lives on a named volume, so queued jobs survive a NATS restart</li>
           <li>The api/worker containers are the same CLI binary (cli.py serve / cli.py worker) - CLI is one entrypoint, not three</li>
         </ul>
       </div>
