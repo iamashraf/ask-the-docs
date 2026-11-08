@@ -13,8 +13,9 @@ from nats.js.api import ConsumerConfig
 from opentelemetry import propagate, trace
 
 from ask_the_docs import metrics
+from ask_the_docs.bm25_index import get_bm25_index
 from ask_the_docs.config import Settings, get_settings
-from ask_the_docs.index import IndexWriteError, build_index, prune_missing_docs_sources, remove_sources
+from ask_the_docs.index import IndexWriteError, build_index, get_index_generation, prune_missing_docs_sources, remove_sources
 from ask_the_docs.ingest import (
     PathSecurityError,
     UnsupportedFileTypeError,
@@ -63,16 +64,28 @@ def _observe_worker_job_latency(payload: dict) -> None:
     metrics.worker_job_latency_seconds.record((datetime.now(UTC) - enqueued_dt).total_seconds())
 
 
+async def _warm_bm25_if_changed(settings: Settings, generation_before: int) -> None:
+    """Builds the new generation's BM25 cache so the first query doesn't pay for it; never fails the job."""
+    if get_index_generation(settings) == generation_before:
+        return
+    try:
+        await asyncio.to_thread(get_bm25_index, settings)
+    except Exception:
+        logger.warning("BM25 pre-warm failed; the first query will rebuild it.", exc_info=True)
+
+
 async def process_job(settings: Settings, payload: dict) -> None:
     job_id = payload["job_id"]
     kind = payload["kind"]
     source = payload.get("source")
     client = get_async_cache_client(settings)
     await update_job(client, job_id, status="processing")
+    generation_before = get_index_generation(settings)
     try:
         if kind == "remove":
             source_doc_id = make_source_doc_id(str(settings.docs_dir.resolve() / source))
             await asyncio.to_thread(remove_sources, {source_doc_id}, settings)
+            await _warm_bm25_if_changed(settings, generation_before)
             await update_job(client, job_id, status="done", result={"sources_removed": 1})
             metrics.ingest_job_total.add(1, {"status": "success"})
             return
@@ -88,6 +101,7 @@ async def process_job(settings: Settings, payload: dict) -> None:
             metrics.build_index_latency_seconds.record(time.monotonic() - build_start)
         if kind == "index":
             await asyncio.to_thread(prune_missing_docs_sources, settings)
+        await _warm_bm25_if_changed(settings, generation_before)
         result = {"documents_ingested": len(docs)}
         if kind == "index":
             result["files_found"] = file_count

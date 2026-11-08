@@ -633,3 +633,59 @@ async def test_sample_queue_depth_logs_and_continues_on_consumer_info_failure(mo
         await _sample_queue_depth(js)  # must not raise
 
     assert any("queue depth" in r.getMessage().lower() for r in caplog.records if r.levelno == logging.WARNING)
+
+
+def _patch_warm_pipeline(monkeypatch, *, bump):
+    state = {"generation": 1}
+    docs = [Document(page_content="hi", metadata={"source": "a.pdf", "source_doc_id": "a"})]
+    monkeypatch.setattr("ask_the_docs.worker.dispatch", lambda source: docs)
+
+    def fake_build_index(d, s):
+        state["generation"] += bump
+
+    monkeypatch.setattr("ask_the_docs.worker.build_index", fake_build_index)
+    monkeypatch.setattr("ask_the_docs.worker.get_index_generation", lambda s: state["generation"])
+    updates = []
+
+    async def fake_update_job(client, job_id, *, status, result=None, error=None):
+        updates.append((job_id, status, error))
+
+    monkeypatch.setattr("ask_the_docs.worker.update_job", fake_update_job)
+    monkeypatch.setattr("ask_the_docs.worker.get_async_cache_client", lambda settings: RecordingAsyncRedis())
+    return updates
+
+
+async def test_process_job_warms_bm25_once_after_a_job_that_changed_the_index(monkeypatch):
+    updates = _patch_warm_pipeline(monkeypatch, bump=1)
+    warmed = []
+    monkeypatch.setattr("ask_the_docs.worker.get_bm25_index", lambda s: warmed.append(s))
+
+    await process_job(make_settings(), {"job_id": "j", "kind": "ingest", "source": "a.pdf"})
+
+    assert len(warmed) == 1
+    assert updates[-1][1] == "done"
+
+
+async def test_process_job_does_not_warm_bm25_when_the_index_is_unchanged(monkeypatch):
+    _patch_warm_pipeline(monkeypatch, bump=0)
+    warmed = []
+    monkeypatch.setattr("ask_the_docs.worker.get_bm25_index", lambda s: warmed.append(s))
+
+    await process_job(make_settings(), {"job_id": "j", "kind": "ingest", "source": "a.pdf"})
+
+    assert warmed == []
+
+
+async def test_process_job_stays_done_when_the_bm25_warm_fails(monkeypatch, caplog):
+    updates = _patch_warm_pipeline(monkeypatch, bump=1)
+
+    def boom(settings):
+        raise RuntimeError("valkey down")
+
+    monkeypatch.setattr("ask_the_docs.worker.get_bm25_index", boom)
+
+    with caplog.at_level(logging.WARNING):
+        await process_job(make_settings(), {"job_id": "j", "kind": "ingest", "source": "a.pdf"})
+
+    assert updates[-1] == ("j", "done", None)
+    assert "BM25" in caplog.text
