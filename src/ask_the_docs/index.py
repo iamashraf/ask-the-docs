@@ -2,6 +2,8 @@
 
 import hashlib
 import logging
+import os
+import tempfile
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,13 +53,19 @@ def get_index_generation(settings: Settings) -> int:
     Reads a local file, not Chroma, so computing a cache key never needs
     the index to be reachable."""
     path = _generation_path(settings)
-    return int(path.read_text()) if path.exists() else 0
+    try:
+        return int(path.read_text())
+    except (FileNotFoundError, ValueError):
+        return 0
 
 
 def _bump_index_generation(settings: Settings) -> None:
     path = _generation_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(get_index_generation(settings) + 1))
+    # shortcut: a bump lost across two concurrent writers is not prevented, upgrade to a lock or Valkey INCR if needed.
+    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as tmp:
+        tmp.write(str(get_index_generation(settings) + 1))
+    os.replace(tmp.name, path)
 
 
 def _hash_sources(docs: list[Document]) -> dict[str, str]:

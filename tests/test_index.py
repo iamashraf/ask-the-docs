@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import os
 import threading
 import time
 
@@ -11,6 +12,7 @@ from neo4j.exceptions import Neo4jError, ServiceUnavailable
 from ask_the_docs.config import ProviderConfig, Settings
 from ask_the_docs.graph_extract import Triplet
 from ask_the_docs.index import (
+    _bump_index_generation,
     CHUNK_SIZE,
     INDEX_WRITE_BATCH_SIZE,
     IndexWriteError,
@@ -804,6 +806,31 @@ def test_build_index_reingesting_a_source_with_no_content_hash_metadata_replaces
 def test_get_index_generation_starts_at_zero(tmp_path):
     settings = make_settings(tmp_path)
     assert get_index_generation(settings) == 0
+
+
+def test_get_index_generation_treats_an_empty_or_garbage_file_as_zero(tmp_path):
+    settings = make_settings(tmp_path)
+    settings.index_dir.mkdir(parents=True)
+    path = settings.index_dir / ".generation"
+
+    path.write_text("")
+    assert get_index_generation(settings) == 0
+    path.write_text("not-a-number")
+    assert get_index_generation(settings) == 0
+
+
+def test_bump_index_generation_writes_via_atomic_replace(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    replaced = []
+    real_replace = os.replace
+    monkeypatch.setattr("ask_the_docs.index.os.replace", lambda src, dst: (replaced.append((src, dst)), real_replace(src, dst)))
+
+    _bump_index_generation(settings)
+
+    assert len(replaced) == 1
+    assert replaced[0][1] == settings.index_dir / ".generation"
+    assert get_index_generation(settings) == 1
+    assert [p.name for p in settings.index_dir.iterdir()] == [".generation"]
 
 
 def test_build_index_bumps_generation_on_a_real_write(tmp_path, monkeypatch):
