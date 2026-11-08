@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,8 +22,14 @@ from ask_the_docs.config import Settings
 from ask_the_docs.embeddings import get_embeddings
 from ask_the_docs.entity_resolution import resolve_entities
 from ask_the_docs.graph_client import get_graph_client
-from ask_the_docs.graph_extract import extract_triplets
-from ask_the_docs.graph_store import clear_graph, write_graph
+from ask_the_docs.graph_extract import Triplet, extract_triplets
+from ask_the_docs.graph_store import (
+    clear_graph,
+    get_entity_names,
+    graph_supports_incremental,
+    remove_sources,
+    write_graph,
+)
 from ask_the_docs.llm import OllamaUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -158,28 +165,76 @@ def _embedding_model_name(settings: Settings) -> str:
     return settings.huggingface_embedding_model
 
 
-def build_graph(chunks: list[Document], settings: Settings) -> str:
-    """Extracts/resolves/writes a knowledge graph from chunks; returns "ok", "skipped" (disabled or nothing extracted) or "failed: <exception class>"."""
+def _extract_chunks(chunks: list[Document], settings: Settings) -> tuple[list[Triplet], list[str], str | None]:
+    """Per-chunk triplet extraction; returns (triplets, their chunk refs, first failure's class name)."""
+    triplets = []
+    chunk_refs = []
+    failure = None
+    for chunk in chunks:
+        chunk_ref = f"{chunk.metadata['source_doc_id']}:{chunk.metadata['chunk_index']}"
+        try:
+            chunk_triplets = extract_triplets(chunk.page_content, settings)
+        except Exception as exc:
+            # Isolated per chunk: one transient LLM failure must not abort
+            # graph building for every other chunk in the ingest.
+            logger.warning("Graph triplet extraction failed for chunk %s: %s", chunk_ref, exc)
+            failure = failure or type(exc).__name__
+            continue
+        for triplet in chunk_triplets:
+            triplets.append(triplet)
+            chunk_refs.append(chunk_ref)
+    return triplets, chunk_refs, failure
+
+
+def _build_graph_incremental(new_chunks: list[Document], changed_sources: set[str], settings: Settings) -> str | None:
+    """Returns the build status, or None when the caller must fall back to a full rebuild."""
+    try:
+        driver = get_graph_client(settings)
+        if not graph_supports_incremental(driver):
+            return None
+        if not new_chunks and not changed_sources:
+            return "ok"
+        triplets, chunk_refs, failure = _extract_chunks(new_chunks, settings)
+        if not triplets and failure:
+            return f"failed: {failure}"
+        resolved_triplets = resolve_entities(triplets, settings, existing_names=get_entity_names(driver)) if triplets else []
+        if not resolved_triplets and not changed_sources:
+            return "skipped"
+        remove_sources(driver, changed_sources)
+        write_failure = resolved_triplets and write_graph(driver, list(zip(resolved_triplets, chunk_refs, strict=True)))
+        if write_failure:
+            return None
+        failure = run_community_detection(driver) or failure
+        failure = summarize_communities(driver, settings) or failure
+        return f"failed: {failure}" if failure else "ok"
+    except Exception:
+        # A half-applied incremental update is repaired by the full rebuild, which re-extracts from the cache.
+        logger.warning("Incremental graph update failed; falling back to a full rebuild.", exc_info=True)
+        return None
+
+
+def build_graph(
+    chunks: list[Document],
+    settings: Settings,
+    changed_sources: set[str] | None = None,
+    all_chunks: Callable[[], list[Document]] | None = None,
+) -> str:
+    """Builds the knowledge graph; returns "ok", "skipped" (disabled or nothing extracted) or "failed: <exception class>".
+    With changed_sources, chunks are only the new ones and a non-empty graph is updated in place; otherwise (or on
+    fallback via all_chunks()) the graph is rebuilt from scratch from chunks."""
     if not settings.graph_enabled:
         return "skipped"
 
+    if changed_sources is not None:
+        status = _build_graph_incremental(chunks, changed_sources, settings)
+        if status is not None:
+            return status
+        if all_chunks is not None:
+            chunks = all_chunks()
+
     failure = None
     try:
-        triplets = []
-        chunk_refs = []
-        for chunk in chunks:
-            chunk_ref = f"{chunk.metadata['source_doc_id']}:{chunk.metadata['chunk_index']}"
-            try:
-                chunk_triplets = extract_triplets(chunk.page_content, settings)
-            except Exception as exc:
-                # Isolated per chunk: one transient LLM failure must not abort
-                # graph building for every other chunk in the ingest.
-                logger.warning("Graph triplet extraction failed for chunk %s: %s", chunk_ref, exc)
-                failure = failure or type(exc).__name__
-                continue
-            for triplet in chunk_triplets:
-                triplets.append(triplet)
-                chunk_refs.append(chunk_ref)
+        triplets, chunk_refs, failure = _extract_chunks(chunks, settings)
 
         if not triplets:
             return f"failed: {failure}" if failure else "skipped"
@@ -221,12 +276,13 @@ def _chunk_id(chunk: Document) -> str:
     return f"{chunk.metadata['source_doc_id']}:{chunk.metadata['content_hash'][:16]}:{chunk.metadata['chunk_index']}"
 
 
-def build_index(docs: list[Document], settings: Settings) -> str | None:
+def build_index(docs: list[Document], settings: Settings, full_graph_rebuild: bool = False) -> str | None:
     """Idempotent: a source whose existing chunks already match its fresh
     content hash and count is skipped entirely (no re-embed, no re-insert);
     any other source (new, changed, or a stale partial-write leftover) has
     its existing chunks deleted and replaced. Returns the graph build status
-    (see build_graph), or None when graph_enabled is off."""
+    (see build_graph), or None when graph_enabled is off. The graph is updated
+    incrementally for the replaced/deleted sources unless full_graph_rebuild."""
     chunks = chunk_documents(docs, embedding_model=_embedding_model_name(settings))
     index = load_index(settings)
     chunks_by_source = _group_by_source(chunks)
@@ -236,7 +292,7 @@ def build_index(docs: list[Document], settings: Settings) -> str | None:
     # deleted, which a chunks-only loop would silently skip.
     attempted_source_ids = {doc.metadata["source_doc_id"] for doc in docs}
 
-    pending: list[tuple[list[Document], list[str]]] = []
+    pending: list[tuple[str, list[Document], list[str]]] = []
     mutated = False
     try:
         for source_doc_id in attempted_source_ids:
@@ -255,12 +311,12 @@ def build_index(docs: list[Document], settings: Settings) -> str | None:
                 ):
                     continue
             new_ids = {_chunk_id(c) for c in source_chunks}
-            pending.append((source_chunks, [i for i in existing["ids"] if i not in new_ids]))
+            pending.append((source_doc_id, source_chunks, [i for i in existing["ids"] if i not in new_ids]))
 
         # Insert-then-delete per source with deterministic ids: a failed insert
         # leaves the old chunks intact, and a redelivered or concurrent run
         # upserts the same ids instead of duplicating.
-        for source_chunks, stale_ids in pending:
+        for _, source_chunks, stale_ids in pending:
             for i in range(0, len(source_chunks), INDEX_WRITE_BATCH_SIZE):
                 batch = source_chunks[i : i + INDEX_WRITE_BATCH_SIZE]
                 mutated = True
@@ -276,9 +332,13 @@ def build_index(docs: list[Document], settings: Settings) -> str | None:
         # Bumped even on failure: a partial insert or delete already changed the store.
         if mutated:
             _bump_index_generation(settings)
-    # Rebuilt from the whole index, not this batch: the graph is wiped before each write.
-    graph_status = build_graph(get_all_chunks(settings) if settings.graph_enabled else chunks, settings)
-    return graph_status if settings.graph_enabled else None
+    if not settings.graph_enabled:
+        return None
+    if full_graph_rebuild:
+        return build_graph(get_all_chunks(settings), settings)
+    changed_sources = {source_doc_id for source_doc_id, _, _ in pending}
+    new_chunks = [c for _, source_chunks, _ in pending for c in source_chunks]
+    return build_graph(new_chunks, settings, changed_sources, lambda: get_all_chunks(settings))
 
 
 _index_cache: dict[tuple[str, int, str], Chroma] = {}

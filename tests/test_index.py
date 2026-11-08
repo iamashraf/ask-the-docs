@@ -907,10 +907,19 @@ def test_build_graph_does_not_clear_existing_graph_when_extraction_fails_or_is_e
     assert cleared == []
 
 
-def test_build_index_rebuilds_graph_from_every_indexed_chunk_not_just_this_batch(tmp_path, monkeypatch):
-    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+def _capture_build_graph(monkeypatch):
     captured = []
-    monkeypatch.setattr("ask_the_docs.index.build_graph", lambda chunks, settings: captured.append(chunks))
+    monkeypatch.setattr(
+        "ask_the_docs.index.build_graph",
+        lambda chunks, settings, changed_sources=None, all_chunks=None: captured.append((chunks, changed_sources, all_chunks)),
+    )
+    monkeypatch.setattr("ask_the_docs.index.get_all_chunks", lambda settings: [make_chunk("docA", 0, "a"), make_chunk("docB", 0, "b")])
+    return captured
+
+
+def test_build_index_passes_only_new_chunks_and_replaced_sources_to_build_graph(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    captured = _capture_build_graph(monkeypatch)
     settings = make_settings(tmp_path, graph_enabled=True)
     doc_a = Document(page_content="alpha " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
     doc_b = Document(page_content="beta " * 400, metadata={"source": "b.pdf", "source_doc_id": "docB"})
@@ -918,7 +927,45 @@ def test_build_index_rebuilds_graph_from_every_indexed_chunk_not_just_this_batch
     build_index([doc_a], settings)
     build_index([doc_b], settings)
 
-    assert {c.metadata["source_doc_id"] for c in captured[1]} == {"docA", "docB"}
+    chunks, changed, all_chunks = captured[1]
+    assert {c.metadata["source_doc_id"] for c in chunks} == {"docB"}
+    assert changed == {"docB"}
+    assert {c.metadata["source_doc_id"] for c in all_chunks()} == {"docA", "docB"}
+
+
+def test_build_index_unchanged_reingest_reports_no_changed_sources_and_no_new_chunks(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    captured = _capture_build_graph(monkeypatch)
+    settings = make_settings(tmp_path, graph_enabled=True)
+    doc_a = Document(page_content="alpha " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    build_index([doc_a], settings)
+    build_index([doc_a], settings)
+
+    assert captured[1][:2] == ([], set())
+
+
+def test_build_index_reports_a_source_that_now_chunks_to_nothing_as_changed(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    captured = _capture_build_graph(monkeypatch)
+    settings = make_settings(tmp_path, graph_enabled=True)
+    build_index([Document(page_content="alpha " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+
+    build_index([Document(page_content="", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+
+    assert captured[1][:2] == ([], {"docA"})
+
+
+def test_build_index_full_graph_rebuild_flag_requests_a_full_rebuild(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    captured = _capture_build_graph(monkeypatch)
+    settings = make_settings(tmp_path, graph_enabled=True)
+    doc_a = Document(page_content="alpha " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
+
+    build_index([doc_a], settings, full_graph_rebuild=True)
+
+    assert captured[0][1] is None
+    assert {c.metadata["source_doc_id"] for c in captured[0][0]} == {"docA", "docB"}
 
 
 def _patch_graph_pipeline(monkeypatch, *, write=None, detect=None, summarize=None, client_error=None):
@@ -974,7 +1021,7 @@ def test_build_graph_returns_failed_when_extraction_raises_for_every_chunk(tmp_p
 
 def test_build_index_returns_graph_status_only_when_graph_enabled(tmp_path, monkeypatch):
     monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
-    monkeypatch.setattr("ask_the_docs.index.build_graph", lambda chunks, settings: "failed: Neo4jError")
+    monkeypatch.setattr("ask_the_docs.index.build_graph", lambda chunks, settings, *a: "failed: Neo4jError")
     doc = Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
 
     assert build_index([doc], make_settings(tmp_path, graph_enabled=True)) == "failed: Neo4jError"
@@ -986,7 +1033,7 @@ def test_build_index_calls_build_graph_with_its_chunks(tmp_path, monkeypatch):
     captured = {}
     monkeypatch.setattr(
         "ask_the_docs.index.build_graph",
-        lambda chunks, settings: captured.update(chunks=chunks, settings=settings),
+        lambda chunks, settings, *a: captured.update(chunks=chunks, settings=settings),
     )
     settings = make_settings(tmp_path, graph_enabled=True)
     doc = Document(page_content="word " * 400, metadata={"source": "a.pdf", "source_doc_id": "docA"})
@@ -1212,3 +1259,155 @@ def test_list_sources_empty_index_returns_empty_list(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
 
     assert list_sources(settings) == []
+
+
+class _Incremental:
+    """Patches the whole graph pipeline and records the order of side effects."""
+
+    def __init__(self, monkeypatch, *, supports=True, existing=("Transformer",), extract=None, resolve=None, write=None):
+        self.calls = []
+        self.all_chunks_calls = 0
+        calls = self.calls
+
+        def default_extract(text, s):
+            calls.append(("extract", text))
+            return [Triplet(f"{text} subj", "uses", "B")]
+
+        monkeypatch.setattr("ask_the_docs.index.extract_triplets", extract or default_extract)
+        monkeypatch.setattr("ask_the_docs.index.get_graph_client", lambda s: "drv")
+        monkeypatch.setattr("ask_the_docs.index.graph_supports_incremental", lambda d: supports)
+        monkeypatch.setattr("ask_the_docs.index.get_entity_names", lambda d: list(existing))
+        monkeypatch.setattr(
+            "ask_the_docs.index.resolve_entities",
+            resolve or (lambda t, s, existing_names=(): calls.append(("resolve", list(existing_names))) or t),
+        )
+        monkeypatch.setattr("ask_the_docs.index.remove_sources", lambda d, srcs: calls.append(("remove", set(srcs))))
+        monkeypatch.setattr("ask_the_docs.index.clear_graph", lambda d: calls.append(("clear",)))
+        monkeypatch.setattr(
+            "ask_the_docs.index.write_graph", lambda d, ct: calls.append(("write", len(ct))) or write
+        )
+        monkeypatch.setattr("ask_the_docs.index.run_community_detection", lambda d: calls.append(("detect",)))
+        monkeypatch.setattr("ask_the_docs.index.summarize_communities", lambda d, s: calls.append(("summarize",)))
+
+    def all_chunks(self):
+        self.all_chunks_calls += 1
+        return [make_chunk("docA", 0, "old a"), make_chunk("docB", 0, "new b")]
+
+
+def test_incremental_update_removes_only_the_changed_source_and_extracts_only_new_chunks(tmp_path, monkeypatch):
+    fake = _Incremental(monkeypatch)
+    settings = make_settings(tmp_path, graph_enabled=True)
+
+    status = build_graph(
+        [make_chunk("docB", 0, "new b")], settings, changed_sources={"docB"}, all_chunks=fake.all_chunks
+    )
+
+    assert status == "ok"
+    assert fake.calls == [
+        ("extract", "new b"),
+        ("resolve", ["Transformer"]),
+        ("remove", {"docB"}),
+        ("write", 1),
+        ("detect",),
+        ("summarize",),
+    ]
+    assert fake.all_chunks_calls == 0
+
+
+def test_incremental_update_with_nothing_changed_does_no_extraction_removal_or_wipe(tmp_path, monkeypatch):
+    fake = _Incremental(monkeypatch)
+
+    status = build_graph([], make_settings(tmp_path, graph_enabled=True), changed_sources=set(), all_chunks=fake.all_chunks)
+
+    assert status == "ok"
+    assert fake.calls == []
+    assert fake.all_chunks_calls == 0
+
+
+def test_incremental_update_for_a_deleted_source_only_removes_it(tmp_path, monkeypatch):
+    fake = _Incremental(monkeypatch)
+
+    status = build_graph([], make_settings(tmp_path, graph_enabled=True), changed_sources={"docA"}, all_chunks=fake.all_chunks)
+
+    assert status == "ok"
+    assert fake.calls == [("remove", {"docA"}), ("detect",), ("summarize",)]
+
+
+def test_empty_or_legacy_graph_takes_the_full_rebuild_path(tmp_path, monkeypatch):
+    fake = _Incremental(monkeypatch, supports=False)
+
+    build_graph([make_chunk("docB", 0, "new b")], make_settings(tmp_path, graph_enabled=True), changed_sources={"docB"}, all_chunks=fake.all_chunks)
+
+    assert fake.all_chunks_calls == 1
+    assert ("clear",) in fake.calls and not any(c[0] == "remove" for c in fake.calls)
+    assert [c for c in fake.calls if c[0] == "extract"] == [("extract", "old a"), ("extract", "new b")]
+
+
+def test_incremental_update_merges_a_new_entity_onto_the_near_existing_canonical_name(tmp_path, monkeypatch):
+    written = {}
+    fake = _Incremental(
+        monkeypatch,
+        extract=lambda text, s: [Triplet("the transformer architecture", "uses", "attention")],
+    )
+    from ask_the_docs.entity_resolution import resolve_entities as real_resolve
+
+    vectors = {"Transformer": [1.0, 0.0], "the transformer architecture": [0.99, 0.01], "attention": [0.0, 1.0]}
+
+    class Emb:
+        def embed_documents(self, texts):
+            return [vectors[t] for t in texts]
+
+    monkeypatch.setattr("ask_the_docs.entity_resolution.get_embeddings", lambda s: Emb())
+    monkeypatch.setattr("ask_the_docs.index.resolve_entities", real_resolve)
+    monkeypatch.setattr("ask_the_docs.index.write_graph", lambda d, ct: written.update(ct=ct))
+    settings = make_settings(tmp_path, graph_enabled=True)
+
+    build_graph([make_chunk("docB", 0, "x")], settings, changed_sources={"docB"}, all_chunks=fake.all_chunks)
+
+    assert written["ct"] == [(Triplet("Transformer", "uses", "attention"), "docB:0")]
+
+
+def test_incremental_error_before_write_falls_back_to_a_full_rebuild(tmp_path, monkeypatch):
+    fake = _Incremental(monkeypatch)
+    calls = fake.calls
+    # Only the incremental attempt fails; the full-rebuild retry succeeds.
+    state = {"n": 0}
+
+    def flaky(t, s, existing_names=()):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise RuntimeError("unexpected")
+        return t
+
+    monkeypatch.setattr("ask_the_docs.index.resolve_entities", flaky)
+
+    status = build_graph([make_chunk("docB", 0, "new b")], make_settings(tmp_path, graph_enabled=True), changed_sources={"docB"}, all_chunks=fake.all_chunks)
+
+    assert status == "ok"
+    assert fake.all_chunks_calls == 1
+    assert ("clear",) in calls and not any(c[0] == "remove" for c in calls)
+
+
+def test_incremental_write_failure_falls_back_to_a_full_rebuild(tmp_path, monkeypatch):
+    results = iter(["Neo4jError", None])
+    fake = _Incremental(monkeypatch)
+    monkeypatch.setattr("ask_the_docs.index.write_graph", lambda d, ct: fake.calls.append(("write", len(ct))) or next(results))
+
+    status = build_graph([make_chunk("docB", 0, "new b")], make_settings(tmp_path, graph_enabled=True), changed_sources={"docB"}, all_chunks=fake.all_chunks)
+
+    assert status == "ok"
+    assert fake.all_chunks_calls == 1
+    assert ("remove", {"docB"}) in fake.calls and ("clear",) in fake.calls
+
+
+def test_incremental_update_does_not_touch_the_graph_when_extraction_wholly_fails(tmp_path, monkeypatch):
+    def boom(text, s):
+        raise OllamaUnavailableError("down")
+
+    fake = _Incremental(monkeypatch, extract=boom)
+
+    status = build_graph([make_chunk("docB", 0, "new b")], make_settings(tmp_path, graph_enabled=True), changed_sources={"docB"}, all_chunks=fake.all_chunks)
+
+    assert status == "failed: OllamaUnavailableError"
+    assert fake.calls == []
+    assert fake.all_chunks_calls == 0
