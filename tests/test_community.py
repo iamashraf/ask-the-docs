@@ -51,7 +51,7 @@ def test_run_community_detection_projects_runs_leiden_and_drops_projection():
     # order matters: project, then leiden, then drop
     project_idx = next(i for i, q in enumerate(queries) if "gds.graph.project" in q)
     leiden_idx = next(i for i, q in enumerate(queries) if "gds.leiden.write" in q)
-    drop_idx = next(i for i, q in enumerate(queries) if "gds.graph.drop" in q)
+    drop_idx = max(i for i, q in enumerate(queries) if "gds.graph.drop" in q)
     assert project_idx < leiden_idx < drop_idx
 
 
@@ -166,7 +166,17 @@ def test_run_community_detection_drops_projection_even_when_leiden_consume_fails
     assert any(record.levelname == "WARNING" for record in caplog.records)
 
 
-def test_run_community_detection_does_not_drop_when_project_itself_fails():
+def test_run_community_detection_drops_a_leftover_projection_before_projecting():
+    driver = FakeDriver()
+    run_community_detection(driver)
+    queries = [q for q, p in driver.session_obj.queries]
+    first_drop_idx = next(i for i, q in enumerate(queries) if "gds.graph.drop" in q)
+    project_idx = next(i for i, q in enumerate(queries) if "gds.graph.project" in q)
+    assert first_drop_idx < project_idx
+    assert "false" in queries[first_drop_idx].lower()
+
+
+def test_run_community_detection_still_attempts_final_drop_when_project_fails():
     class SessionProjectFails:
         def __init__(self):
             self.queries = []
@@ -196,7 +206,26 @@ def test_run_community_detection_does_not_drop_when_project_itself_fails():
     queries = [q for q, p in driver.session_obj.queries]
     assert any("gds.graph.project" in q for q in queries)
     assert not any("gds.leiden.write" in q for q in queries)
-    assert not any("gds.graph.drop" in q for q in queries)
+    assert sum("gds.graph.drop" in q for q in queries) == 2  # pre-project and final
+
+
+def test_run_community_detection_final_drop_failure_does_not_mask_the_original_error(caplog):
+    class SessionLeidenAndDropFail(FakeSession):
+        def run(self, query, **params):
+            self.queries.append((query, params))
+            if "gds.leiden.write" in query:
+                raise ClientError("leiden boom")
+            if "gds.graph.drop" in query and any("gds.leiden.write" in q for q, _ in self.queries):
+                raise ServiceUnavailable("drop boom")
+            return FakeResult()
+
+    driver = FakeDriver()
+    driver.session_obj = SessionLeidenAndDropFail()
+    with caplog.at_level(logging.WARNING):
+        run_community_detection(driver)  # must not raise
+
+    messages = " ".join(r.getMessage() + str(r.exc_info[1]) for r in caplog.records if r.exc_info)
+    assert "leiden boom" in messages
 
 
 def make_settings() -> Settings:
