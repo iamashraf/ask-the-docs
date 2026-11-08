@@ -213,33 +213,40 @@ def build_index(docs: list[Document], settings: Settings) -> Chroma:
     attempted_source_ids = {doc.metadata["source_doc_id"] for doc in docs}
 
     to_insert: list[Document] = []
-    for source_doc_id in attempted_source_ids:
-        source_chunks = chunks_by_source.get(source_doc_id, [])
-        existing = index.get(where={"source_doc_id": source_doc_id}, include=["metadatas"])
-        if existing["ids"]:
-            # .get(), not [...]: a chunk indexed before content-hash dedup
-            # existed has no "content_hash" key at all, not a mismatched
-            # one -- None here correctly reads as "changed" and triggers
-            # a replace, same as any other mismatch.
-            existing_hashes = {m.get("content_hash") for m in existing["metadatas"]}
-            if (
-                source_chunks
-                and existing_hashes == {source_chunks[0].metadata["content_hash"]}
-                and len(existing["ids"]) == len(source_chunks)
-            ):
-                continue
-            index.delete(ids=existing["ids"])
-        to_insert.extend(source_chunks)
+    mutated = False
+    try:
+        for source_doc_id in attempted_source_ids:
+            source_chunks = chunks_by_source.get(source_doc_id, [])
+            existing = index.get(where={"source_doc_id": source_doc_id}, include=["metadatas"])
+            if existing["ids"]:
+                # .get(), not [...]: a chunk indexed before content-hash dedup
+                # existed has no "content_hash" key at all, not a mismatched
+                # one -- None here correctly reads as "changed" and triggers
+                # a replace, same as any other mismatch.
+                existing_hashes = {m.get("content_hash") for m in existing["metadatas"]}
+                if (
+                    source_chunks
+                    and existing_hashes == {source_chunks[0].metadata["content_hash"]}
+                    and len(existing["ids"]) == len(source_chunks)
+                ):
+                    continue
+                mutated = True
+                index.delete(ids=existing["ids"])
+            to_insert.extend(source_chunks)
 
-    if to_insert:
-        try:
-            for i in range(0, len(to_insert), INDEX_WRITE_BATCH_SIZE):
-                index.add_documents(to_insert[i : i + INDEX_WRITE_BATCH_SIZE])
-        except OllamaUnavailableError:
-            raise
-        except Exception as exc:
-            raise IndexWriteError(f"Failed to write {len(to_insert)} chunk(s) to the index") from exc
-        _bump_index_generation(settings)
+        if to_insert:
+            mutated = True
+            try:
+                for i in range(0, len(to_insert), INDEX_WRITE_BATCH_SIZE):
+                    index.add_documents(to_insert[i : i + INDEX_WRITE_BATCH_SIZE])
+            except OllamaUnavailableError:
+                raise
+            except Exception as exc:
+                raise IndexWriteError(f"Failed to write {len(to_insert)} chunk(s) to the index") from exc
+    finally:
+        # Bumped even on failure: a delete (or partial insert) already changed the store.
+        if mutated:
+            _bump_index_generation(settings)
     build_graph(chunks, settings)
     return index
 

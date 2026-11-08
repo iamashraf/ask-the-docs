@@ -896,6 +896,31 @@ def test_build_index_deletes_chunks_for_a_source_that_becomes_empty(tmp_path, mo
     assert get_all_chunks(settings) == []
 
 
+def test_build_index_bumps_generation_on_a_pure_delete(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    build_index([Document(page_content="real text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+    gen_before = get_index_generation(settings)
+
+    build_index([Document(page_content="", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+
+    assert get_index_generation(settings) == gen_before + 1
+
+
+def test_build_index_bumps_generation_when_insert_fails_after_a_delete(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
+    settings = make_settings(tmp_path)
+    build_index([Document(page_content="v1 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+    gen_before = get_index_generation(settings)
+    index = load_index(settings)
+    monkeypatch.setattr(index, "add_documents", lambda docs: (_ for _ in ()).throw(RuntimeError("disk full")))
+
+    with pytest.raises(IndexWriteError):
+        build_index([Document(page_content="v2 text", metadata={"source": "a.pdf", "source_doc_id": "docA"})], settings)
+
+    assert get_index_generation(settings) > gen_before
+
+
 def test_list_sources_returns_sorted_distinct_sources(tmp_path, monkeypatch):
     monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: FakeEmbeddings())
     settings = make_settings(tmp_path)
