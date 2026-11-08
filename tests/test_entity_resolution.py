@@ -42,30 +42,35 @@ def test_resolve_entities_merges_near_duplicate_names(monkeypatch):
     assert len(result) == len(triplets)
 
 
-def test_resolve_entities_merges_transitively_via_bridge_entity(monkeypatch):
-    # X~Z and Y~Z clear the threshold (cos = 1/sqrt(2) ~= 0.707) but X~Y (cos = 0)
-    # doesn't. A correct union-find still puts all three in one cluster, and the
-    # canonical name must be the first-seen member ("X"), not whichever root a
-    # naive (non-index-aware) union happens to leave on top.
-    class BridgeFakeEmbeddings:
-        VECTORS = {
-            "X": [1.0, 0.0, 0.0],
-            "Y": [0.0, 1.0, 0.0],
-            "Z": [1.0, 1.0, 0.0],
-            "other": [0.0, 0.0, 1.0],
-        }
+class _VectorEmbeddings:
+    def __init__(self, vectors):
+        self._vectors = vectors
 
-        def embed_documents(self, texts):
-            return [self.VECTORS[t] for t in texts]
+    def embed_documents(self, texts):
+        return [self._vectors[t] for t in texts]
 
-    monkeypatch.setattr("ask_the_docs.entity_resolution.get_embeddings", lambda s: BridgeFakeEmbeddings())
-    settings = make_settings(threshold=0.7)
+
+def test_resolve_entities_does_not_chain_merges_through_a_bridge_entity(monkeypatch):
+    # A~B and B~C clear the threshold (cos ~= 0.707) but A!~C (cos = 0): C must not
+    # join A's cluster through B; each entity is compared to a cluster's first-seen member only.
+    vectors = {"A": [1.0, 0.0], "B": [1.0, 1.0], "C": [0.0, 1.0], "other": [-1.0, -1.0]}
+    monkeypatch.setattr("ask_the_docs.entity_resolution.get_embeddings", lambda s: _VectorEmbeddings(vectors))
     triplets = [
-        Triplet(subject="X", relation="r1", obj="other"),
-        Triplet(subject="Y", relation="r2", obj="other"),
-        Triplet(subject="Z", relation="r3", obj="other"),
+        Triplet(subject="A", relation="r1", obj="other"),
+        Triplet(subject="B", relation="r2", obj="other"),
+        Triplet(subject="C", relation="r3", obj="other"),
     ]
 
-    result = resolve_entities(triplets, settings)
+    result = resolve_entities(triplets, make_settings(threshold=0.7))
 
-    assert result[0].subject == result[1].subject == result[2].subject == "X"
+    assert [t.subject for t in result] == ["A", "A", "C"]
+
+
+def test_resolve_entities_treats_a_zero_vector_as_dissimilar_instead_of_raising(monkeypatch):
+    vectors = {"A": [1.0, 0.0], "zero": [0.0, 0.0], "B": [0.0, 1.0]}
+    monkeypatch.setattr("ask_the_docs.entity_resolution.get_embeddings", lambda s: _VectorEmbeddings(vectors))
+    triplets = [Triplet(subject="A", relation="r", obj="zero"), Triplet(subject="B", relation="r", obj="zero")]
+
+    result = resolve_entities(triplets, make_settings())
+
+    assert [(t.subject, t.obj) for t in result] == [("A", "zero"), ("B", "zero")]
