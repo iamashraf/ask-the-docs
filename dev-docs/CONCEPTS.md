@@ -17,8 +17,10 @@ synonymy a keyword match would miss, but can miss exact identifiers.
 
 A bag-of-words ranking function: score = sum over query terms of an
 IDF-weighted term-frequency score, saturating as a term repeats and
-normalized by document length (`bm25_index.py`). Catches exact
-terms/acronyms/identifiers vector search can miss; blind to paraphrase.
+normalized by document length (`bm25_index.py`, `bm25s` library with
+Lucene-style IDF). Search returns only the top `candidate_pool_size`
+hits. Catches exact terms/acronyms/identifiers vector search can miss;
+blind to paraphrase.
 
 - [Okapi BM25 — Wikipedia](https://en.wikipedia.org/wiki/Okapi_BM25) — the formula and parameters (`k1`, `b`) in plain terms.
 - [Robertson & Zaragoza, 2009 — The Probabilistic Relevance Framework: BM25 and Beyond](https://dx.doi.org/10.1561/1500000019) — the full theoretical treatment, for going deeper than the formula.

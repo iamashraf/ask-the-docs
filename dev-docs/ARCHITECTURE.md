@@ -91,11 +91,13 @@ going through the API or the queue.
 
 - **Vector search** — embed chunks and the query into the same space;
   retrieve by similarity. Catches paraphrase/semantic matches.
-- **BM25** — classic sparse keyword scoring. Catches exact terms/acronyms
+- **BM25** — classic sparse keyword scoring (the `bm25s` library, Lucene-style IDF). Catches exact terms/acronyms
   vector search can miss.
 - **Hybrid fusion** — both sides' scores are min-max normalized, then
   blended `alpha * vector + (1 - alpha) * bm25`; a chunk found by only one
   side still competes (missing side scores 0), nothing is dropped outright.
+  Each side returns only its top `candidate_pool_size` hits, so min-max
+  normalization sees only those, and any other chunk scores 0 on that side.
 - **Intent routing**: a free rules check catches bare greetings, thanks,
   and goodbyes before anything else runs. Everything else goes through
   one LLM call that classifies the query doc, chitchat, or meta, and for
@@ -169,7 +171,11 @@ going through the API or the queue.
   minimal-footprint posture.
 - **Valkey** (Redis-protocol) — the cache (`cache.py`): BM25 index
   rebuilds and exact-match answers, both keyed to invalidate
-  automatically on re-ingest. An open-source, Linux-Foundation-backed
+  automatically on re-ingest. In front of the
+  Valkey-cached BM25 pickle, each process keeps the BM25 index (and the
+  Chroma handle) in a size-1 cache keyed on (collection, index generation,
+  index dir), behind a lock. A BM25 rebuild that fails on a Chroma read
+  error is not cached. An open-source, Linux-Foundation-backed
   fork rather than Redis itself, avoiding Redis Inc.'s post-2024
   source-available licensing.
 - **NATS JetStream** — the ingest job queue (`queue.py`, `worker.py`):
