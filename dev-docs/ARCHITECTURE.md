@@ -103,13 +103,13 @@ full_graph_rebuild=True)`) forces this rebuild; the API does not. Limits:
 - Every changed ingest still embeds all existing entity names and re-runs Leiden over the whole graph.
 
 Removing a source deletes its chunks, bumps the index generation once and
-drops its graph facts. A graph error does not fail the removal, and
-community detection is not re-run. The file watcher sends a `remove` job
-for each deleted file, so deploy the worker before the watcher. A full
-index also prunes `docs_dir` sources whose files no longer exist. After a
-job that changed the index, the worker pre-warms the BM25 cache without
-failing the job. The pre-warm moves the rebuild off the first query. BM25
-is still rebuilt in full for each generation.
+drops its graph facts. A graph error does not fail the removal. Community
+detection does not re-run. The file watcher sends a `remove` job for each
+deleted file, so deploy the worker before the watcher. A full index also
+prunes `docs_dir` sources whose files no longer exist. After a job that
+changed the index, the worker pre-warms the BM25 cache and ignores any
+pre-warm failure. This moves the BM25 rebuild off the first query, but
+the rebuild still runs in full for each generation.
 
 Two Valkey caches cut repeat LLM calls. Extracted triplets are cached per
 chunk, keyed on chunk text, extraction prompt and model, with a 30 day
