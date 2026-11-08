@@ -782,3 +782,9 @@ def test_get_llm_client_builds_anthropic_client_from_cli_token_and_max_tokens(mo
     client = get_llm_client(ProviderConfig(provider="anthropic", model="claude-haiku-5-5", max_tokens=2000))
     assert isinstance(client, AnthropicLLMClient)
     assert client.max_tokens == 2000
+
+
+def test_credential_treats_a_blank_config_key_as_unset(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key")
+    config = ProviderConfig(provider="anthropic", model="m", api_key="  ")
+    assert resolve_anthropic_credential(config) == {"api_key": "env-key"}

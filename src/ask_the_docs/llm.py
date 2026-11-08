@@ -274,7 +274,7 @@ def _ant_cli_token() -> str | None:
 
 def resolve_anthropic_credential(config: ProviderConfig) -> dict[str, str]:
     """Config key, then ANTHROPIC_API_KEY, then the `ant` CLI login; the `ant` login only works outside containers."""
-    if config.api_key is not None:
+    if config.api_key is not None and config.api_key.get_secret_value().strip():
         return {"api_key": config.api_key.get_secret_value()}
     if env_key := os.environ.get("ANTHROPIC_API_KEY", "").strip():
         return {"api_key": env_key}
