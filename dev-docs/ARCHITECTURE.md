@@ -172,7 +172,9 @@ going through the API or the queue.
   so a slow ingest (a large PDF, a remote URL) never ties up a request
   thread; the `worker` process consumes durably (at-least-once,
   redelivered on crash) and writes status to Valkey (`jobs.py`) for the
-  `/v1/jobs/{id}` polling endpoint.
+  `/v1/jobs/{id}` polling endpoint. JetStream state lives in the
+  `nats_data` volume, so queued jobs survive container recreation.
+  Compose sets `NATS_URL` for both `app` and `worker`.
 - **Neo4j, with GDS** — the graph store for Graph RAG (`graph_store.py`,
   `community.py`), off by default. The `neo4j` compose service starts only
   with the `graph` profile. Leiden community detection runs
