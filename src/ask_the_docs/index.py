@@ -68,16 +68,20 @@ def _bump_index_generation(settings: Settings) -> None:
     os.replace(tmp.name, path)
 
 
-def _hash_sources(docs: list[Document]) -> dict[str, str]:
-    """SHA-256 of each source_doc_id's full raw content (every Document
-    sharing that id, concatenated in input order), computed before
-    chunking -- lets a re-ingest detect an unchanged source without
-    comparing chunk-by-chunk."""
-    content_by_id: dict[str, str] = {}
+def _hash_sources(docs: list[Document], embedding_model: str) -> dict[str, str]:
+    """SHA-256 per source_doc_id over its length-prefixed page contents and
+    content_format plus everything else that shapes the stored chunks
+    (chunk size/overlap, embedding model), computed before chunking -- lets a
+    re-ingest detect an unchanged source without comparing chunk-by-chunk."""
+    hashers = {}
     for doc in docs:
         doc_id = doc.metadata["source_doc_id"]
-        content_by_id[doc_id] = content_by_id.get(doc_id, "") + doc.page_content
-    return {doc_id: hashlib.sha256(content.encode()).hexdigest() for doc_id, content in content_by_id.items()}
+        if doc_id not in hashers:
+            hashers[doc_id] = hashlib.sha256(f"{CHUNK_SIZE}:{CHUNK_OVERLAP}:{embedding_model}\0".encode())
+        content = doc.page_content.encode()
+        fmt = doc.metadata.get("content_format", "")
+        hashers[doc_id].update(f"{fmt}:{len(content)}:".encode() + content)
+    return {doc_id: h.hexdigest() for doc_id, h in hashers.items()}
 
 
 def _markdown_heading_prefix(section_metadata: dict) -> str:
@@ -113,7 +117,7 @@ def chunk_documents(docs: list[Document], embedding_model: str) -> list[Document
     converted to markdown upstream) are split header-first (see
     _split_markdown_document); every other source type keeps today's plain
     char-based splitting."""
-    source_hashes = _hash_sources(docs)
+    source_hashes = _hash_sources(docs, embedding_model)
     generic_splitter = RecursiveCharacterTextSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
     chunks: list[Document] = []
     for doc in docs:

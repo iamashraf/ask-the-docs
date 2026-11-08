@@ -141,6 +141,48 @@ def test_chunk_documents_content_hash_changes_when_content_changes():
     assert hash_v1 != hash_v2
 
 
+def _content_hash(pages, embedding_model="m", content_format=None):
+    metadata = {"source": "a.txt", "source_doc_id": "a"}
+    if content_format:
+        metadata["content_format"] = content_format
+    docs = [Document(page_content=p, metadata=dict(metadata)) for p in pages]
+    return chunk_documents(docs, embedding_model=embedding_model)[0].metadata["content_hash"]
+
+
+def test_chunk_documents_content_hash_differs_for_different_page_boundaries():
+    assert _content_hash(["ab", "c"]) != _content_hash(["a", "bc"])
+
+
+def test_chunk_documents_content_hash_changes_with_embedding_model():
+    assert _content_hash(["hello"], embedding_model="m1") != _content_hash(["hello"], embedding_model="m2")
+
+
+def test_chunk_documents_content_hash_changes_with_content_format():
+    assert _content_hash(["hello"]) != _content_hash(["hello"], content_format="markdown")
+
+
+def test_chunk_documents_content_hash_changes_with_chunk_settings(monkeypatch):
+    base = _content_hash(["hello"])
+    monkeypatch.setattr("ask_the_docs.index.CHUNK_SIZE", 256)
+    assert _content_hash(["hello"]) != base
+    monkeypatch.setattr("ask_the_docs.index.CHUNK_SIZE", 512)
+    monkeypatch.setattr("ask_the_docs.index.CHUNK_OVERLAP", 10)
+    assert _content_hash(["hello"]) != base
+
+
+def test_build_index_reembeds_an_unchanged_source_when_the_embedding_model_changes(tmp_path, monkeypatch):
+    counting = CountingEmbeddings()
+    monkeypatch.setattr("ask_the_docs.index.get_embeddings", lambda settings: counting)
+    settings = make_settings(tmp_path)
+    doc = Document(page_content="hello world", metadata={"source": "a.txt", "source_doc_id": "a"})
+    build_index([doc], settings)
+    calls = counting.embed_documents_call_count
+
+    build_index([doc], settings.model_copy(update={"ollama_embedding_model": "other-model"}))
+
+    assert counting.embed_documents_call_count == calls + 1
+
+
 def test_chunk_documents_markdown_heading_survives_in_every_chunk_of_its_section():
     # Body alone is long enough to span several 512-char chunks -- plain
     # char-splitting only keeps "Refund Policy" in whichever one chunk the
