@@ -327,7 +327,13 @@ def _dispatch(query: str, trimmed_history: list[Turn], settings: Settings, k: in
             sources = list_sources(settings)
         except Exception:
             logger.warning("Listing sources for a meta question failed; falling back to the doc path.", exc_info=True)
-            return _compute_answer(query, settings, k)
+            return _compute_answer(
+                result.standalone_query or query,
+                settings,
+                k,
+                search_query=result.search_query or None,
+                original_query=query,
+            )
         return AnswerResult(text=build_meta_reply(sources), citations=[], kind="meta")
 
     doc_cache_key = None

@@ -1838,3 +1838,24 @@ def test_answer_doc_cache_separates_different_raw_wordings_with_same_standalone_
     answer("explain BM25 shorter", settings, history=[Turn(role="user", content="other")])
 
     assert len(prompts) == 2
+
+
+def test_answer_meta_fallback_uses_standalone_and_search_query(monkeypatch):
+    monkeypatch.setattr(
+        "ask_the_docs.answer.route",
+        lambda query, history, settings: Route(
+            intent="meta", standalone_query="which papers cover LoRA?", reply="", source="llm", search_query="LoRA papers"
+        ),
+    )
+
+    def failing_list_sources(settings):
+        raise RuntimeError("chroma unavailable")
+
+    monkeypatch.setattr("ask_the_docs.answer.list_sources", failing_list_sources)
+    mock_compute = Mock(return_value=AnswerResult(text="x", citations=[], kind="answer"))
+    monkeypatch.setattr("ask_the_docs.answer._compute_answer", mock_compute)
+
+    answer("and which of those?", make_settings())
+
+    assert mock_compute.call_args.args[0] == "which papers cover LoRA?"
+    assert mock_compute.call_args.kwargs["search_query"] == "LoRA papers"
