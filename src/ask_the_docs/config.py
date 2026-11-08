@@ -49,8 +49,8 @@ class ProviderConfig(BaseModel):
 class Settings(BaseSettings):
     """App-wide config. `generator` and `judge` are independently-configured LLM roles."""
 
-    generator: ProviderConfig
-    judge: ProviderConfig
+    generator: ProviderConfig = ProviderConfig(provider="anthropic", model="claude-haiku-5-5")
+    judge: ProviderConfig = ProviderConfig(provider="anthropic", model="claude-sonnet-5-5")
 
     embeddings_backend: Literal["ollama", "huggingface"] = "ollama"
     ollama_embedding_model: str = "nomic-embed-text"

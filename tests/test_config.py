@@ -208,3 +208,19 @@ def test_compose_persists_nats_jetstream_and_points_app_and_worker_at_it():
     assert volume.split(":")[0] in compose["volumes"]
     for name in ("app", "worker"):
         assert "NATS_URL=nats://nats:4222" in compose["services"][name]["environment"]
+
+
+def test_defaults_use_anthropic_for_generator_and_judge(monkeypatch):
+    for name in ("GENERATOR__PROVIDER", "GENERATOR__MODEL", "JUDGE__PROVIDER", "JUDGE__MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    settings = Settings(_env_file=None)
+    assert (settings.generator.provider, settings.generator.model) == ("anthropic", "claude-haiku-5-5")
+    assert (settings.judge.provider, settings.judge.model) == ("anthropic", "claude-sonnet-5-5")
+
+
+def test_environment_switches_generator_back_to_ollama(monkeypatch):
+    monkeypatch.setenv("GENERATOR__PROVIDER", "ollama")
+    monkeypatch.setenv("GENERATOR__MODEL", "llama3.1:8b")
+    settings = Settings(_env_file=None)
+    assert (settings.generator.provider, settings.generator.model) == ("ollama", "llama3.1:8b")
+    assert settings.judge.provider == "anthropic"
