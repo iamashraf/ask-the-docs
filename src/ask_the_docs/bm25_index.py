@@ -48,7 +48,9 @@ _BM25_CACHE_MAXSIZE = 1
 _bm25_cache_lock = threading.Lock()
 
 
-def get_bm25_index(settings: Settings) -> tuple[bm25s.BM25 | None, list[Document]]:
+def get_bm25_index(
+    settings: Settings, raise_on_read_error: bool = False
+) -> tuple[bm25s.BM25 | None, list[Document]]:
     """Resident per (collection_name, generation, index_dir) within this
     process, on top of the cross-process Valkey cache _rebuild_bm25_index
     still uses -- avoids a network round trip + pickle.loads() on every
@@ -70,6 +72,8 @@ def get_bm25_index(settings: Settings) -> tuple[bm25s.BM25 | None, list[Document
                 # this one call. Caching it would turn one Chroma hiccup
                 # into "BM25 off for the rest of this process's life at
                 # this generation."
+                if raise_on_read_error:
+                    raise
                 return None, []
             _bm25_cache[key] = rebuilt
         return _bm25_cache[key]
@@ -118,7 +122,7 @@ def _rebuild_bm25_index(settings: Settings, generation: int) -> tuple[bm25s.BM25
 
 
 def score(query: str, settings: Settings, k: int) -> list[tuple[Document, float]]:
-    bm25, chunks = get_bm25_index(settings)
+    bm25, chunks = get_bm25_index(settings, raise_on_read_error=True)
     if bm25 is None or not chunks:
         return []
     # bm25s.BM25.retrieve() raises ValueError if k exceeds the corpus size.

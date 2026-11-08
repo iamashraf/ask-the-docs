@@ -8,6 +8,7 @@ from langchain_core.documents import Document
 from opentelemetry import trace
 
 from ask_the_docs import metrics
+from ask_the_docs.bm25_index import ChromaReadError
 from ask_the_docs.bm25_index import score as bm25_score
 from ask_the_docs.config import Settings
 from ask_the_docs.graph_retrieve import global_search, local_search
@@ -17,6 +18,14 @@ from ask_the_docs.reranker import DEFAULT_RERANKER_MODEL, get_reranker
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
+
+
+class RetrievedChunks(list):
+    """List of chunks; degraded is True when a retrieval side failed, so callers must not cache the result."""
+
+    def __init__(self, chunks=(), degraded: bool = False):
+        super().__init__(chunks)
+        self.degraded = degraded
 
 
 def _doc_key(doc: Document) -> tuple[str, int]:
@@ -80,6 +89,7 @@ def retrieve(query: str, settings: Settings, k: int = 5, search_query: str | Non
                 return global_results[:k]
 
     hybrid_start = time.monotonic()
+    degraded = False
     with tracer.start_as_current_span("hybrid_retrieve"):
         with tracer.start_as_current_span("vector_search"):
             try:
@@ -96,20 +106,25 @@ def retrieve(query: str, settings: Settings, k: int = 5, search_query: str | Non
             except Exception:
                 logger.warning("Vector search failed; falling back to BM25-only results.", exc_info=True)
                 vector_hits = []
+                degraded = True
         with tracer.start_as_current_span("bm25_search"):
             # A score of 0 means "no keyword overlap at all" (e.g. an out-of-vocabulary
             # query) -- excluding it keeps that chunk from tying every other
             # zero-score chunk at normalized score 1.0 ("all equal" rule) and
             # crowding out real vector matches.
-            bm25_hits = [
-                hit
-                for hit in sorted(
-                    bm25_score(effective_search_query, settings, k=settings.candidate_pool_size),
-                    key=lambda pair: pair[1],
-                    reverse=True,
-                )
-                if hit[1] > 0
-            ][: settings.candidate_pool_size]
+            try:
+                bm25_hits = [
+                    hit
+                    for hit in sorted(
+                        bm25_score(effective_search_query, settings, k=settings.candidate_pool_size),
+                        key=lambda pair: pair[1],
+                        reverse=True,
+                    )
+                    if hit[1] > 0
+                ][: settings.candidate_pool_size]
+            except ChromaReadError:
+                bm25_hits = []
+                degraded = True
 
         candidates = [doc for doc, _ in hybrid_merge(vector_hits, bm25_hits, settings.hybrid_alpha)][
             : settings.candidate_pool_size
@@ -137,5 +152,5 @@ def retrieve(query: str, settings: Settings, k: int = 5, search_query: str | Non
             reranked = get_reranker(DEFAULT_RERANKER_MODEL).rerank(query, candidates, k)
             logger.info("Rerank succeeded: %d results", len(reranked))
         metrics.rerank_latency_seconds.record(time.monotonic() - rerank_start)
-        return reranked
-    return candidates[:k]
+        return RetrievedChunks(reranked, degraded)
+    return RetrievedChunks(candidates[:k], degraded)

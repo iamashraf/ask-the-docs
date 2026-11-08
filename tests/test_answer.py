@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 from langchain_core.documents import Document
 
+from ask_the_docs.retrieve import RetrievedChunks
 from ask_the_docs.answer import (
     MAX_GENERATION_ATTEMPTS,
     STRUCTURED_SYSTEM_PROMPT_TEMPLATE,
@@ -1738,3 +1739,39 @@ def test_parse_structured_answer_raises_on_missing_field():
 def test_parse_structured_answer_raises_on_non_integer_citation():
     with pytest.raises(StructuredOutputError):
         parse_structured_answer({"grounded": True, "answer": "x", "citations": ["a"]})
+
+
+def _answer_with_retrieved(monkeypatch, retrieved):
+    shared_cache = FakeCacheClient()
+    monkeypatch.setattr("ask_the_docs.answer.get_cache_client", lambda settings: shared_cache)
+    monkeypatch.setattr("ask_the_docs.answer.retrieve", lambda query, settings, k, search_query=None: retrieved)
+    monkeypatch.setattr(
+        "ask_the_docs.answer.get_llm_client",
+        lambda config: Mock(
+            generate_structured=Mock(
+                return_value=StructuredJSONResult(
+                    data={"grounded": True, "answer": "the answer [1]", "citations": [1]},
+                    input_tokens=None,
+                    output_tokens=None,
+                )
+            )
+        ),
+    )
+    answer("What is X?", make_settings(), k=5)
+    return shared_cache
+
+
+def test_answer_caches_a_normal_retrieval(monkeypatch):
+    chunks = RetrievedChunks([Document(page_content="chunk one", metadata={"source": "a.pdf"})])
+
+    assert _answer_with_retrieved(monkeypatch, chunks)._store
+
+
+def test_answer_does_not_cache_a_degraded_retrieval(monkeypatch):
+    chunks = RetrievedChunks([Document(page_content="chunk one", metadata={"source": "a.pdf"})], degraded=True)
+
+    assert not _answer_with_retrieved(monkeypatch, chunks)._store
+
+
+def test_answer_does_not_cache_when_both_stores_failed(monkeypatch):
+    assert not _answer_with_retrieved(monkeypatch, RetrievedChunks([], degraded=True))._store

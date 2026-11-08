@@ -3,9 +3,10 @@ import threading
 import time
 from unittest.mock import Mock
 
+import pytest
 from langchain_core.documents import Document
 
-from ask_the_docs.bm25_index import get_bm25_index, score
+from ask_the_docs.bm25_index import ChromaReadError, get_bm25_index, score
 from ask_the_docs.config import ProviderConfig, Settings
 
 FIXTURE_CHUNKS = [
@@ -281,6 +282,18 @@ def test_get_bm25_index_degrades_to_no_results_when_chroma_fails(tmp_path, monke
     assert bm25 is None
     assert chunks == []
     assert any("chroma" in record.message.lower() or "bm25" in record.message.lower() for record in caplog.records)
+
+
+def test_score_raises_chroma_read_error_so_retrieve_can_flag_degradation(tmp_path, monkeypatch):
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_cache_client", lambda s: FakeCache())
+
+    def boom(settings):
+        raise RuntimeError("chroma unavailable")
+
+    monkeypatch.setattr("ask_the_docs.bm25_index.get_all_chunks", boom)
+
+    with pytest.raises(ChromaReadError):
+        score("anything", make_settings(tmp_path), k=3)
 
 
 def test_get_bm25_index_rebuilds_only_once_under_concurrent_misses(tmp_path, monkeypatch):

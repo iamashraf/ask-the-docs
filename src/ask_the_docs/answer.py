@@ -76,6 +76,7 @@ class AnswerResult:
     citations: list[str]
     context: str = ""
     kind: Kind = "answer"
+    degraded: bool = False
 
 
 @dataclasses.dataclass
@@ -169,9 +170,10 @@ def _compute_answer(query: str, settings: Settings, k: int, search_query: str | 
     call entirely if nothing relevant was found, and refuses if the model's
     answer isn't actually grounded in what was retrieved."""
     chunks = retrieve(query, settings, k=k, search_query=search_query)
+    degraded = getattr(chunks, "degraded", False)
     if not chunks:
         metrics.refusal_total.add(1)
-        return AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal")
+        return AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal", degraded=degraded)
 
     context = format_context(chunks)
     client = get_llm_client(settings.generator)
@@ -259,9 +261,9 @@ def _compute_answer(query: str, settings: Settings, k: int, search_query: str | 
         if passed:
             if is_model_refusal:
                 metrics.refusal_total.add(1)
-                return AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal")
+                return AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal", degraded=degraded)
             citations = list(dict.fromkeys(chunk.metadata["source"] for chunk in chunks))
-            return AnswerResult(text=text, citations=citations, context=context)
+            return AnswerResult(text=text, citations=citations, context=context, degraded=degraded)
         logger.warning(
             "Generated answer failed the citation guardrail (attempt %d/%d).",
             attempt,
@@ -271,7 +273,7 @@ def _compute_answer(query: str, settings: Settings, k: int, search_query: str | 
             feedback = _structured_retry_feedback(structured)
 
     metrics.refusal_total.add(1)
-    return AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal")
+    return AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal", degraded=degraded)
 
 
 def _doc_cache_key(standalone_query: str, k: int, settings: Settings) -> str:
@@ -341,7 +343,7 @@ def _dispatch(query: str, trimmed_history: list[Turn], settings: Settings, k: in
 
     answer_result = _compute_answer(result.standalone_query, settings, k, search_query=result.search_query or None)
 
-    if use_cache:
+    if use_cache and not answer_result.degraded:
         cache_set(
             cache_client,
             doc_cache_key,
@@ -403,6 +405,6 @@ def answer(
 
     result = _dispatch(query, trimmed_history, settings, k, use_cache)
 
-    if use_cache and result.kind not in ("chitchat", "meta"):
+    if use_cache and result.kind not in ("chitchat", "meta") and not result.degraded:
         cache_set(cache_client, cache_key, json.dumps(dataclasses.asdict(result)).encode(), ttl_seconds=ANSWER_CACHE_TTL_SECONDS)
     return result
