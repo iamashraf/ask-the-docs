@@ -173,6 +173,14 @@ nor the API passes it. Limits:
 - Incremental and full rebuild can resolve entities slightly differently (first-seen cluster rule).
 - Every changed ingest still embeds all existing entity names and re-runs Leiden over the whole graph.
 
+Two Valkey caches cut repeat LLM calls. Extracted triplets are cached per
+chunk, keyed on chunk text, extraction prompt and model, with a 30 day
+TTL. Unparseable or failed extractions are not cached. Community
+summaries are cached keyed on the sorted member names, prompt and model.
+Leiden community ids are unstable, so a summary is reused only when
+membership is identical. If Valkey is down, extraction and summarization
+run as before.
+
 - [Edge et al., 2024 — From Local to Global: A Graph RAG Approach to Query-Focused Summarization (arXiv:2404.16130)](https://arxiv.org/abs/2404.16130) — the paper this local/global, community-summary design is based on.
 - [Traag, Waltman & van Eck, 2019 — From Louvain to Leiden: guaranteeing well-connected communities (arXiv:1810.08473)](https://arxiv.org/abs/1810.08473) — why Leiden is used instead of the more commonly-cited Louvain algorithm it improves on.
 - [Neo4j GDS — Leiden algorithm](https://neo4j.com/docs/graph-data-science/current/algorithms/leiden/) — the in-database implementation this project calls directly; notably requires an undirected graph projection.

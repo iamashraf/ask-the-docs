@@ -102,6 +102,14 @@ neither the CLI nor the API passes it. Limits:
 - Incremental and full rebuild can resolve entities slightly differently (first-seen cluster rule).
 - Every changed ingest still embeds all existing entity names and re-runs Leiden over the whole graph.
 
+Two Valkey caches cut repeat LLM calls. Extracted triplets are cached per
+chunk, keyed on chunk text, extraction prompt and model, with a 30 day
+TTL. Unparseable or failed extractions are not cached. Community
+summaries are cached keyed on the sorted member names, prompt and model.
+Leiden community ids are unstable, so a summary is reused only when
+membership is identical. If Valkey is down, extraction and summarization
+run as before.
+
 Both the CLI (`ingest`/`index`/`ask`/`evaluate`/`serve`/`worker`) and the
 HTTP API (`/v1/...`) drive this same pipeline — no logic is duplicated
 between them. There's one binary, not three: the `app` and `worker`
