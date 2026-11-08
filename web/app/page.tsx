@@ -8,6 +8,8 @@ import { ChatMessage, type Message } from "../components/ChatMessage";
 // router.py); truncate below that with margin so a long grounded answer
 // doesn't make the *next* request fail backend validation.
 const HISTORY_CONTENT_LIMIT = 3000;
+// The API rejects more than 50 turns; the server trims to far fewer anyway.
+const MAX_HISTORY_TURNS = 20;
 const TRUNCATION_MARKER = "... [truncated]";
 
 function truncateForHistory(text: string): string {
@@ -56,7 +58,8 @@ export default function Page() {
 
     const history = messages
       .filter((message) => message.role !== "error")
-      .map((message) => ({ role: message.role, content: truncateForHistory(message.text) }));
+      .map((message) => ({ role: message.role, content: truncateForHistory(message.text) }))
+      .slice(-MAX_HISTORY_TURNS);
 
     setMessages((prev) => [...prev, { role: "user", text: query }]);
     setInput("");

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import Page from "../app/page";
@@ -77,6 +77,28 @@ describe("Page", () => {
       session_id: expect.any(String),
     });
   });
+
+  test("caps the history sent to the server at the most recent turns", async () => {
+    let n = 0;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      n += 1;
+      return new Response(JSON.stringify({ answer: `answer ${n}`, citations: [], kind: "answer" }), {
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Page />);
+    for (let i = 1; i <= 31; i++) {
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: `question ${i}` } });
+      await userEvent.click(screen.getByRole("button", { name: /send/i }));
+      await screen.findByText(`answer ${i}`);
+    }
+
+    const lastBody = JSON.parse(fetchMock.mock.calls[30][1].body as string);
+    expect(lastBody.history.length).toBeLessThanOrEqual(50);
+    expect(lastBody.history.at(-1)).toEqual({ role: "assistant", content: "answer 30" });
+  }, 30000);
 
   test("sends the same session_id for every request in one page load", async () => {
     const fetchMock = vi
