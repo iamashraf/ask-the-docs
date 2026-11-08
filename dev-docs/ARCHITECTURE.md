@@ -174,7 +174,11 @@ going through the API or the queue.
   redelivered on crash) and writes status to Valkey (`jobs.py`) for the
   `/v1/jobs/{id}` polling endpoint. JetStream state lives in the
   `nats_data` volume, so queued jobs survive container recreation.
-  Compose sets `NATS_URL` for both `app` and `worker`.
+  Compose sets `NATS_URL` for both `app` and `worker`. The
+  worker runs ingestion off the event loop and heartbeats `in_progress`
+  while a job runs, so a long job is not redelivered mid-run. Redelivery
+  is capped (`max_deliver` 5), and an unparseable message is terminated.
+  A finished job never goes back to `processing`.
 - **Neo4j, with GDS** — the graph store for Graph RAG (`graph_store.py`,
   `community.py`), off by default. The `neo4j` compose service starts only
   with the `graph` profile. Leiden community detection runs
