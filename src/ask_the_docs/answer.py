@@ -98,7 +98,7 @@ def parse_structured_answer(data: dict) -> StructuredAnswer:
         raise StructuredOutputError(f"Ollama's response didn't match the requested schema: {data!r}") from exc
 
 
-PROMPT_TAG_PATTERN = re.compile(r"<(/?(?:documents|question))>", re.IGNORECASE)
+PROMPT_TAG_PATTERN = re.compile(r"<(/?(?:documents|question|user_request))>", re.IGNORECASE)
 
 
 def _neutralize_prompt_tags(text: str) -> str:
@@ -115,10 +115,14 @@ def format_context(chunks: list[Document]) -> str:
     )
 
 
-def build_prompt(query: str, context: str) -> str:
+def build_prompt(query: str, context: str, original_query: str | None = None) -> str:
     """User-turn content only -- grounding/citation/refusal instructions
-    live in the system prompt (settings.system_prompt_template) instead."""
-    return f"<documents>\n{context}\n</documents>\n\n<question>{query}</question>"
+    live in the system prompt (settings.system_prompt_template) instead.
+    original_query carries the user's own wording (style asks like "in bullets") the resolved question drops."""
+    prompt = f"<documents>\n{context}\n</documents>\n\n<question>{query}</question>"
+    if original_query is not None and original_query != query:
+        prompt += f"\n\n<user_request>{_neutralize_prompt_tags(original_query)}</user_request>"
+    return prompt
 
 
 def citation_guardrail_passes(answer_text: str, num_chunks: int) -> bool:
@@ -165,7 +169,9 @@ def _structured_retry_feedback(result: StructuredAnswer | None) -> str:
     )
 
 
-def _compute_answer(query: str, settings: Settings, k: int, search_query: str | None = None) -> AnswerResult:
+def _compute_answer(
+    query: str, settings: Settings, k: int, search_query: str | None = None, original_query: str | None = None
+) -> AnswerResult:
     """Retrieves context and generates a grounded answer; skips the LLM
     call entirely if nothing relevant was found, and refuses if the model's
     answer isn't actually grounded in what was retrieved."""
@@ -177,7 +183,7 @@ def _compute_answer(query: str, settings: Settings, k: int, search_query: str | 
 
     context = format_context(chunks)
     client = get_llm_client(settings.generator)
-    prompt = build_prompt(query, context)
+    prompt = build_prompt(query, context, original_query)
 
     # Ollama uses schema-constrained structured output; other providers keep the free-text + regex guardrail.
     use_structured = settings.generator.provider == "ollama"
@@ -276,7 +282,7 @@ def _compute_answer(query: str, settings: Settings, k: int, search_query: str | 
     return AnswerResult(text=REFUSAL_MESSAGE, citations=[], kind="refusal", degraded=degraded)
 
 
-def _doc_cache_key(standalone_query: str, k: int, settings: Settings) -> str:
+def _doc_cache_key(standalone_query: str, k: int, settings: Settings, raw_query: str | None = None) -> str:
     """Second-tier answer cache key: keyed on the resolved, self-contained
     standalone_query instead of the raw query + history the first tier (in
     answer()) uses. standalone_query already has follow-up references
@@ -285,6 +291,8 @@ def _doc_cache_key(standalone_query: str, k: int, settings: Settings) -> str:
     this is the fix for the answer cache barely hitting in UI sessions."""
     return make_cache_key(
         standalone_query.strip().lower(),
+        # Only when it differs: the generator sees the wording (style asks), so it must split the cache.
+        raw_query.strip().lower() if raw_query is not None and raw_query != standalone_query else None,
         k,
         settings.embeddings_backend,
         settings.generator.provider,
@@ -326,7 +334,7 @@ def _dispatch(query: str, trimmed_history: list[Turn], settings: Settings, k: in
     cache_client = None
     if use_cache:
         cache_client = get_cache_client(settings)
-        doc_cache_key = _doc_cache_key(result.standalone_query, k, settings)
+        doc_cache_key = _doc_cache_key(result.standalone_query, k, settings, query)
         cached = cache_get(cache_client, doc_cache_key)
         if cached is not None:
             try:
@@ -341,7 +349,9 @@ def _dispatch(query: str, trimmed_history: list[Turn], settings: Settings, k: in
                 logger.warning("Cached answer value was unusable; recomputing.", exc_info=True)
         metrics.cache_result_total.add(1, {"result": "miss", "tier": "doc"})
 
-    answer_result = _compute_answer(result.standalone_query, settings, k, search_query=result.search_query or None)
+    answer_result = _compute_answer(
+        result.standalone_query, settings, k, search_query=result.search_query or None, original_query=query
+    )
 
     if use_cache and not answer_result.degraded:
         cache_set(
