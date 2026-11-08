@@ -102,6 +102,16 @@ going through the API or the queue.
   doc rewrites it into a standalone search query using conversation
   history. This decides what *kind* of input the query is, not whether
   it's answerable: an off-topic question is still routed as doc.
+- **Idempotent ingestion** — each source gets a content hash over its
+  page contents (length-separated), chunk size, chunk overlap, content
+  format and the embedding model. An indexed source with the same hash is
+  skipped. Changing any of those inputs re-embeds the source on the next
+  index, so existing indexes re-embed once after an upgrade. A changed
+  source is replaced by inserting the new chunks first, with
+  deterministic ids `source_doc_id:hash:chunk_index`, then deleting only
+  the stale old ids. A failed or repeated run neither loses nor
+  duplicates data. A failure partway through a multi-batch insert can
+  leave old and new chunks together until the next run cleans up.
 - **Cross-encoder reranking** — a separate, more expensive model scores
   (query, chunk) pairs jointly to re-sort the merged candidate pool before
   truncating to the final k.

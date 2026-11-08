@@ -323,9 +323,8 @@ curl -X POST localhost:8000/v1/index -H "Content-Type: application/json" -d '{}'
 
 Walks `data/documents/` for files with a supported extension and runs the
 same ingest pipeline on each, without naming files individually.
-**Caveat:** there's no dedup yet — running this repeatedly on unchanged
-files duplicates their chunks (document-update/delete is a planned future
-addition, not built yet).
+Re-running it on unchanged files is safe: a source whose content hash
+matches the indexed one is skipped, and a changed source is replaced.
 
 Like `/v1/ingest`, the API returns `202 {"job_id": "...", "status":
 "queued"}` and runs the walk/ingest in the `worker`; poll `GET
