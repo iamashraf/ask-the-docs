@@ -42,11 +42,8 @@ as is), ingest a URL, or set a telemetry endpoint.
 
 [Interactive runtime architecture diagram](https://iamashraf.github.io/ask-the-docs/runtime-architecture.html). It shows components, trust boundaries, and the primary request path, and you can explore it in a browser.
 
-Ingestion and query paths sharing Chroma, Redis, and Neo4j. Solid
-borders are on the critical path; dashed borders are optional, toggled
-off by default (Graph RAG, Neo4j). The project was built one slice at a
-time. See `dev-docs/ARCHITECTURE.md` for the detailed flow and current
-implementation notes.
+Ingestion and query share Chroma, Valkey, and Neo4j. Graph RAG and Neo4j
+are off by default. See `dev-docs/ARCHITECTURE.md` for the detailed flow.
 
 See `dev-docs/ARCHITECTURE.md` for the full query/ingest flow and the tech
 stack's rationale, and `dev-docs/CONCEPTS.md` for the concepts (vector
