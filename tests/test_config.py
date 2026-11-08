@@ -20,12 +20,17 @@ def test_settings_defaults():
     assert settings.otel_exporter_endpoint == "http://otel-collector:4317"
 
 
-def test_settings_rejects_missing_api_key_for_anthropic():
-    with pytest.raises(ValidationError):
-        Settings(
-            generator=ProviderConfig(provider="ollama", model="llama3.1:8b"),
-            judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5"),
-        )
+def test_settings_allows_anthropic_without_api_key():
+    settings = Settings(
+        generator=ProviderConfig(provider="anthropic", model="claude-haiku-5-5"),
+        judge=ProviderConfig(provider="anthropic", model="claude-sonnet-5-5"),
+    )
+    assert settings.generator.api_key is None
+
+
+def test_provider_config_rejects_non_positive_max_tokens():
+    with pytest.raises(ValueError):
+        ProviderConfig(provider="anthropic", model="claude-haiku-5-5", max_tokens=0)
 
 
 def test_settings_rejects_missing_api_key_for_openai():

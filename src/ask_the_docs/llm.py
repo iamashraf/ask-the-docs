@@ -6,7 +6,9 @@ and once as the judge (evaluate.py).
 
 import dataclasses
 import json
+import os
 import re
+import subprocess
 from typing import Protocol
 
 import requests
@@ -261,6 +263,29 @@ class OpenAILLMClient:
         )
 
 
+def _ant_cli_token() -> str | None:
+    """The `ant auth login` OAuth access token, or None; it lasts hours, so callers read it per client."""
+    try:
+        out = subprocess.run(["ant", "auth", "print-credentials"], capture_output=True, text=True, timeout=20)
+        return json.loads(out.stdout).get("access_token") or None
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError, TypeError):
+        return None
+
+
+def resolve_anthropic_credential(config: ProviderConfig) -> dict[str, str]:
+    """Config key, then ANTHROPIC_API_KEY, then the `ant` CLI login; the `ant` login only works outside containers."""
+    if config.api_key is not None:
+        return {"api_key": config.api_key.get_secret_value()}
+    if env_key := os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        return {"api_key": env_key}
+    if token := _ant_cli_token():
+        return {"auth_token": token}
+    raise LLMUnavailableError(
+        "No Anthropic credential found. Set ANTHROPIC_API_KEY (or GENERATOR__API_KEY / JUDGE__API_KEY), "
+        "run `ant auth login` on the host, or switch the provider to ollama."
+    )
+
+
 def get_llm_client(config: ProviderConfig) -> LLMClient:
     """Factory: builds the client matching config.provider."""
     if config.provider == "ollama":
@@ -268,7 +293,8 @@ def get_llm_client(config: ProviderConfig) -> LLMClient:
             model=config.model, base_url=config.base_url or "http://localhost:11434", think=config.think
         )
     if config.provider == "anthropic":
-        return AnthropicLLMClient(model=config.model, api_key=config.api_key.get_secret_value())
+        extra = {"max_tokens": config.max_tokens} if config.max_tokens else {}
+        return AnthropicLLMClient(model=config.model, **resolve_anthropic_credential(config), **extra)
     if config.provider == "openai":
         return OpenAILLMClient(
             model=config.model, api_key=config.api_key.get_secret_value(), base_url=config.base_url

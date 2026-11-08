@@ -11,7 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-PROVIDERS_REQUIRING_API_KEY = {"anthropic", "openai"}
+PROVIDERS_REQUIRING_API_KEY = {"openai"}
 
 WELL_KNOWN_NEO4J_PASSWORDS = {"", "neo4j", "ask-the-docs-graph"}
 
@@ -36,10 +36,11 @@ class ProviderConfig(BaseModel):
     api_key: SecretStr | None = None
     base_url: str | None = None
     think: bool | None = None
+    max_tokens: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def check_api_key_present_for_hosted_providers(self) -> "ProviderConfig":
-        """Hosted providers need a key; ollama is local and doesn't."""
+        """OpenAI needs a key; ollama is local, and anthropic resolves its credential at call time (see llm.py)."""
         if self.provider in PROVIDERS_REQUIRING_API_KEY and self.api_key is None:
             raise ValueError(f"provider {self.provider!r} requires an api_key")
         return self

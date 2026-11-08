@@ -19,6 +19,7 @@ from ask_the_docs.llm import (
     StructuredJSONResult,
     StructuredOutputError,
     get_llm_client,
+    resolve_anthropic_credential,
 )
 
 STRUCTURED_SCHEMA = {
@@ -733,3 +734,51 @@ def test_anthropic_client_does_not_swallow_bad_request_errors(monkeypatch):
     client = _client_raising(monkeypatch, _anthropic_error(anthropic.BadRequestError, 400))
     with pytest.raises(anthropic.BadRequestError):
         client.generate("hi")
+
+
+def _ant_cli(monkeypatch, stdout=None, error=None):
+    def fake_run(cmd, **kwargs):
+        assert cmd == ["ant", "auth", "print-credentials"]
+        if error:
+            raise error
+        return SimpleNamespace(stdout=stdout)
+
+    monkeypatch.setattr("ask_the_docs.llm.subprocess.run", fake_run)
+
+
+def test_credential_prefers_config_key_over_env_and_cli(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key")
+    _ant_cli(monkeypatch, stdout='{"access_token": "tok"}')
+    config = ProviderConfig(provider="anthropic", model="m", api_key="cfg-key")
+    assert resolve_anthropic_credential(config) == {"api_key": "cfg-key"}
+
+
+def test_credential_falls_back_to_env_key(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key")
+    _ant_cli(monkeypatch, stdout='{"access_token": "tok"}')
+    assert resolve_anthropic_credential(ProviderConfig(provider="anthropic", model="m")) == {"api_key": "env-key"}
+
+
+def test_credential_falls_back_to_ant_cli_token(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _ant_cli(monkeypatch, stdout='{"access_token": "tok"}')
+    assert resolve_anthropic_credential(ProviderConfig(provider="anthropic", model="m")) == {"auth_token": "tok"}
+
+
+@pytest.mark.parametrize(
+    "stdout, error",
+    [(None, FileNotFoundError("ant")), ("not json", None), ('{"no_token": 1}', None), ('{"access_token": ""}', None)],
+)
+def test_credential_error_names_every_option_when_none_found(monkeypatch, stdout, error):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _ant_cli(monkeypatch, stdout=stdout, error=error)
+    with pytest.raises(LLMUnavailableError, match="ANTHROPIC_API_KEY.*ant auth login"):
+        resolve_anthropic_credential(ProviderConfig(provider="anthropic", model="m"))
+
+
+def test_get_llm_client_builds_anthropic_client_from_cli_token_and_max_tokens(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _ant_cli(monkeypatch, stdout='{"access_token": "tok"}')
+    client = get_llm_client(ProviderConfig(provider="anthropic", model="claude-haiku-5-5", max_tokens=2000))
+    assert isinstance(client, AnthropicLLMClient)
+    assert client.max_tokens == 2000
