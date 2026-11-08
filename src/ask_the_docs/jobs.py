@@ -10,6 +10,7 @@ from ask_the_docs.config import Settings
 
 JOB_TTL_SECONDS = 86400
 JOBS_INDEX_KEY = "jobs:index"
+TERMINAL_STATUSES = ("done", "failed")
 JobStatus = Literal["queued", "processing", "done", "failed"]
 
 
@@ -46,7 +47,10 @@ async def create_job(client, job_id: str, kind: str, source: str | None) -> None
 
 
 async def get_job(client, job_id: str) -> dict | None:
-    raw = await client.get(_key(job_id))
+    try:
+        raw = await client.get(_key(job_id))
+    except Exception as exc:
+        raise JobStoreError(f"Failed to read job {job_id}") from exc
     return json.loads(raw) if raw is not None else None
 
 
@@ -56,8 +60,14 @@ async def update_job(
     existing = await get_job(client, job_id)
     if existing is None:
         return
+    # A redelivered job must not drag a finished one back to processing.
+    if existing["status"] in TERMINAL_STATUSES and status not in TERMINAL_STATUSES:
+        return
     existing.update(status=status, result=result, error=error, updated_at=datetime.now(UTC).isoformat())
-    await client.set(_key(job_id), json.dumps(existing), ex=JOB_TTL_SECONDS)
+    try:
+        await client.set(_key(job_id), json.dumps(existing), ex=JOB_TTL_SECONDS)
+    except Exception as exc:
+        raise JobStoreError(f"Failed to update job {job_id}") from exc
 
 
 async def list_jobs(client, limit: int = 50) -> list[dict]:

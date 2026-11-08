@@ -81,6 +81,31 @@ async def test_create_job_wraps_redis_failures():
         await create_job(BrokenAsyncRedis(), "job-1", kind="ingest", source="a.pdf")
 
 
+@pytest.mark.parametrize("terminal", ["done", "failed"])
+@pytest.mark.parametrize("regressed", ["processing", "queued"])
+async def test_update_job_never_moves_a_terminal_job_back_to_an_active_state(terminal, regressed):
+    client = FakeAsyncRedis()
+    await create_job(client, "job-1", kind="ingest", source="a.pdf")
+    await update_job(client, "job-1", status=terminal, result={"documents_ingested": 3}, error="e")
+
+    await update_job(client, "job-1", status=regressed)
+
+    job = await get_job(client, "job-1")
+    assert job["status"] == terminal
+    assert job["result"] == {"documents_ingested": 3}
+    assert job["error"] == "e"
+
+
+async def test_get_job_wraps_redis_failures():
+    with pytest.raises(JobStoreError):
+        await get_job(BrokenAsyncRedis(), "job-1")
+
+
+async def test_update_job_wraps_redis_failures():
+    with pytest.raises(JobStoreError):
+        await update_job(BrokenAsyncRedis(), "job-1", status="done")
+
+
 async def test_list_jobs_returns_most_recent_first():
     client = FakeAsyncRedis()
     await create_job(client, "job-1", kind="ingest", source="a.pdf")
