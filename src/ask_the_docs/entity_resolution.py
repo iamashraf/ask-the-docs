@@ -1,6 +1,7 @@
 """Entity resolution: merges near-duplicate entity names across triplets into one canonical name via embedding similarity."""
 
 import math
+from collections.abc import Sequence
 from dataclasses import replace
 
 from ask_the_docs.config import Settings
@@ -17,9 +18,10 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-def resolve_entities(triplets: list[Triplet], settings: Settings) -> list[Triplet]:
-    names: list[str] = []
-    seen: set[str] = set()
+def resolve_entities(triplets: list[Triplet], settings: Settings, existing_names: Sequence[str] = ()) -> list[Triplet]:
+    """existing_names are placed first so graph entities win as canonical over new names."""
+    names: list[str] = list(dict.fromkeys(existing_names))
+    seen: set[str] = set(names)
     for triplet in triplets:
         for name in (triplet.subject, triplet.obj):
             if name not in seen:

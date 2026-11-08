@@ -74,3 +74,36 @@ def test_resolve_entities_treats_a_zero_vector_as_dissimilar_instead_of_raising(
     result = resolve_entities(triplets, make_settings())
 
     assert [(t.subject, t.obj) for t in result] == [("A", "zero"), ("B", "zero")]
+
+
+def test_resolve_entities_merges_a_new_name_onto_a_near_existing_name(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.entity_resolution.get_embeddings", lambda s: FakeEmbeddings())
+    triplets = [Triplet("the transformer architecture", "uses", "attention")]
+
+    result = resolve_entities(triplets, make_settings(), existing_names=["Transformer"])
+
+    assert result == [Triplet("Transformer", "uses", "attention")]
+
+
+def test_resolve_entities_existing_names_win_over_earlier_new_names(monkeypatch):
+    monkeypatch.setattr("ask_the_docs.entity_resolution.get_embeddings", lambda s: FakeEmbeddings())
+    triplets = [Triplet("the transformer architecture", "uses", "attention")]
+
+    result = resolve_entities(triplets, make_settings(), existing_names=["attention", "Transformer"])
+
+    assert result[0].subject == "Transformer"
+
+
+def test_resolve_entities_embeds_existing_names_without_duplicates(monkeypatch):
+    seen = []
+
+    class Recording(FakeEmbeddings):
+        def embed_documents(self, texts):
+            seen.extend(texts)
+            return super().embed_documents(texts)
+
+    monkeypatch.setattr("ask_the_docs.entity_resolution.get_embeddings", lambda s: Recording())
+
+    resolve_entities([Triplet("Transformer", "uses", "attention")], make_settings(), existing_names=["Transformer"])
+
+    assert seen == ["Transformer", "attention"]
